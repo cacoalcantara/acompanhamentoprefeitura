@@ -104,13 +104,20 @@ def caminhos_validos(d: dict[str, Any]) -> set[str]:
     return out
 
 
+def _perto(ordenados: list[float], v: float) -> bool:
+    """Existe nivel a menos de 0,5 de v? (busca binaria; lista ordenada)"""
+    import bisect
+    i = bisect.bisect_left(ordenados, v - 0.5)
+    return i < len(ordenados) and ordenados[i] < v + 0.5
+
+
 def verificar_anonimizacao(d: dict[str, Any], niveis_absolutos: Iterable[float] = ()) -> list[str]:
     """Lista de violacoes (vazia = anonimizado)."""
     erros: list[str] = []
     for k in _chaves(d):
         if k.lower() in _CHAVES_PROIBIDAS:
             erros.append(f"chave proibida: {k}")
-    niveis = [float(n) for n in niveis_absolutos]
+    niveis = sorted(float(n) for n in niveis_absolutos if abs(float(n)) > 100)
     for caminho, v in _percorrer(d):
         if isinstance(v, str):
             if _RE_STRING_PROIBIDA.search(v):
@@ -120,7 +127,7 @@ def verificar_anonimizacao(d: dict[str, Any], niveis_absolutos: Iterable[float] 
                 erros.append(f"valor parece timestamp em {caminho}")
             elif abs(v) >= _LIMITE_NIVEL_ABS:
                 erros.append(f"valor parece nivel absoluto em {caminho}")
-            elif any(abs(v - n) < 0.5 for n in niveis if abs(n) > 100):
+            elif _perto(niveis, v):
                 erros.append(f"valor coincide com nivel absoluto em {caminho}")
     return erros
 
