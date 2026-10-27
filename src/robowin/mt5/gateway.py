@@ -1,0 +1,306 @@
+"""Gateway: processo fino e independente, com UMA thread tocando o MT5.
+
+- Publica ticks, livro, estado e heartbeat (1 s) pelo barramento (`PublicadorZMQ` em producao,
+  `BarramentoLocal` em testes). O PUB leva numero de sequencia; o assinante detecta lacunas.
+- Atende comandos (ROUTER/DEALER ou canal local): ordem -> AckOrdem, heartbeat do nucleo, emergencia com
+  confirmacao ponta a ponta (so confirma depois de reler positions/orders e ver tudo zerado), rearme, estado.
+- Hospeda o guardiao (limites rigidos) e o executor demo (unico `order_send`).
+- Guarda o log bruto da coleta em disco (sobrevive a quedas do nucleo).
+- Troca de conta / violacao da guarda interrompe o gateway.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from robowin.core.barramento import BarramentoLocal
+from robowin.core.relogio import Relogio, RelogioReal
+from robowin.core.tipos import AckOrdem, ComandoOrdem
+
+from . import constantes as C
+from .coleta import ColetorLivro, ColetorTicks, LogBruto
+from .conta import ler_estado_conta
+from .contrato import ResolucaoContrato, resolver_contrato_win
+from .execucao_demo import (
+    ConfigDemo,
+    ExecucaoDemo,
+    GuardaDemoViolada,
+    estado_do_retcode,
+    violacao_de_identidade,
+)
+from .guardiao import ConfigGuardiao, Guardiao
+from .tempo_servidor import RelogioServidor, calibrar
+
+
+@dataclass
+class ConfigGateway:
+    login: int
+    servidor: str
+    modo_config: str = "demo_mt5"
+    simbolo: str | None = None  # None => contrato WIN vigente resolvido
+    hoje: dt.date | None = None
+    intervalo_ticks_s: float = 0.05
+    intervalo_livro_s: float = 0.25
+    intervalo_guardiao_s: float = 1.0
+    intervalo_hb_s: float = 1.0
+    intervalo_estado_s: float = 1.0
+    dir_log: Path | None = None
+    offset_fixo_s: int | None = None
+    inicio_coleta_ns: int | None = None
+    msgs_por_min: int = 20
+    espera_incerta_s: float = 5.0
+    guardiao: ConfigGuardiao = field(default_factory=ConfigGuardiao)
+    tentativas_emergencia: int = 5
+    espera_emergencia_s: float = 0.1
+
+
+class Gateway:
+    def __init__(self, terminal: Any, cfg: ConfigGateway, relogio: Relogio | None = None, publicador: Any = None,
+                 canal: Any = None, dormir: Callable[[float], None] = time.sleep) -> None:
+        self._dormir = dormir
+        self.t, self.cfg = terminal, cfg
+        self.relogio = relogio or RelogioReal()
+        self.pub = publicador if publicador is not None else BarramentoLocal()
+        self.canal = canal
+        self.resolucao: ResolucaoContrato | None = None
+        self.rs = RelogioServidor()
+        self.executor: ExecucaoDemo
+        self.guardiao: Guardiao
+        self.ticks: ColetorTicks
+        self.livro: ColetorLivro
+        self.log: LogBruto | None = None
+        self.parado: str | None = None  # motivo da parada (violacao de guarda, comando)
+        self._hb_seq = 0
+        self._prox: dict[str, int] = {}
+        self.erros_coleta = 0
+        self.incidentes: list[tuple[str, str]] = []
+
+    # --- inicializacao -------------------------------------------------------------------------
+    def iniciar(self) -> None:
+        if not self.t.initialize():
+            raise GuardaDemoViolada(f"initialize do MT5 falhou: {self.t.last_error()}")
+        est = ler_estado_conta(self.t)
+        if est is None:
+            raise GuardaDemoViolada("account_info indisponivel")
+        hoje = self.cfg.hoje or dt.datetime.fromtimestamp(self.relogio.agora_ns() / 1e9, dt.UTC).date()
+        self.resolucao = resolver_contrato_win(self.t, hoje)
+        simbolo = self.resolucao.simbolo_corretora
+        if self.cfg.simbolo and self.cfg.simbolo != simbolo:
+            raise GuardaDemoViolada(f"simbolo configurado {self.cfg.simbolo} difere do vigente {simbolo}")
+        self.rs = calibrar(self.t, simbolo, self.relogio, amostras=3, intervalo_s=0.3, offset_fixo_s=self.cfg.offset_fixo_s,
+                           dormir=self._dormir)
+        self.executor = ExecucaoDemo(
+            self.t, ConfigDemo(login=self.cfg.login, servidor=self.cfg.servidor, simbolo=simbolo,
+                               modo_config=self.cfg.modo_config, msgs_por_min=self.cfg.msgs_por_min,
+                               espera_incerta_s=self.cfg.espera_incerta_s),
+            self.relogio, alerta=self._alerta, relogio_srv=self.rs)
+        self.executor.verificar_guarda()  # falha cedo: conta real/login/servidor errados
+        self.guardiao = Guardiao(self.executor, self.t, self.cfg.guardiao, self.relogio, self.rs, alerta=self._alerta)
+        if not self.rs.confiavel:
+            self.guardiao.bloquear_ate_resolver("offset", "offset do relogio do servidor nao calibrado com confianca")
+        if self.cfg.dir_log is not None:
+            self.log = LogBruto(self.cfg.dir_log, self.relogio)
+        self.ticks = ColetorTicks(self.t, simbolo, self.relogio, self.rs, self.pub, self.log,
+                                  inicio_ns=self.cfg.inicio_coleta_ns)
+        self.livro = ColetorLivro(self.t, simbolo, self.relogio, self.pub, self.log)
+        self.livro.assinar()
+        self._publicar_estado()
+
+    def _alerta(self, tipo: str, dados: dict[str, Any]) -> None:
+        self.incidentes.append((tipo, str(dados)))
+        self.pub.publicar("alerta", {"tipo": tipo, "dados": dados, "t_ns": self.relogio.agora_ns()})
+
+    def _recalibrar(self) -> None:
+        """Enquanto o offset nao for confiavel, tenta de novo (feed vivo); detecta mudanca de offset."""
+        novo = calibrar(self.t, self.executor._sym, self.relogio, amostras=3, intervalo_s=0.3,
+                        offset_fixo_s=self.cfg.offset_fixo_s, dormir=self._dormir)
+        if novo.confiavel and (novo.offset_ms != self.rs.offset_ms or not self.rs.confiavel):
+            if self.rs.confiavel:
+                self._alerta("offset_servidor_mudou", {"de_s": self.rs.offset_s, "para_s": novo.offset_s})
+            self.rs = novo
+            self.guardiao.atualizar_relogio_servidor(novo)
+            self.ticks.rs = novo
+            self.guardiao.desbloquear("offset")
+
+    # --- comandos --------------------------------------------------------------------------------
+    def _ordem(self, msg: dict[str, Any]) -> dict[str, Any]:
+        cmd = ComandoOrdem.model_validate(msg["cmd"])
+        ok, motivo = self.guardiao.avaliar_entrada(cmd)
+        if not ok:
+            ack = AckOrdem(retcode=C.RET_LOCAL_RECUSADO, comentario=f"bloqueado pelo guardiao: {motivo}")
+        else:
+            ack = self.executor.enviar(cmd, dono=str(msg.get("dono", "nucleo")))
+        est = estado_do_retcode(ack.retcode)
+        return {"tipo": "ack", "id": msg.get("id"), "ack": ack.model_dump(mode="json"), "estado": est.value,
+                "intencao_id": cmd.intencao_id}
+
+    def _emergencia(self, msg: dict[str, Any]) -> dict[str, Any]:
+        origem = f"comando ({msg.get('origem', 'desconhecida')})"
+        self.guardiao.acionar_emergencia(origem)
+        for _ in range(self.cfg.tentativas_emergencia):
+            conf = self.guardiao.confirmacao_emergencia()
+            if conf["zerado"]:
+                break
+            time.sleep(self.cfg.espera_emergencia_s)
+            self.guardiao.zerar_tudo(origem)
+        conf = self.guardiao.confirmacao_emergencia()
+        return {"tipo": "ack_emergencia", "id": msg.get("id"), **conf, "confirmado": bool(conf["zerado"] and conf["travado"])}
+
+    def tratar(self, msg: dict[str, Any]) -> dict[str, Any] | None:
+        tipo = msg.get("tipo")
+        if tipo == "heartbeat":
+            self.guardiao.heartbeat()
+            return None
+        if tipo == "ordem":
+            return self._ordem(msg)
+        if tipo == "emergencia":
+            return self._emergencia(msg)
+        if tipo == "estado":
+            return {"tipo": "estado", "id": msg.get("id"), **self.estado()}
+        if tipo == "rearmar":
+            try:
+                self.guardiao.rearmar(str(msg.get("motivo", "")))
+                return {"tipo": "rearmado", "id": msg.get("id"), "ok": True}
+            except (ValueError, RuntimeError) as e:
+                return {"tipo": "rearmado", "id": msg.get("id"), "ok": False, "erro": str(e)}
+        if tipo == "parar":
+            self.parado = "comando parar"
+            return {"tipo": "parando", "id": msg.get("id")}
+        return {"tipo": "erro", "id": msg.get("id"), "erro": f"comando desconhecido: {tipo}"}
+
+    # --- estado / publicacao -----------------------------------------------------------------------
+    def estado(self) -> dict[str, Any]:
+        conta = ler_estado_conta(self.t)
+        ps = self.t.positions_get()
+        pos = None
+        if ps:
+            p = ps[0]
+            pos = {"ticket": int(p.ticket), "simbolo": str(p.symbol), "lado": "compra" if p.type == C.POS_COMPRA else "venda",
+                   "volume": float(p.volume), "sl": float(p.sl), "tp": float(p.tp)}
+        return {
+            "t_ns": self.relogio.agora_ns(),
+            "conta": conta.model_dump() if conta else None,
+            "duble": bool(getattr(self.t, "eh_duble", False)),
+            "simbolo": self.resolucao.simbolo_corretora if self.resolucao else None,
+            "offset_s": self.rs.offset_s, "offset_confiavel": self.rs.confiavel,
+            "feed_parado": self.ticks.feed_parado, "lacuna_pendente": self.ticks.lacuna_pendente,
+            "ticks_total": self.ticks.total, "livro_total": self.livro.total,
+            "livro_profundidade": {"declarada": self.livro.profundidade_declarada,
+                                   "observada": self.livro.profundidade_observada},
+            "guardiao": self.guardiao.estado(), "posicao": pos,
+            "incertas": sorted(self.executor.incertas), "parado": self.parado,
+        }
+
+    def _publicar_estado(self) -> None:
+        self.pub.publicar("estado", self.estado())
+
+    def _vencido(self, nome: str, intervalo_s: float) -> bool:
+        agora = self.relogio.monotonico_ns()
+        if agora >= self._prox.get(nome, 0):
+            self._prox[nome] = agora + int(intervalo_s * 1e9)
+            return True
+        return False
+
+    # --- laco -------------------------------------------------------------------------------------
+    def passo(self, timeout_ms: int = 0) -> None:
+        """Uma iteracao do laco (unica thread que toca o MT5)."""
+        try:
+            if self.canal is not None:
+                for _ in range(50):
+                    r = self.canal.receber(timeout_ms if _ == 0 else 0)
+                    if r is None:
+                        break
+                    ident, msg = r
+                    try:
+                        resp = self.tratar(msg)
+                    except GuardaDemoViolada as e:
+                        resp = {"tipo": "ack", "id": msg.get("id"), "estado": "REJEITADA",
+                                "ack": AckOrdem(retcode=C.RET_LOCAL_RECUSADO, comentario=f"guarda demo violada: {e}").model_dump(mode="json")}
+                        if violacao_de_identidade(e):
+                            self.parar(f"guarda demo violada: {e}")
+                    if resp is not None:
+                        self.canal.responder(ident, resp)
+            elif timeout_ms:
+                time.sleep(timeout_ms / 1000.0)
+            if self.parado:
+                return
+            if self._vencido("ticks", self.cfg.intervalo_ticks_s):
+                try:
+                    self.ticks.sondar()
+                except Exception as e:  # noqa: BLE001 - coleta nunca derruba o guardiao
+                    self.erros_coleta += 1
+                    self.incidentes.append(("coleta", repr(e)))
+            if self._vencido("livro", self.cfg.intervalo_livro_s):
+                try:
+                    self.livro.sondar()
+                except Exception as e:  # noqa: BLE001
+                    self.erros_coleta += 1
+                    self.incidentes.append(("livro", repr(e)))
+            if self._vencido("guardiao", self.cfg.intervalo_guardiao_s):
+                self.guardiao.ciclo()
+            if not self.rs.confiavel and self._vencido("recalibrar", 30.0):
+                self._recalibrar()
+            if self._vencido("hb", self.cfg.intervalo_hb_s):
+                self._hb_seq += 1
+                # dict sem a chave `seq`: Heartbeat.seq colidiria com o numero de sequencia do barramento
+                self.pub.publicar("heartbeat", {"origem": "gateway", "hb": self._hb_seq, "t_ns": self.relogio.agora_ns()})
+            if self._vencido("estado", self.cfg.intervalo_estado_s):
+                self._publicar_estado()
+        except GuardaDemoViolada as e:
+            if violacao_de_identidade(e):
+                self.parar(f"guarda demo violada: {e}")
+            else:
+                self._alerta("guarda_demo_transitoria", {"motivo": str(e)})
+
+    def parar(self, motivo: str = "parada solicitada") -> None:
+        if not self.parado:
+            self.parado = motivo
+            self._alerta("gateway_parado", {"motivo": motivo})
+
+    def executar(self, parar: threading.Event | None = None, duracao_s: float | None = None,
+                 timeout_ms: int = 20) -> None:
+        """Roda o laco ate `parar`, `duracao_s` ou violacao de guarda; no fim encerra com seguranca."""
+        fim = None if duracao_s is None else time.monotonic() + duracao_s
+        try:
+            while not self.parado:
+                if parar is not None and parar.is_set():
+                    break
+                if fim is not None and time.monotonic() >= fim:
+                    break
+                self.passo(timeout_ms)
+        finally:
+            self.encerrar()
+
+    def encerrar(self) -> None:
+        try:
+            self._publicar_estado()
+        except Exception:  # noqa: BLE001
+            pass
+        if self.log is not None:
+            self.log.fechar()
+        try:
+            self.livro.liberar()
+        except Exception:  # noqa: BLE001
+            pass
+        if self.canal is not None:
+            self.canal.fechar()
+        close = getattr(self.pub, "fechar", None)
+        if close:
+            close()
+
+
+def rodar_gateway_zmq(fabrica_terminal: Callable[[], Any], cfg: ConfigGateway, end_pub: str, end_cmd: str,
+                      duracao_s: float | None = None, relogio: Relogio | None = None) -> None:
+    """Ponto de entrada de PROCESSO: cria terminal, PUB e ROUTER e roda o laco. Picklavel (multiprocessing)."""
+    from robowin.core.barramento import PublicadorZMQ
+
+    from .canais import CanalComandosZMQ
+    terminal = fabrica_terminal()
+    gw = Gateway(terminal, cfg, relogio, PublicadorZMQ(end_pub), CanalComandosZMQ(end_cmd))
+    gw.iniciar()
+    gw.executar(duracao_s=duracao_s)
