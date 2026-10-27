@@ -18,3 +18,10 @@ modelo = "anthropic:claude-haiku-5-5"
 [prazos]
 imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_pts = 20 }
 condicional = { expira_min_max = 10 }
+
+[mt5]
+# login e servidor da conta DEMO (a senha vem so da variavel de ambiente ROBOWIN_MT5_SENHA)
+# login = 0
+# servidor = ""
+# caminho_terminal = "C:/MT5/terminal64.exe"
+# offset_fixo_s = 0      # use se a calibracao automatica nao for confiavel fora do pregao
