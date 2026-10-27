@@ -50,15 +50,25 @@ class SinalStatArbPadrao:
         self.status = "em_validacao"
         return res
 
-    def validar_oos(self, oos: Mapping[str, np.ndarray]) -> dict[str, ResultadoEG]:
-        """Reteste fora da amostra; mantem so referencias que continuam cointegradas. Sem nenhuma -> 'reprovado'."""
+    def validar_oos(self, oos: Mapping[str, np.ndarray], origem_dados: str = "",
+                    lucrativo: bool | None = None) -> dict[str, ResultadoEG]:
+        """Reteste fora da amostra; mantem so referencias que continuam cointegradas. Sem nenhuma -> 'reprovado'.
+
+        'validado_oos' exige TAMBEM `origem_dados == "historico_real"` (nunca sintetico/contaminado/desconhecido)
+        e `lucrativo is True` (criterio de lucratividade pre-registrado, avaliado fora daqui). Cointegracao
+        sobrevivente sem isso fica 'em_validacao' (candidato) e o sinal direcional continua 0.0."""
         if self.status == "nao_treinado":
             raise RuntimeError("treinar() antes de validar_oos()")
         y = np.asarray(oos[self.alvo], dtype=float)
         res = {r: engle_granger(y, np.asarray(oos[r], dtype=float), self.alfa, self.meia_vida_max)
                for r in self.ativas if r in oos}
         self.ativas = tuple(r for r, e in res.items() if e.cointegrado)
-        self.status = "validado_oos" if self.ativas else "reprovado"
+        if not self.ativas:
+            self.status = "reprovado"
+        elif origem_dados != "historico_real" or lucrativo is not True:
+            self.status = "em_validacao"
+        else:
+            self.status = "validado_oos"
         return res
 
     def sinal(self, t_ns: int, precos: dict[str, float]) -> dict[str, float]:

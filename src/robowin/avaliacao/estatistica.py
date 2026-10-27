@@ -58,8 +58,9 @@ def n_proporcao_poder(p0: float, p1: float, alfa: float = 0.05, poder: float = 0
 
 def acerto_equilibrio(stop_pontos: float, alvo_pontos: float, custos_brl: float,
                       ponto_valor_brl: float = 0.20) -> float:
-    """Taxa de acerto que zera a expectativa: p*(alvo-c) = (1-p)*(stop+c). `custos_brl` por ida e volta
-    (tarifas + corretagem + slippage)."""
+    """Taxa de acerto que zera a expectativa liquida: p*G - (1-p)*L = c, ou seja p = (L + c)/(G + L), com
+    G = alvo*ponto_valor e L = stop*ponto_valor em BRL; `custos_brl` por ida e volta (tarifas + corretagem +
+    slippage) e descontado UMA vez do resultado esperado (nao de cada lado)."""
     ganho = alvo_pontos * ponto_valor_brl
     perda = stop_pontos * ponto_valor_brl
     return (perda + custos_brl) / (ganho + perda)
@@ -180,7 +181,8 @@ def deflated_sharpe(retornos: Sequence[float], n_tentativas: int,
                     var_sr_tentativas: float | None = None) -> dict:
     """Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014). `n_tentativas` = TODAS as configuracoes
     testadas (inclui iteracoes de prompt). `var_sr_tentativas` = variancia dos SR entre as tentativas
-    (no periodo dos retornos); se None usa a variancia amostral do proprio SR (aproximacao)."""
+    (no periodo dos retornos); se None usa a variancia amostral do proprio SR (aproximacao que NAO mede a
+    dispersao entre tentativas: o resultado traz `var_aproximada=True` e o relatorio nao concede selo)."""
     a = np.asarray(retornos, dtype=float)
     n = a.size
     if n < 3 or a.std(ddof=1) == 0:
@@ -188,12 +190,13 @@ def deflated_sharpe(retornos: Sequence[float], n_tentativas: int,
     sr = sharpe(a)
     g3 = float(stats.skew(a, bias=True))
     g4 = float(stats.kurtosis(a, fisher=False, bias=True))
+    var_aprox = var_sr_tentativas is None
     if var_sr_tentativas is None:
         var_sr_tentativas = max((1 - g3 * sr + (g4 - 1) / 4 * sr * sr) / (n - 1), 0.0)
     sr0 = sharpe_esperado_maximo(n_tentativas, var_sr_tentativas)
     dsr = sharpe_probabilistico(sr, n, g3, g4, sr0)
     return {"sr": sr, "sr0": sr0, "dsr": dsr, "n": n, "n_tentativas": n_tentativas,
-            "assimetria": g3, "curtose": g4}
+            "assimetria": g3, "curtose": g4, "var_aproximada": var_aprox}
 
 
 # ---------------------------------------------------------------- monitoramento sequencial

@@ -301,7 +301,7 @@ def test_relatorio_recusa_selo_validado_em_dados_sinteticos():
     res = _rodar_sint(_sintetico())
     assert res.sintetico
     rel = relatorio.gerar_relatorio(res.trades_por_braco(), controle="controle_aleatorio",
-                                    sintetico=res.sintetico, n_alvo=1, n_boot=200, seed=1)
+                                    sintetico=res.sintetico, contaminado=False, tentativas=1, n_alvo=1, n_boot=200, seed=1)
     assert {b["selo"]["selo"] for b in rel["bracos"].values()} == {"recusado"}
     assert "SINTETICOS" in relatorio.renderizar_markdown(rel)
 

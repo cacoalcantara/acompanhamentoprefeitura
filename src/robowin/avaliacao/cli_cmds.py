@@ -9,6 +9,8 @@ from robowin.core.tipos import Lado, Trade
 
 from . import relatorio
 
+ORIGEM_SINTETICO = "dados_sinteticos"  # mesma marca de decisao.registro e do painel
+
 _SQL = ("SELECT id, braco, lado, entrada, saida, t_entrada_ns, t_saida_ns, bruto_brl, tarifas_brl, corretagem_brl, "
         "slippage_brl, motivo_saida FROM trades ORDER BY t_saida_ns, id")
 
@@ -27,25 +29,61 @@ def carregar_trades(banco: str | Path) -> dict[str, list[Trade]]:
         con.close()
 
 
-def banco_sintetico(banco: str | Path) -> bool:
-    """Marca como sintetico se algum manifesto de experimento mencionar dados sinteticos."""
+def _origem_manifestos(banco: str | Path) -> set[str]:
+    """Valores de `origem_dados` (e mencoes a 'sinteti') nos manifestos de experimento do banco."""
     con = sqlite3.connect(f"file:{banco}?mode=ro", uri=True)
+    out: set[str] = set()
     try:
         for (m,) in con.execute("SELECT manifesto_json FROM experimentos"):
-            if m and "sinteti" in m.lower():
-                return True
+            if not m:
+                continue
+            if "sinteti" in m.lower():
+                out.add("sinteticos")
+            try:
+                v = json.loads(m)
+            except ValueError:
+                continue
+            if isinstance(v, dict) and v.get("origem_dados"):
+                out.add(str(v["origem_dados"]))
     except sqlite3.Error:
         pass
     finally:
         con.close()
-    return False
+    return out
+
+
+def banco_sintetico(banco: str | Path) -> bool:
+    """Sintetico se o manifesto declarar origem sintetica/mencionar 'sinteti' OU houver incidente
+    de origem `dados_sinteticos` (a marca que o orquestrador/painel gravam)."""
+    if any("sinteti" in o.lower() for o in _origem_manifestos(banco)):
+        return True
+    con = sqlite3.connect(f"file:{banco}?mode=ro", uri=True)
+    try:
+        return con.execute("SELECT 1 FROM incidentes WHERE origem=? LIMIT 1", (ORIGEM_SINTETICO,)).fetchone() is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+
+
+def origem_declarada_real(banco: str | Path) -> bool:
+    """True so se algum manifesto declarar explicitamente `origem_dados = historico_real`."""
+    return "historico_real" in _origem_manifestos(banco)
 
 
 def _avaliar(a) -> int:
     trades = carregar_trades(a.banco)
-    sint = bool(a.sintetico) or banco_sintetico(a.banco)
-    rel = relatorio.gerar_relatorio(trades, controle=a.controle, sintetico=sint, contaminado=bool(a.contaminado),
-                                    n_alvo=a.n_alvo, tentativas=a.tentativas, n_boot=a.n_boot, seed=a.seed)
+    # desconhecido (None) recusa o selo: so e "nao sintetico"/"nao contaminado" se AFIRMADO
+    if a.sintetico or banco_sintetico(a.banco):
+        sint: bool | None = True
+    elif a.dados_reais or origem_declarada_real(a.banco):
+        sint = False
+    else:
+        sint = None
+    cont: bool | None = True if a.contaminado else (False if a.nao_contaminado else None)
+    rel = relatorio.gerar_relatorio(trades, controle=a.controle, sintetico=sint, contaminado=cont,
+                                    n_alvo=a.n_alvo, tentativas=a.tentativas, var_sr_tentativas=a.var_sr_tentativas,
+                                    n_boot=a.n_boot, seed=a.seed)
     saida = Path(a.saida)
     if saida.suffix:
         md, js = saida, saida.with_suffix(".json")
@@ -65,9 +103,16 @@ def registrar(sub):
     p.add_argument("--saida", required=True, help="arquivo .md ou diretorio")
     p.add_argument("--controle", default=None, help="nome do braco de controle aleatorio")
     p.add_argument("--n-alvo", type=int, default=None, help="n pre-registrado")
-    p.add_argument("--tentativas", type=int, default=1, help="numero de tentativas (DSR)")
+    p.add_argument("--tentativas", type=int, required=True,
+                   help="numero TOTAL de tentativas/configuracoes testadas (deflator do DSR; 1 so se for mesmo uma)")
+    p.add_argument("--var-sr-tentativas", type=float, default=None,
+                   help="variancia dos SR entre as tentativas (obrigatoria para o selo se tentativas > 1)")
     p.add_argument("--sintetico", action="store_true")
+    p.add_argument("--dados-reais", action="store_true",
+                   help="afirma que os dados NAO sao sinteticos (sem isso a origem e desconhecida e o selo e recusado)")
     p.add_argument("--contaminado", action="store_true")
+    p.add_argument("--nao-contaminado", action="store_true",
+                   help="afirma que o periodo e posterior ao corte de conhecimento dos LLMs")
     p.add_argument("--n-boot", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=_avaliar)

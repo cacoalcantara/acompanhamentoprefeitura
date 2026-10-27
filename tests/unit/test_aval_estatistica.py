@@ -100,6 +100,8 @@ def test_dsr_casos_sinteticos():
     nulo = rng.normal(0.0, 1.0, 500)
     d1 = est.deflated_sharpe(forte, 1)
     assert d1["sr0"] == 0.0 and d1["dsr"] > 0.99
+    assert est.deflated_sharpe(forte, 10)["var_aproximada"] is True
+    assert est.deflated_sharpe(forte, 10, var_sr_tentativas=0.01)["var_aproximada"] is False
     assert est.deflated_sharpe(nulo, 1)["dsr"] < 0.95 or True
     # mais tentativas deflacionam: DSR cai monotonicamente e SR0 cresce
     dsrs = [est.deflated_sharpe(forte, n, var_sr_tentativas=0.01)["dsr"] for n in (1, 10, 100, 1000)]

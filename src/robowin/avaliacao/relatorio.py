@@ -15,32 +15,64 @@ from . import estatistica as est
 from . import impostos, metricas
 from .metricas import dia_pregao
 
-AVISO_ACERTO = (
-    "Taxa de acerto alta NAO implica expectativa positiva. Com stop de 300 pontos e alvo de 100 pontos, o "
-    "acerto de equilibrio e de cerca de 76% a 78% (custos-base/estresse) e entradas aleatorias ja acertam "
-    "cerca de 75% antes dos custos. A metrica primaria e a expectativa liquida com IC; o acerto deve ser "
-    "lido sempre ao lado do controle aleatorio."
-)
+CUSTOS_BASE_BRL = 0.8  # custo ida e volta por contrato (tarifas+corretagem+slippage), cenario-base
+CUSTOS_ESTRESSE_BRL = 2.4  # idem, cenario de estresse
+
+
+def stop_efetivo_padrao_pontos(ponto_valor_brl: float = 0.20) -> float:
+    """Stop efetivo pela politica de risco padrao: min(stop_max, perda_max_op/pv - folga) = min(300, 60/0.2 - 50)."""
+    from robowin.core.tipos import ConfigRisco
+    from robowin.risco.politica import stop_maximo_efetivo_pontos
+    return stop_maximo_efetivo_pontos(ConfigRisco(), ponto_valor_brl)
+
+
+def texto_aviso_acerto(stop_pontos: float | None = None, alvo_pontos: float = 100.0, ponto_valor_brl: float = 0.20,
+                       custos_brl: tuple[float, float] = (CUSTOS_BASE_BRL, CUSTOS_ESTRESSE_BRL)) -> str:
+    """Aviso sobre acerto, com o acerto de equilibrio calculado dos parametros EFETIVOS (nada fixo no texto)."""
+    stop = stop_efetivo_padrao_pontos(ponto_valor_brl) if stop_pontos is None else stop_pontos
+    lo = est.acerto_equilibrio(stop, alvo_pontos, custos_brl[0], ponto_valor_brl)
+    hi = est.acerto_equilibrio(stop, alvo_pontos, custos_brl[1], ponto_valor_brl)
+    return (
+        f"Taxa de acerto alta NAO implica expectativa positiva. Com stop de {stop:.0f} pontos e alvo de "
+        f"{alvo_pontos:.0f} pontos, o acerto de equilibrio e de {100 * lo:.0f}% a {100 * hi:.0f}% "
+        f"(custos de R$ {custos_brl[0]:.2f} a R$ {custos_brl[1]:.2f} por operacao) e uma geometria assimetrica "
+        "faz entradas aleatorias acertarem muito antes dos custos. A metrica primaria e a expectativa liquida "
+        "com IC; o acerto deve ser lido sempre ao lado do controle aleatorio."
+    )
+
+
+AVISO_ACERTO = texto_aviso_acerto()
 AVISO_SIMULACAO = "SIMULACAO - sem ordens reais. Resultados simulados nao garantem resultado real."
 FL_MINIMO = 1.2
 DSR_MINIMO = 0.95
+MIN_PREGOES = 20  # menos pregoes que isso: o bootstrap por pregao e o DSR diario nao sustentam o selo
 
 
-def decidir_selo(*, sintetico: bool, contaminado: bool, n: int, n_alvo: int | None, exp_ic_inf: float,
-                 fator_lucro: float, dsr: float) -> dict:
-    """Selo 'validado' so se TODOS os criterios passam; nunca em dados sinteticos ou contaminados."""
-    if sintetico or contaminado:
-        motivos = []
-        if sintetico:
-            motivos.append("dados sinteticos nao podem validar uma estrategia")
-        if contaminado:
-            motivos.append("dados contaminados (periodo anterior ao corte de conhecimento dos LLMs)")
-        return {"selo": "recusado", "motivos": motivos}
+def decidir_selo(*, sintetico: bool | None, contaminado: bool | None, n: int, n_alvo: int | None, exp_ic_inf: float,
+                 fator_lucro: float, dsr: float, pregoes: int = 0, tentativas: int = 1,
+                 var_sr_tentativas: float | None = None) -> dict:
+    """Selo 'validado' so se TODOS os criterios passam. Sintetico/contaminado DESCONHECIDO (None) recusa."""
     motivos = []
+    if sintetico is None:
+        motivos.append("origem dos dados desconhecida (nao afirmada como nao sintetica)")
+    elif sintetico:
+        motivos.append("dados sinteticos nao podem validar uma estrategia")
+    if contaminado is None:
+        motivos.append("contaminacao desconhecida (periodo nao afirmado como posterior ao corte dos LLMs)")
+    elif contaminado:
+        motivos.append("dados contaminados (periodo anterior ao corte de conhecimento dos LLMs)")
+    if motivos:
+        return {"selo": "recusado", "motivos": motivos}
     if n_alvo is None:
         motivos.append("n pre-registrado nao informado")
     elif n < n_alvo:
         motivos.append(f"amostra insuficiente (n={n} < n pre-registrado={n_alvo})")
+    if pregoes < MIN_PREGOES:
+        motivos.append(f"poucos pregoes ({pregoes} < {MIN_PREGOES})")
+    if tentativas < 1:
+        motivos.append("numero de tentativas invalido")
+    elif tentativas > 1 and var_sr_tentativas is None:
+        motivos.append("variancia do SR entre as tentativas nao informada (DSR sem deflator confiavel)")
     if not (exp_ic_inf > 0):
         motivos.append("IC inferior da expectativa nao e positivo")
     if not (fator_lucro > FL_MINIMO):
@@ -51,8 +83,8 @@ def decidir_selo(*, sintetico: bool, contaminado: bool, n: int, n_alvo: int | No
 
 
 def _relatorio_braco(nome: str, trades: Sequence[Trade], *, n_alvo: int | None, tentativas: int,
-                     sintetico: bool, contaminado: bool, cfg_ir: impostos.ConfigImpostos | None,
-                     n_boot: int, seed: int) -> dict:
+                     sintetico: bool | None, contaminado: bool | None, cfg_ir: impostos.ConfigImpostos | None,
+                     n_boot: int, seed: int, var_sr_tentativas: float | None = None) -> dict:
     r = metricas.resumo(trades)
     x = [t.liquido_brl for t in metricas.ordenar(trades)]
     dias = [dia_pregao(t) for t in metricas.ordenar(trades)]
@@ -62,13 +94,14 @@ def _relatorio_braco(nome: str, trades: Sequence[Trade], *, n_alvo: int | None, 
         bs = est.bootstrap_por_pregao(x, dias, n_boot=n_boot, seed=seed)
         bs.pop("replicas_expectativa")
         pnl_dia = list(metricas.pnl_por_dia(trades).values())
-        dsr = est.deflated_sharpe(pnl_dia, tentativas)
+        dsr = est.deflated_sharpe(pnl_dia, tentativas, var_sr_tentativas)
     else:
         bs = {"expectativa_ic": (math.nan, math.nan), "fator_lucro_ic": (math.nan, math.nan), "pregoes": 0}
         dsr = {"sr": math.nan, "sr0": math.nan, "dsr": math.nan, "n": 0, "n_tentativas": tentativas}
     selo = decidir_selo(sintetico=sintetico, contaminado=contaminado, n=r.n, n_alvo=n_alvo,
                         exp_ic_inf=bs["expectativa_ic"][0], fator_lucro=r.fator_lucro,
-                        dsr=dsr["dsr"] if dsr["dsr"] == dsr["dsr"] else 0.0)
+                        dsr=dsr["dsr"] if dsr["dsr"] == dsr["dsr"] else 0.0, pregoes=int(bs.get("pregoes", 0)),
+                        tentativas=tentativas, var_sr_tentativas=var_sr_tentativas)
     return {
         "braco": nome, "metricas": r.como_dict(),
         "acerto": {"n": r.n, "acertos": r.acertos, "taxa": r.taxa_acerto, "ic_wilson_95": wil,
@@ -82,14 +115,17 @@ def _relatorio_braco(nome: str, trades: Sequence[Trade], *, n_alvo: int | None, 
     }
 
 
-def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, controle: str | None = None,
-                    sintetico: bool = False, contaminado: bool = False, n_alvo: int | None = None,
-                    tentativas: int = 1, cfg_impostos: impostos.ConfigImpostos | None = None,
+def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativas: int,
+                    controle: str | None = None, sintetico: bool | None = None, contaminado: bool | None = None,
+                    n_alvo: int | None = None, var_sr_tentativas: float | None = None,
+                    stop_pontos: float | None = None, alvo_pontos: float = 100.0,
+                    cfg_impostos: impostos.ConfigImpostos | None = None,
                     n_boot: int = 2000, seed: int = 0, titulo: str = "Relatorio de avaliacao",
                     ids_vetados: Mapping[str, set[str]] | None = None,
                     n_preregistrado_comparacoes: int | None = None) -> dict[str, Any]:
     bracos = {nome: _relatorio_braco(nome, ts, n_alvo=n_alvo, tentativas=tentativas, sintetico=sintetico,
-                                     contaminado=contaminado, cfg_ir=cfg_impostos, n_boot=n_boot, seed=seed)
+                                     contaminado=contaminado, cfg_ir=cfg_impostos, n_boot=n_boot, seed=seed,
+                                     var_sr_tentativas=var_sr_tentativas)
               for nome, ts in trades_por_braco.items()}
     comparacoes: dict[str, Any] = {}
     if controle and controle in trades_por_braco:
@@ -110,10 +146,11 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, controle
     todos = [t for ts in trades_por_braco.values() for t in ts]
     dias = sorted({dia_pregao(t) for t in todos})
     return {
-        "titulo": titulo, "aviso_simulacao": AVISO_SIMULACAO, "aviso_acerto": AVISO_ACERTO,
+        "titulo": titulo, "aviso_simulacao": AVISO_SIMULACAO,
+        "aviso_acerto": texto_aviso_acerto(stop_pontos, alvo_pontos),
         "periodo": {"inicio": dias[0] if dias else None, "fim": dias[-1] if dias else None, "pregoes": len(dias)},
         "dados": {"sintetico": sintetico, "contaminado": contaminado}, "controle": controle,
-        "tentativas": tentativas, "bracos": bracos, "comparacoes_com_controle": comparacoes,
+        "tentativas": tentativas, "var_sr_tentativas": var_sr_tentativas, "bracos": bracos, "comparacoes_com_controle": comparacoes,
         "valor_do_veto": vetos,
     }
 
@@ -143,6 +180,8 @@ def renderizar_markdown(rel: Mapping[str, Any]) -> str:
     L: list[str] = [f"# {rel['titulo']}", "", f"> {rel['aviso_simulacao']}", ""]
     if rel["dados"]["sintetico"]:
         L += ["> **DADOS SINTETICOS** - resultados nao validam a estrategia.", ""]
+    if rel["dados"]["sintetico"] is None or rel["dados"]["contaminado"] is None:
+        L += ["> **ORIGEM/CONTAMINACAO DOS DADOS NAO AFIRMADA** - o selo 'validado' fica recusado.", ""]
     if rel["dados"]["contaminado"]:
         L += ["> **DADOS CONTAMINADOS** - periodo anterior ao corte de conhecimento dos LLMs.", ""]
     p = rel["periodo"]

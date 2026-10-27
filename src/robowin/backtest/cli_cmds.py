@@ -35,7 +35,7 @@ def _escrever_relatorio(res: ResultadoBacktest, saida: Path, sufixo: str, *, con
                         seed: int) -> dict[str, Any]:
     rel = relatorio.gerar_relatorio(
         res.trades_por_braco(), controle=CONTROLE if CONTROLE in res.bracos else None, sintetico=res.sintetico,
-        contaminado=contaminado, n_boot=n_boot, seed=seed,
+        contaminado=contaminado, tentativas=max(1, len(res.bracos)), n_boot=n_boot, seed=seed,
         titulo=f"Backtest de infraestrutura ({res.cenario})")
     md = relatorio.renderizar_markdown(rel)
     if res.sintetico:

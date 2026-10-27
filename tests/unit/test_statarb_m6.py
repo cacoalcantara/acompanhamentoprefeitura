@@ -100,8 +100,20 @@ def _treinado(y, x, h):
     assert s.status == "nao_treinado"
     s.treinar({"WIN": y[:h], "REF": x[:h]})
     assert s.status == "em_validacao"
-    s.validar_oos({"WIN": y[h:2 * h], "REF": x[h:2 * h]})
+    s.validar_oos({"WIN": y[h:2 * h], "REF": x[h:2 * h]}, origem_dados="historico_real", lucrativo=True)
     return s
+
+
+def test_validado_oos_exige_origem_real_e_lucratividade():
+    y, x = par_cointegrado(3000, seed=2)
+    oos = {"WIN": y[1000:2000], "REF": x[1000:2000]}
+    for kw in ({}, {"origem_dados": "sintetico", "lucrativo": True}, {"origem_dados": "historico_real"},
+               {"origem_dados": "historico_real", "lucrativo": False}):
+        s = SinalStatArbPadrao(alvo="WIN", referencias=("REF",))
+        s.treinar({"WIN": y[:1000], "REF": x[:1000]})
+        s.validar_oos(oos, **kw)
+        assert s.status == "em_validacao"
+        assert s.sinal(0, {"WIN": float(y[2000]) + 50, "REF": float(x[2000])})["direcional_win"] == 0.0
 
 
 def test_sinal_nao_treinado_nao_e_direcional():
