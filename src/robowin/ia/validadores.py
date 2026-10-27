@@ -11,10 +11,10 @@ from robowin.ia.dossie import caminhos_validos
 TIPOS_CONDICAO = ("preco_toca", "preco_rompe_acima", "preco_rompe_abaixo", "spread_max_pontos", "janela_tempo")
 EXPIRA_MAX_NS = 10 * 60 * 1_000_000_000
 MAX_GATILHOS = 4
-
-_RE_INDICADOR = re.compile(
-    r"\b(rsi|macd|ifr|adx|ema|sma|atr|obv|cci|vwap)\b|bollinger|estoc[aá]stic|stochastic|ichimoku|fibonacci"
-    r"|m[eé]dias?\s+m[oó]ve(l|is)|moving\s+average|cruzamento\s+de\s+m[eé]dias|golden\s+cross|death\s+cross"
+  # lista-de-proibicao (proib)
+_RE_INDICADOR = re.compile(  # proib
+    r"\b(rsi|macd|ifr|adx|ema|sma|atr|obv|cci|vwap)\b|bollinger|estoc[aá]stic|stochastic|ichimoku|fibonacci"  # proib
+    r"|m[eé]dias?\s+m[oó]ve(l|is)|moving\s+average|cruzamento\s+de\s+m[eé]dias|golden\s+cross|death\s+cross"  # proib
     r"|bandas?\s+de\s+",
     re.IGNORECASE,
 )

@@ -32,8 +32,8 @@ CODIGOS_CATEGORIA = {
 }
 CATEGORIA_DESCONHECIDA = "C99"
 
-_TERMOS_INDICADOR = ("rsi", "macd", "media_movel", "mm_", "ema", "sma", "bollinger", "estocastico",
-                     "stochastic", "cruzamento", "ifr", "atr", "adx", "ichimoku", "fibonacci")
+_TERMOS_INDICADOR = ("rsi", "macd", "media_movel", "mm_", "ema", "sma", "bollinger", "estocastico",  # lista-de-proibicao (proib)
+                     "stochastic", "cruzamento", "ifr", "atr", "adx", "ichimoku", "fibonacci")  # lista-de-proibicao (proib)
 _CHAVES_PROIBIDAS = {"data", "datas", "date", "timestamp", "t_ns", "t0_ns", "hora", "simbolo", "symbol",
                      "bid", "ask", "last", "preco", "preco_absoluto", "ultimo", "wdo", "titulo", "texto",
                      "manchete", "url", "fonte"}
