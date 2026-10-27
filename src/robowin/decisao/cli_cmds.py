@@ -1,0 +1,142 @@
+"""CLI: ``robowin simular`` (sessao completa sobre dados SINTETICOS) e ``robowin nucleo`` (ao vivo via gateway).
+
+Nenhum comando envia ordem real. ``simular`` usa o provedor FALSO por padrao (``--provedor real`` so com
+chaves de API no ambiente); ``nucleo`` consome os ticks/livros do gateway por ZeroMQ.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import time
+from pathlib import Path
+from typing import Any
+
+from robowin.core.config import ErroConfig
+
+
+def _params(a: argparse.Namespace) -> Any:
+    from .simulacao import ParamsSimulacao
+    return ParamsSimulacao(
+        seed=a.seed, n_ticks=a.n_ticks, sinal_forca=a.sinal_forca, saida=Path(a.saida), provedor=a.provedor,
+        config=Path(a.config), catalogo=Path(a.catalogo), risco=Path(a.risco), aprovacao=Path(a.aprovacao),
+        theta_brl=a.theta, com_condicional=not a.sem_condicional, p_timeout=a.p_timeout, p_http=a.p_http,
+        passo_s=a.passo_s, checagem_s=a.checagem_s,
+        idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 60.0)
+
+
+def _cmd_simular(a: argparse.Namespace) -> int:
+    from .simulacao import executar_sessao, formatar_resumo, montar_sessao
+    p = _params(a)
+    try:
+        s = montar_sessao(p)
+    except ErroConfig as e:
+        print(f"ERRO: {e}")
+        return 2
+    print("SIMULACAO / SINTETICO: sessao completa em tempo simulado (nenhuma ordem real).")
+    try:
+        resumo = asyncio.run(executar_sessao(s))
+    finally:
+        s.banco.fechar()
+    print(formatar_resumo(resumo, rotulo_ia=s.rotulo_dados, caminho_banco=s.caminho_banco,
+                          dir_auditoria=s.dir_auditoria))
+    print(f"\nPainel: robowin painel --banco {s.caminho_banco}")
+    return 0
+
+
+def _cmd_nucleo(a: argparse.Namespace) -> int:
+    from robowin.core.relogio import RelogioReal
+    from robowin.core.tipos import Instrumento
+    from robowin.modelos.microestrutura import ModeloMicroestrutura
+
+    from .nucleo import FonteZMQ, Nucleo
+    from .simulacao import ParamsSimulacao, abrir_banco, construir_orquestrador, formatar_resumo
+
+    p = ParamsSimulacao(
+        saida=Path(a.saida), provedor=a.provedor, config=Path(a.config), catalogo=Path(a.catalogo),
+        risco=Path(a.risco), aprovacao=Path(a.aprovacao), passo_s=a.passo_s, checagem_s=a.checagem_s,
+        idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 15.0,
+        com_condicional=not a.sem_condicional, arquivo_emergencia=Path(a.arquivo_emergencia))
+    rel = RelogioReal()
+    sessao_id = f"nucleo-{int(time.time())}"
+    try:
+        banco, registro, caminho, dir_aud = abrir_banco(p.saida, rel, sessao_id)
+        # sem artefato de modelo persistido: o quant fica 'nao_treinado' (honesto) ate haver modelo validado
+        m = construir_orquestrador(
+            p, rel=rel, registro=registro, ins=Instrumento(simbolo=a.simbolo),
+            modelo=ModeloMicroestrutura("logistica"), statarb=None, precos_aux=None, sintetico=False,
+            modo_tempo="real", sessao_id=sessao_id, t_ref_ns=rel.agora_ns())
+    except ErroConfig as e:
+        print(f"ERRO: {e}")
+        return 2
+    fonte = FonteZMQ(a.pub)
+    cliente = None
+    if a.cmd and not a.sem_heartbeat:
+        from robowin.mt5.canais import ClienteComandosZMQ
+        cliente = ClienteComandosZMQ(a.cmd)
+    nucleo = Nucleo(m.orq, fonte, heartbeat=(lambda: cliente.enviar_sem_resposta({"tipo": "heartbeat"}))
+                    if cliente else None)
+    print(f"SIMULACAO: nucleo ao vivo em {a.pub} (comandos {a.cmd or '-'}); braco(s): "
+          f"{', '.join(m.orq.contas)}. Nenhuma ordem real; Ctrl+C encerra.")
+    m.orq.iniciar(m.manifesto, t_ns=rel.agora_ns())
+
+    async def rodar() -> None:
+        try:
+            await nucleo.executar(duracao_s=a.duracao_s)
+        finally:
+            await m.orq.encerrar(m.manifesto)
+
+    try:
+        asyncio.run(rodar())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        fonte.fechar()
+        if cliente is not None:
+            cliente.fechar()
+        banco.fechar()
+    duble = bool(nucleo.estado_gateway.get("duble"))
+    rotulo = "SIMULACAO - nucleo ao vivo, ordens SOMENTE no simulador interno" + (
+        " / DADOS DO DUBLE (SINTETICO)" if duble else "")
+    print(formatar_resumo(
+        m.orq.resumo(), rotulo_ia="real" if m.real else "falso", caminho_banco=caminho, dir_auditoria=dir_aud,
+        rotulo_dados=rotulo, extra=f"ticks processados: {m.orq.ticks_processados}; fora de ordem: "
+        f"{m.orq.fora_de_ordem}; lacunas de sequencia: {fonte.lacunas}; mensagens: {nucleo.mensagens}"))
+    return 0
+
+
+def _comuns(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--provedor", choices=["falso", "real"], default="falso",
+                   help="falso (padrao, rotulado) ou real (SDKs oficiais; exige chaves de API no ambiente)")
+    p.add_argument("--config", default="config/robowin.toml")
+    p.add_argument("--catalogo", default="config/modelos.toml")
+    p.add_argument("--risco", default="config/risco.toml")
+    p.add_argument("--aprovacao", default="config/aprovacoes/risco-v1.toml")
+    p.add_argument("--sem-condicional", action="store_true", help="so as variantes de modo imediato")
+    p.add_argument("--passo-s", type=float, default=15.0, help="periodo dos bracos sem IA")
+    p.add_argument("--checagem-s", type=float, default=15.0, help="a cada quanto os gatilhos sao avaliados")
+    p.add_argument("--idade-max-dado-s", type=float, default=None,
+                   help="dado mais velho que isto bloqueia entradas (padrao: 60 no simular, 15 no nucleo)")
+
+
+def registrar(sub: Any) -> None:
+    s = sub.add_parser("simular", help="sessao completa em tempo simulado sobre dados SINTETICOS")
+    _comuns(s)
+    s.add_argument("--seed", type=int, default=7)
+    s.add_argument("--n-ticks", type=int, default=12_000, help="ticks por pregao sintetico (treino + sessao)")
+    s.add_argument("--sinal-forca", type=float, default=0.05)
+    s.add_argument("--saida", default=f"dados_locais/simulacao/sessao-{int(time.time())}")
+    s.add_argument("--theta", type=float, default=0.0, help="theta (R$) do braco quant")
+    s.add_argument("--p-timeout", type=float, default=0.03, help="fracao de timeouts injetados no provedor falso")
+    s.add_argument("--p-http", type=float, default=0.02, help="fracao de erros 429 injetados no provedor falso")
+    s.set_defaults(func=_cmd_simular)
+
+    n = sub.add_parser("nucleo", help="nucleo ao vivo: consome o gateway via ZeroMQ (simulacao, sem ordens reais)")
+    _comuns(n)
+    n.add_argument("--pub", default="tcp://127.0.0.1:5555")
+    n.add_argument("--cmd", default="tcp://127.0.0.1:5556", help="ROUTER do gateway (heartbeat); '' desliga")
+    n.add_argument("--sem-heartbeat", action="store_true")
+    n.add_argument("--simbolo", default="WIN")
+    n.add_argument("--saida", default=f"dados_locais/nucleo/sessao-{int(time.time())}")
+    n.add_argument("--arquivo-emergencia", default="dados_locais/EMERGENCIA")
+    n.add_argument("--duracao-s", type=float, default=None)
+    n.set_defaults(func=_cmd_nucleo)

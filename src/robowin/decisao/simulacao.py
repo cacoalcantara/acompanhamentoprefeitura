@@ -1,0 +1,423 @@
+"""Sessao completa em tempo simulado sobre dados SINTETICOS (``robowin simular``).
+
+*** TUDO AQUI E SIMULACAO SOBRE DADOS SINTETICOS: nenhum resultado prova lucratividade. ***
+
+* Dados: ``robowin.dados.sintetico`` (um pregao para treinar o modelo de microestrutura e o StatArb, outro
+  para a sessao). O modelo treinado em dados sinteticos NUNCA vira ``validado_oos`` (selo recusado), logo o
+  braco quant opera como EXPLORATORIO, rotulado.
+* IA: provedor ``falso`` por padrao (``ProvedorFalsoSessao``: propostas/revisoes deterministicas lidas do
+  dossie, latencia e falhas injetadas com seed; tudo rotulado ``-FALSO``). ``--provedor real`` usa os SDKs
+  oficiais, so se houver chaves de API no ambiente.
+* Saida: banco SQLite (esquema congelado), auditoria com cadeia de hash e resumo rotulado.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import random
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from pydantic import BaseModel
+
+from robowin.core.config import ErroConfig, carregar_toml
+from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
+from robowin.core.relogio import RelogioSimulado
+from robowin.core.tipos import (
+    Acao,
+    Condicao,
+    Instrumento,
+    LivroSnapshot,
+    ManifestoExperimento,
+    PlanoCondicional,
+    PropostaIA,
+    RevisaoIA,
+    Tick,
+)
+from robowin.dados.banco import BancoSQLite
+from robowin.dados.sintetico import ConfigSintetico, DadosSinteticos, gerar_dias
+from robowin.features.pipeline import PipelineFeatures
+from robowin.ia.catalogo import Catalogo, dividir_modelo
+from robowin.ia.orcamento import OrcamentoIA, ProvedorComOrcamento
+from robowin.ia.papeis import carregar_papeis, validar_papeis
+from robowin.ia.prompts import hashes_prompts
+from robowin.ia.provedores import criar_provedor
+from robowin.ia.provedores.base import Medidor, RespostaBruta
+from robowin.ia.provedores.falso import ProvedorFalso
+from robowin.modelos.demo_sintetico import montar_amostras
+from robowin.modelos.microestrutura import CriterioOOS, ModeloMicroestrutura
+from robowin.risco.politica import carregar_politica
+from robowin.risco.tempo import dia_sp
+from robowin.statarb.sinais import SinalStatArbPadrao
+
+from .bracos.base import BracoBase, Geometria, Modo
+from .bracos.controles import BracoAleatorio, BracoNaoOperar
+from .bracos.fabrica import FabricaBracos, extras_de_config
+from .bracos.quant import BracoQuant
+from .gatilhos import ConfigGatilhos
+from .orquestrador import ConfigOrquestrador, Orquestrador, geometria_de
+from .registro import Registro
+from .validade import BloqueioDados, prazos_de_config
+
+NS = 1_000_000_000
+RAIZ_CONFIG = Path(__file__).resolve().parents[3] / "config"
+ROTULO_SESSAO = "SIMULACAO / SINTETICO - dados gerados por simulacao; NAO sao dados de mercado"
+
+
+# ==================================================================================================
+# provedor FALSO da sessao
+# ==================================================================================================
+def proposta_falsa(dossie: dict[str, Any], modo: str) -> PropostaIA:
+    """Regra FALSA e deterministica (so para exercitar o encanamento; nao e estrategia): segue o movimento de
+    60 s quando o spread e curto e gerencia a posicao aberta por resultado e tempo."""
+    pos = dossie.get("posicao") or {}
+    mov = dossie.get("movimento") or {}
+    spread = (dossie.get("microestrutura") or {}).get("spread_ticks")
+    if (pos.get("quantidade") or 0) > 0:
+        res = pos.get("resultado_pontos") or 0.0
+        if res <= -20 or (pos.get("tempo_aberta_s") or 0) > 240:
+            return PropostaIA(
+                acao=Acao.ENCERRAR, evidencias_a_favor=("posicao.resultado_pontos negativo ou tempo longo",),
+                justificativa_curta="[FALSO] encerra por resultado ou tempo")
+        return PropostaIA(acao=Acao.MANTER, justificativa_curta="[FALSO] mantem")
+    ret = mov.get("ret_60s_pts")
+    if ret is None or spread is None or abs(ret) < 10 or spread > 2:
+        return PropostaIA(acao=Acao.NAO_OPERAR, incerteza=0.8, justificativa_curta="[FALSO] sem sinal")
+    compra = ret > 0
+    plano = None
+    if modo == "condicional":
+        gat = (Condicao(tipo="preco_toca", valor=-10.0 if compra else 10.0),
+               Condicao(tipo="spread_max_pontos", valor=10.0))
+        inv = (Condicao(tipo="preco_rompe_acima" if compra else "preco_rompe_abaixo", valor=30.0 if compra else -30.0),)
+        plano = PlanoCondicional(gatilhos=gat, invalidacoes=inv, expira_ns=240 * NS)
+    return PropostaIA(
+        acao=Acao.COMPRAR if compra else Acao.VENDER,
+        hipoteses=("[FALSO] continuacao do movimento recente",),
+        evidencias_a_favor=(f"movimento.ret_60s_pts = {ret}",),
+        evidencias_contra=("microestrutura.spread_ticks pode alargar",),
+        riscos=("reversao",), incerteza=0.55, stop_pontos=30.0, alvo_pontos=40.0, validade_s=60,
+        invalidacoes=("movimento.ret_60s_pts muda de sinal",), justificativa_curta="[FALSO] momentum de 60 s",
+        plano=plano)
+
+
+def revisao_falsa(mensagem: str, dossie: dict[str, Any]) -> RevisaoIA:
+    """Revisor FALSO: aprova entradas com spread curto, rejeitando ~25% por um hash da mensagem (determinista)."""
+    spread = (dossie.get("microestrutura") or {}).get("spread_ticks")
+    h = int(hashlib.sha256(mensagem.encode()).hexdigest()[:4], 16)
+    ok = spread is not None and spread <= 2 and h % 4 != 0
+    return RevisaoIA(veredito="APROVAR" if ok else "REJEITAR", justificativa_curta="[FALSO] revisor de demonstracao")
+
+
+class ProvedorFalsoSessao(ProvedorFalso):
+    """FALSO para a simulacao em tempo simulado: respostas lidas do dossie, latencia e falhas INJETADAS
+    (seed), todas rotuladas. ``nome_emulado`` faz o adaptador valer como 'anthropic', 'openai'... no catalogo."""
+
+    def __init__(self, nome_emulado: str, *, seed: int = 0, mediana_proponente_s: float = 6.0,
+                 mediana_revisor_s: float = 2.5, sigma: float = 0.5, p_timeout: float = 0.0, p_http: float = 0.0,
+                 **kw: Any) -> None:
+        super().__init__(**kw)
+        self.nome = nome_emulado
+        self._rng = random.Random(f"{seed}:{nome_emulado}")
+        self.mediana_proponente_s, self.mediana_revisor_s, self.sigma = mediana_proponente_s, mediana_revisor_s, sigma
+        self.p_timeout, self.p_http = p_timeout, p_http
+        self._modo = "imediato"
+
+    async def _executar(self, *, modelo: str, sistema: str, mensagem: str, schema: type[BaseModel],
+                        effort: str | None, max_tokens: int, medidor: Medidor) -> RespostaBruta:
+        if schema is PropostaIA:
+            modo = mensagem.split("MODO:", 1)[1].split()[0] if "MODO:" in mensagem else "imediato"
+            obj: BaseModel = proposta_falsa(_dossie_da_mensagem(mensagem), modo)
+        elif schema is RevisaoIA:
+            obj = revisao_falsa(mensagem, _dossie_da_mensagem(mensagem))
+        else:
+            obj = self._gerador(schema)
+        self._roteiro, self._i = [obj], 0
+        return await super()._executar(modelo=modelo, sistema=sistema, mensagem=mensagem, schema=schema,
+                                       effort=effort, max_tokens=max_tokens, medidor=medidor)
+
+    async def gerar_estruturado(self, **kw: Any) -> tuple[BaseModel | None, Any]:
+        obj, ch = await super().gerar_estruturado(**kw)
+        mediana = self.mediana_revisor_s if kw["schema"] is RevisaoIA else self.mediana_proponente_s
+        lat_s = mediana * float(np.exp(self.sigma * self._rng.gauss(0, 1)))
+        u = self._rng.random()
+        prazo = float(kw["prazo_s"])
+        if u < self.p_timeout or lat_s > prazo:
+            return None, ch.model_copy(update={"valida": False, "erro": "timeout", "total_ms": prazo * 1000,
+                                               "ttft_ms": 0.0})
+        if u < self.p_timeout + self.p_http:
+            return None, ch.model_copy(update={"valida": False, "erro": "http_429", "total_ms": lat_s * 200})
+        return obj, ch.model_copy(update={"total_ms": lat_s * 1000, "ttft_ms": lat_s * 400})
+
+
+def _dossie_da_mensagem(mensagem: str) -> dict[str, Any]:
+    i = mensagem.index("{")
+    obj, _ = json.JSONDecoder().raw_decode(mensagem[i:])
+    return dict(obj)
+
+
+# ==================================================================================================
+# dados, modelo e statarb (sinteticos)
+# ==================================================================================================
+def vista_sintetica(precos: np.ndarray, seed: int, phi: float = 0.98, sigma: float = 0.02) -> np.ndarray:
+    """Ativo a vista SINTETICO cointegrado com o WIN (preco/1000 + ruido AR(1)) para exercitar o StatArb."""
+    rng = np.random.default_rng(seed)
+    u = np.zeros(len(precos))
+    e = rng.normal(0, sigma, len(precos))
+    for i in range(1, len(precos)):
+        u[i] = phi * u[i - 1] + e[i]
+    return precos / 1000.0 + u
+
+
+class VistaSintetica:
+    """Fornece o preco do ativo de referencia SINTETICO a cada consulta (estado AR(1) com seed)."""
+
+    def __init__(self, seed: int, phi: float = 0.98, sigma: float = 0.02) -> None:
+        self._rng = np.random.default_rng(seed)
+        self.phi, self.sigma, self._u = phi, sigma, 0.0
+
+    def __call__(self, tick: Tick) -> dict[str, float]:
+        self._u = self.phi * self._u + float(self._rng.normal(0, self.sigma))
+        m = tick.meio if tick.meio > 0 else tick.last
+        return {"BOVA11": m / 1000.0 + self._u}
+
+
+@dataclass
+class ParamsSimulacao:
+    seed: int = 7
+    n_ticks: int = 12_000  # por pregao sintetico (um para treino, um para a sessao)
+    sinal_forca: float = 0.05
+    saida: Path = Path("dados_locais/simulacao")
+    provedor: str = "falso"  # falso | real
+    config: Path = field(default_factory=lambda: RAIZ_CONFIG / "robowin.toml")
+    catalogo: Path = field(default_factory=lambda: RAIZ_CONFIG / "modelos.toml")
+    risco: Path = field(default_factory=lambda: RAIZ_CONFIG / "risco.toml")
+    aprovacao: Path = field(default_factory=lambda: RAIZ_CONFIG / "aprovacoes" / "risco-v1.toml")
+    theta_brl: float = 0.0
+    com_condicional: bool = True
+    p_timeout: float = 0.03
+    p_http: float = 0.02
+    passo_s: float = 15.0
+    checagem_s: float = 15.0
+    idade_max_dado_s: float = 60.0  # o pregao sintetico e esparso; ao vivo o padrao do BloqueioDados e 15 s
+    periodo_ia_s: float = 240.0
+    tipo_modelo: str = "logistica"
+    arquivo_emergencia: Path | None = None
+
+
+@dataclass
+class Sessao:
+    orq: Orquestrador
+    banco: BancoSQLite
+    ticks: list[Tick]
+    livros: list[LivroSnapshot]
+    manifesto: ManifestoExperimento
+    dados: DadosSinteticos
+    caminho_banco: Path
+    dir_auditoria: Path
+    modelo: ModeloPreditivo
+    rotulo_dados: str
+
+
+def treinar_modelo(treino: DadosSinteticos, tipo: str = "logistica") -> ModeloMicroestrutura:
+    """Treina o modelo de microestrutura em dados SINTETICOS (status final: em_validacao; nunca validado_oos)."""
+    am = montar_amostras(list(treino.ticks), list(treino.livros), passo_s=15)
+    m = ModeloMicroestrutura(tipo=tipo, nome=f"microestrutura_{tipo}")
+    m.treinar(am, origem="sintetico", criterio=CriterioOOS())
+    return m
+
+
+def treinar_statarb(treino: DadosSinteticos, simbolo: str, seed: int) -> SinalStatArbPadrao:
+    p = np.array([(t.meio if t.meio > 0 else t.last) for t in treino.ticks][::300], dtype=float)  # ~passo de 5 min
+    sa = SinalStatArbPadrao(alvo=simbolo, referencias=("BOVA11",))
+    sa.treinar({simbolo: p, "BOVA11": vista_sintetica(p, seed)})
+    return sa
+
+
+def carregar_ambiente(p: ParamsSimulacao) -> tuple[dict[str, Any], Catalogo]:
+    cfg = carregar_toml(p.config) if Path(p.config).exists() else {}
+    return cfg, Catalogo.carregar(p.catalogo)
+
+
+def montar_provedores(p: ParamsSimulacao, cfg: dict[str, Any], catalogo: Catalogo, orc: OrcamentoIA,
+                      refs: list[str]) -> tuple[dict[str, Any], bool]:
+    """Um provedor por NOME de provedor usado (cada um com orcamento e catalogo). ``falso`` por padrao."""
+    nomes = sorted({dividir_modelo(r)[0] for r in refs})
+    out: dict[str, Any] = {}
+    real = p.provedor == "real"
+    for n in nomes:
+        if real:
+            from robowin.ia.cli_cmds import tem_chave
+            if not tem_chave(n):
+                raise ErroConfig(f"sem chave de API para o provedor '{n}' (use --provedor falso)")
+            interno = criar_provedor(n, catalogo=catalogo)
+        else:
+            interno = ProvedorFalsoSessao(n, seed=p.seed, catalogo=catalogo, p_timeout=p.p_timeout, p_http=p.p_http)
+        out[n] = ProvedorComOrcamento(interno, orc, catalogo)
+    return out, real
+
+
+def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str]) -> ManifestoExperimento:
+    modelos: dict[str, str] = {}
+    fixavel: dict[str, bool] = {}
+    for b in bracos:
+        m = b.manifesto()
+        if m.get("modelo"):
+            modelos[f"{b.id}.modelo"] = str(m["modelo"])
+        for papel in ("proponente", "revisor"):
+            if m.get(papel):
+                ref = m[papel]["modelo"]
+                modelos[f"{b.id}.{papel}"] = ref
+                try:
+                    fixavel[ref] = bool(catalogo.obter(ref).fixavel)
+                except Exception:
+                    fixavel[ref] = False
+    return ManifestoExperimento(
+        id=sessao_id,
+        hipoteses=("H1: o braco com IA tem expectativa liquida maior que o controle aleatorio",
+                   "H2: o revisor (C) melhora a expectativa liquida sobre a proposta sem revisor (B)",
+                   "H3: o modo condicional difere do imediato"),
+        metrica_primaria="expectativa_liquida_por_operacao_brl", mde_brl=5.0, n_alvo=200,
+        regras_parada=("kill switch", "perda diaria", "orcamento de IA esgotado"),
+        modelos=modelos, fixavel=fixavel, hashes=hashes)
+
+
+def carregar_risco_simulacao(p: ParamsSimulacao) -> Any:
+    try:
+        return carregar_politica(p.risco, p.aprovacao)
+    except Exception:  # sem politica aprovada neste ambiente: padrao de simulacao
+        from robowin.core.tipos import ConfigRisco
+        return ConfigRisco()
+
+
+@dataclass
+class Montagem:
+    orq: Orquestrador
+    manifesto: ManifestoExperimento
+    bracos: list[BracoBase]
+    orcamento: OrcamentoIA
+    provedores: dict[str, Any]
+    real: bool
+
+
+def construir_orquestrador(
+    p: ParamsSimulacao, *, rel: Any, registro: Registro, ins: Instrumento, modelo: ModeloPreditivo,
+    statarb: SinalStatArb | None, precos_aux: Any, sintetico: bool, modo_tempo: str, sessao_id: str,
+    t_ref_ns: int, cfg: dict[str, Any] | None = None, catalogo: Catalogo | None = None,
+) -> Montagem:
+    """Bracos (A, B, C, controles e extras de ``[[bracos]]``), provedores com orcamento e orquestrador."""
+    if cfg is None or catalogo is None:
+        cfg, catalogo = carregar_ambiente(p)
+    papeis = carregar_papeis(cfg) if cfg.get("ia", {}).get("papeis") else {}
+    if papeis:
+        validar_papeis(papeis, catalogo)
+    risco = carregar_risco_simulacao(p)
+    orc = OrcamentoIA(float(cfg.get("ia", {}).get("orcamento_mensal_usd", 400.0)))
+    orc.iniciar_pregao(dia_sp(t_ref_ns).isoformat(), 21)
+    pz = prazos_de_config(cfg)
+    g = geometria_de(risco, ins, 30.0, 30.0, 60)
+    modos: tuple[Modo, ...] = ("imediato", "condicional") if p.com_condicional else ("imediato",)
+    refs = [pp.modelo for pp in papeis.values()] + [
+        r for e in extras_de_config(cfg) for r in ([e.proponente] + ([e.revisor] if e.revisor else [])) if ":" in r]
+    provedores, real = montar_provedores(p, cfg, catalogo, orc, refs)
+    fab = FabricaBracos(provedores, catalogo=catalogo, papeis=papeis, prazos=pz,
+                        geometria=Geometria(g.stop_pontos, g.alvo_pontos, 300), cfg=cfg)
+    bracos: list[BracoBase] = []
+    for modo in modos:
+        suf = "" if modo == "imediato" else "_cond"
+        bracos.append(BracoQuant(f"quant{suf}", modo, modelo=modelo.nome, theta_brl=p.theta_brl, geometria=g))
+    if papeis:
+        bracos += fab.padrao(modos)
+    bracos += fab.extras(cfg)
+    bracos.append(BracoNaoOperar())
+    for modo in modos:
+        suf = "" if modo == "imediato" else "_cond"
+        bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
+    hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "risco": _hash_arquivo(p.risco)}
+    manifesto = montar_manifesto(sessao_id, bracos, catalogo, hashes)
+    cfg_orq = ConfigOrquestrador(
+        instrumento=ins, risco=risco, sessao_id=sessao_id, sintetico=sintetico,
+        rotulo=ROTULO_SESSAO if sintetico else "SIMULACAO", seed=p.seed, modo_tempo=modo_tempo,
+        passo_s=p.passo_s, checagem_s=p.checagem_s, arquivo_emergencia=p.arquivo_emergencia,
+        gatilhos=ConfigGatilhos(periodo_s=p.periodo_ia_s, e_brl_min=1.0, z_statarb_min=2.0))
+    orq = Orquestrador(cfg_orq, relogio=rel, registro=registro, bracos=bracos, pipeline=PipelineFeatures(),
+                       modelos={modelo.nome: modelo}, statarb=statarb, precos_aux=precos_aux, orcamento=orc,
+                       bloqueio=BloqueioDados(idade_max_dado_s=p.idade_max_dado_s))
+    return Montagem(orq, manifesto, bracos, orc, provedores, real)
+
+
+def abrir_banco(saida: Path, rel: Any, sessao_id: str) -> tuple[BancoSQLite, Registro, Path, Path]:
+    from robowin.auditoria.cadeia import RegistradorAuditoria
+    saida = Path(saida)
+    saida.mkdir(parents=True, exist_ok=True)
+    caminho = saida / "robowin.db"
+    if caminho.exists():
+        raise ErroConfig(f"{caminho} ja existe: escolha outra --saida (nao sobrescrevo resultados)")
+    banco = BancoSQLite(caminho)
+    dir_aud = saida / "auditoria"
+    return banco, Registro(banco, RegistradorAuditoria(dir_aud, rel), sessao_id), caminho, dir_aud
+
+
+def montar_sessao(p: ParamsSimulacao) -> Sessao:
+    cfg, catalogo = carregar_ambiente(p)
+    ins = Instrumento(simbolo="SINT_WIN")
+    dias = gerar_dias(ConfigSintetico(seed=p.seed, n_ticks=p.n_ticks, sinal_forca=p.sinal_forca,
+                                      n_saltos=0, simbolo=ins.simbolo), 2)
+    treino, dados = dias[0], dias[1]
+    modelo = treinar_modelo(treino, p.tipo_modelo)
+    statarb = treinar_statarb(treino, ins.simbolo, p.seed)
+    sessao_id = f"sim-{p.seed}"
+    rel = RelogioSimulado(dados.ticks[0].t_utc_ns)
+    banco, registro, caminho, dir_aud = abrir_banco(p.saida, rel, sessao_id)
+    m = construir_orquestrador(
+        p, rel=rel, registro=registro, ins=ins, modelo=modelo, statarb=statarb, precos_aux=VistaSintetica(p.seed),
+        sintetico=True, modo_tempo="simulado", sessao_id=sessao_id, t_ref_ns=rel.agora_ns(), cfg=cfg,
+        catalogo=catalogo)
+    return Sessao(m.orq, banco, list(dados.ticks), list(dados.livros), m.manifesto, dados, caminho, dir_aud,
+                  modelo, "real" if m.real else "falso")
+
+
+def _hash_arquivo(p: Path) -> str:
+    try:
+        return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+async def executar_sessao(s: Sessao) -> dict[str, dict[str, Any]]:
+    """Alimenta o orquestrador com todos os eventos da sessao, em ordem de tempo, e encerra."""
+    orq = s.orq
+    orq.iniciar(s.manifesto, t_ns=s.ticks[0].t_utc_ns)
+    j = 0
+    livros = s.livros
+    for tick in s.ticks:
+        while j < len(livros) and livros[j].t_utc_ns <= tick.t_utc_ns:
+            orq.on_livro(livros[j])
+            j += 1
+        await orq.on_tick(tick)
+    await orq.encerrar(s.manifesto)
+    return orq.resumo()
+
+
+def formatar_resumo(resumo: Mapping[str, Mapping[str, Any]], *, rotulo_ia: str, caminho_banco: Path | None = None,
+                    dir_auditoria: Path | None = None, rotulo_dados: str = ROTULO_SESSAO,
+                    extra: str = "") -> str:
+    L = ["=" * 100, f"  {rotulo_dados}", f"  IA: {rotulo_ia.upper()}"
+         + ("  (respostas e latencias INJETADAS; nao representam nenhum modelo real)" if rotulo_ia == "falso" else ""),
+         "  Nenhum resultado abaixo prova lucratividade (sem validacao fora da amostra).",
+         "=" * 100,
+         f"{'braco':<24}{'modo':<12}{'dec.':>6}{'entr.':>6}{'vet.':>6}{'bloq.':>6}{'trades':>7}{'liq. R$':>10}"
+         f"{'IA':>5}{'IA inv.':>8}{'custo US$':>10}  rotulos"]
+    for b, r in resumo.items():
+        L.append(f"{b:<24}{r['modo']:<12}{r['decisoes']:>6}{r['entradas']:>6}{r['vetadas']:>6}{r['bloqueadas']:>6}"
+                 f"{r['trades']:>7}{r['liquido_brl']:>10.2f}{r['chamadas_ia']:>5}{r['chamadas_ia_invalidas']:>8}"
+                 f"{r['custo_ia_usd']:>10.4f}  {','.join(r['rotulos'])}")
+    if extra:
+        L.append(extra)
+    if caminho_banco:
+        L.append(f"\nBanco: {caminho_banco}")
+    if dir_auditoria:
+        L.append(f"Auditoria (cadeia de hash): {dir_auditoria}   -> robowin auditoria --dir <pasta>")
+    return "\n".join(L)
