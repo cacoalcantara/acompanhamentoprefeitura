@@ -1,4 +1,5 @@
 # Catalogo de IAs. Modelo sem preco ou sem data de corte e recusado.
+
 [[modelo]]
 provedor = "anthropic"
 id = "claude-opus-5-5"
@@ -7,14 +8,16 @@ corte_conhecimento = "2026-06"
 preco_entrada_mtok = 4.0
 preco_saida_mtok = 20.0
 preco_cache_mtok = 0.2
+
 [[modelo]]
 provedor = "anthropic"
 id = "claude-haiku-5-5"
 fixavel = true
 corte_conhecimento = "2026-06"
-preco_entrada_mtok = 0.10
-preco_saida_mtok = 0.50
+preco_entrada_mtok = 0.1
+preco_saida_mtok = 0.5
 preco_cache_mtok = 0.01
+
 [[modelo]]
 provedor = "anthropic"
 id = "claude-sonnet-5-5"
@@ -23,6 +26,7 @@ corte_conhecimento = "2026-06"
 preco_entrada_mtok = 2.0
 preco_saida_mtok = 10.0
 preco_cache_mtok = 0.1
+
 [[modelo]]
 provedor = "openai"
 id = "gpt-6.1-sol"
@@ -31,8 +35,8 @@ corte_conhecimento = "2026-04"
 preco_entrada_mtok = 2.0
 preco_saida_mtok = 10.0
 preco_cache_mtok = 0.1
-notas = "alias sem snapshot datado
-precos a confirmar"
+notas = "alias sem snapshot datado, precos a confirmar"
+
 [[modelo]]
 provedor = "openai"
 id = "gpt-6.1-terra"
@@ -41,3 +45,4 @@ corte_conhecimento = "2026-06"
 preco_entrada_mtok = 1.0
 preco_saida_mtok = 5.0
 preco_cache_mtok = 0.05
+notas = "alias sem snapshot datado, precos a confirmar"
