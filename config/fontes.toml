@@ -1,0 +1,97 @@
+# Fontes de noticias e calendario de eventos agendados.
+# TODAS as URLs e datas abaixo estao marcadas verificado = false: foram escritas de memoria e PRECISAM ser
+# conferidas pelo usuario nos sites oficiais. Fonte de noticias nao verificada fica DESLIGADA.
+# Eventos do calendario nao verificados continuam bloqueando entradas (falha segura).
+
+[[fonte]]
+tipo = "rss"
+nome = "fed_comunicados"
+url = "https://www.federalreserve.gov/feeds/press_all.xml"
+fuso_origem = "America/New_York"
+verificado = false
+
+[[fonte]]
+tipo = "rss"
+nome = "bcb_notas"
+url = "https://www.bcb.gov.br/api/feed/sitebcb/sitefeeds/notas"
+fuso_origem = "America/Sao_Paulo"
+verificado = false
+
+[[fonte]]
+tipo = "rss"
+nome = "ibge_agencia_noticias"
+url = "https://agenciadenoticias.ibge.gov.br/agencia-rss.xml"
+fuso_origem = "America/Sao_Paulo"
+verificado = false
+
+[[fonte]]
+tipo = "http_json"
+nome = "exemplo_json"
+url = "https://example.invalid/noticias.json"
+fuso_origem = "America/Sao_Paulo"
+campo_lista = "itens"
+campo_titulo = "titulo"
+campo_data = "publicado_em"
+campo_id = "id"
+verificado = false
+
+# Calendario (horario LOCAL no fuso de origem). antes_min/depois_min = janela de bloqueio de entradas.
+[[calendario]]
+orgao = "FOMC"
+nome = "Decisao do FOMC"
+data = "2026-10-28"
+hora = "14:00"
+fuso = "America/New_York"
+antes_min = 10
+depois_min = 15
+verificado = false
+
+[[calendario]]
+orgao = "BCB"
+nome = "Decisao do Copom"
+data = "2026-11-04"
+hora = "18:30"
+fuso = "America/Sao_Paulo"
+antes_min = 10
+depois_min = 15
+verificado = false
+
+[[calendario]]
+orgao = "BLS"
+nome = "Relatorio de emprego (payroll)"
+data = "2026-11-06"
+hora = "08:30"
+fuso = "America/New_York"
+antes_min = 10
+depois_min = 15
+verificado = false
+
+[[calendario]]
+orgao = "IBGE"
+nome = "IPCA"
+data = "2026-11-10"
+hora = "09:00"
+fuso = "America/Sao_Paulo"
+antes_min = 5
+depois_min = 10
+verificado = false
+
+[[calendario]]
+orgao = "FOMC"
+nome = "Decisao do FOMC"
+data = "2026-12-09"
+hora = "14:00"
+fuso = "America/New_York"
+antes_min = 10
+depois_min = 15
+verificado = false
+
+[[calendario]]
+orgao = "BCB"
+nome = "Decisao do Copom"
+data = "2026-12-09"
+hora = "18:30"
+fuso = "America/Sao_Paulo"
+antes_min = 10
+depois_min = 15
+verificado = false
