@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block titulo %}Decisões{% endblock %}
+{% block conteudo %}
+<h1>Decisões</h1>
+<p class="nota">Toda saída de modelo é um <strong>{{ ROTULO_CANDIDATO }}</strong> até passar pelas validações e pelo motor de risco.</p>
+{% if not itens %}<p class="vazio">Nenhuma decisão registrada.</p>{% endif %}
+{% for d in itens %}
+<section class="cartao decisao">
+<h3>{{ d.hora }} — braço {{ d.braco }} — {{ d.acao }} <span class="tag">{{ d.resultado }}</span></h3>
+<ol class="linha-tempo">
+<li><b>Gatilho</b>: {{ d.gatilho or "—" }} <small>modo {{ d.modo }}</small></li>
+<li><b>Dossiê</b>: <code>{{ (d.hash_dossie or "—")[:16] }}</code></li>
+<li><b>Proposta</b> <span class="tag cand">{{ ROTULO_CANDIDATO }}</span>:
+ {% if d.proposta %}{{ d.proposta.acao }} — {{ d.proposta.justificativa_curta }} <small>incerteza {{ d.proposta.incerteza }}</small>{% else %}—{% endif %}</li>
+<li><b>Revisão</b> <span class="tag cand">{{ ROTULO_CANDIDATO }}</span>:
+ {% if d.revisao %}{{ d.revisao.veredito }}{% if d.revisao.motivos %} — {{ d.revisao.motivos|join("; ") }}{% endif %}{% else %}—{% endif %}</li>
+<li><b>Validações e risco</b>: {% if d.risco %}{{ "aprovada" if d.risco.aprovada else "vetada" }}{% if d.risco.motivos %} — {{ d.risco.motivos|join("; ") }}{% endif %}{% else %}—{% endif %}</li>
+<li><b>Execução</b>: {{ d.resultado or "—" }}{% if d.motivos %} — {{ d.motivos }}{% endif %}</li>
+</ol>
+<p class="meta">Latência das chamadas de IA: {{ d.latencia_ms|num(0) }} ms · Custo: US$ {{ d.custo_usd|num(4) }}
+{% for c in d.chamadas %}<br><small>{{ c.papel }} ({{ c.modelo_servido or "?" }}): {{ c.total_ms|num(0) }} ms{% if not c.valida %} · resposta inválida{% endif %}{% if c.erro %} · erro: {{ c.erro }}{% endif %}</small>{% endfor %}</p>
+</section>
+{% endfor %}
+{% endblock %}

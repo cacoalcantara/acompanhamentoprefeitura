@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block titulo %}Auditoria{% endblock %}
+{% block conteudo %}
+<h1>Auditoria</h1>
+<section class="cartao"><h2>Verificação da cadeia de hash</h2>
+<p>Pasta: <code>{{ pasta }}</code></p>
+{% if ok is none %}<p class="vazio">Pasta de auditoria não encontrada ou sem arquivos.</p>
+{% elif not msgs %}<p class="vazio">Sem arquivos de auditoria.</p>
+{% else %}<p class="{{ 'pos' if ok else 'aviso-critico' }}">{{ "Cadeia íntegra." if ok else "FALHA: a cadeia de auditoria foi violada." }}</p>
+<ul>{% for m in msgs %}<li>{{ m }}</li>{% endfor %}</ul>{% endif %}</section>
+{% endblock %}

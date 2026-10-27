@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block titulo %}Modelos, experimentos e dados{% endblock %}
+{% block conteudo %}
+<h1>Modelos, experimentos e dados</h1>
+<section class="cartao"><h2>Registro de modelos</h2>
+{% if m.modelos %}<table><thead><tr><th>Modelo</th><th>Versão</th><th>Status</th><th>Hash dos dados</th><th>Hash do código</th><th>Treinado até</th><th>Ativo</th></tr></thead><tbody>
+{% for x in m.modelos %}<tr><td>{{ x.nome }}</td><td>{{ x.versao }}</td>
+<td><span class="tag st-{{ x.status }}">{{ x.status }}</span>{% if x.status != "validado_oos" %} <small>({{ ROTULO_CANDIDATO }})</small>{% endif %}</td>
+<td><code>{{ (x.hash_dados or "")[:16] }}</code></td><td><code>{{ (x.hash_codigo or "")[:16] }}</code></td><td>{{ x.treinado_ate }}</td><td>{{ "sim" if x.ativo else "não" }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Nenhum modelo registrado.</p>{% endif %}</section>
+<section class="cartao"><h2>Experimentos (manifestos)</h2>
+{% if m.experimentos %}{% for e in m.experimentos %}
+<details><summary>{{ e.id }} — {{ e.status }} — {{ e.criado }}</summary>
+<dl><dt>Métrica primária</dt><dd>{{ e.manifesto.metrica_primaria or "—" }}</dd>
+<dt>MDE</dt><dd>{{ e.manifesto.mde_brl|brl }}</dd><dt>Alfa</dt><dd>{{ e.manifesto.alfa }}</dd><dt>n alvo</dt><dd>{{ e.manifesto.n_alvo }}</dd>
+<dt>Hipóteses</dt><dd>{{ (e.manifesto.hipoteses or [])|join("; ") or "—" }}</dd>
+<dt>Regras de parada</dt><dd>{{ (e.manifesto.regras_parada or [])|join("; ") or "—" }}</dd>
+<dt>Modelos</dt><dd>{% for k, v in (e.manifesto.modelos or {}).items() %}{{ k }}={{ v }}; {% else %}—{% endfor %}</dd>
+<dt>Fixável</dt><dd>{% for k, v in (e.manifesto.fixavel or {}).items() %}{{ k }}: {{ "sim" if v else "não" }}; {% else %}—{% endfor %}</dd>
+<dt>Hashes</dt><dd>{% for k, v in (e.manifesto.hashes or {}).items() %}{{ k }}: <code>{{ v[:16] }}</code>; {% else %}—{% endfor %}</dd></dl></details>
+{% endfor %}{% else %}<p class="vazio">Nenhum experimento registrado.</p>{% endif %}</section>
+<section class="cartao"><h2>Qualidade de dados</h2>
+<dl><dt>Notícias (total / verificadas)</dt><dd>{{ m.qualidade.noticias.n or 0 }} / {{ m.qualidade.noticias.v or 0 }}</dd>
+<dt>Chamadas de IA com resposta inválida</dt><dd>{{ m.qualidade.chamadas_invalidas }}</dd>
+<dt>Modelo servido diferente do pedido</dt><dd>{{ m.qualidade.modelo_servido_divergente }}</dd></dl>
+<table><thead><tr><th>Tabela</th><th>Linhas</th></tr></thead><tbody>
+{% for k, v in m.qualidade.contagens.items() %}<tr><td>{{ k }}</td><td>{{ v }}</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}
