@@ -304,6 +304,7 @@ class ManifestoExperimento(Base):
     modelos: dict[str, str] = Field(default_factory=dict)
     fixavel: dict[str, bool] = Field(default_factory=dict)
     hashes: dict[str, str] = Field(default_factory=dict)
+    origem_dados: str = "desconhecida"  # "sinteticos" | "historico_real" | "desconhecida"
 
 
 class EntradaRegistroModelo(Base):

@@ -23,6 +23,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel
 
+from robowin.avaliacao.estatistica import n_expectativa
 from robowin.core.config import ErroConfig, carregar_toml
 from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
 from robowin.core.relogio import RelogioSimulado
@@ -205,6 +206,8 @@ class ParamsSimulacao:
     periodo_ia_s: float = 240.0
     tipo_modelo: str = "logistica"
     arquivo_emergencia: Path | None = None
+    sigma_brl: float = 35.0  # desvio-padrao conservador do liquido por operacao (R$) p/ dimensionar n_alvo
+    mde_brl: float = 5.0  # menor efeito de interesse na expectativa por operacao (R$)
 
 
 @dataclass
@@ -259,7 +262,8 @@ def montar_provedores(p: ParamsSimulacao, cfg: dict[str, Any], catalogo: Catalog
     return out, real
 
 
-def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str]) -> ManifestoExperimento:
+def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str],
+                     origem_dados: str = "sinteticos", sigma_brl: float = 35.0, mde_brl: float = 5.0) -> ManifestoExperimento:
     modelos: dict[str, str] = {}
     fixavel: dict[str, bool] = {}
     for b in bracos:
@@ -279,17 +283,24 @@ def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo
         hipoteses=("H1: o braco com IA tem expectativa liquida maior que o controle aleatorio",
                    "H2: o revisor (C) melhora a expectativa liquida sobre a proposta sem revisor (B)",
                    "H3: o modo condicional difere do imediato"),
-        metrica_primaria="expectativa_liquida_por_operacao_brl", mde_brl=5.0, n_alvo=200,
+        metrica_primaria="expectativa_liquida_por_operacao_brl", mde_brl=mde_brl,
+        n_alvo=n_expectativa(sigma_brl, mde_brl, alfa=0.05),
         regras_parada=("kill switch", "perda diaria", "orcamento de IA esgotado"),
-        modelos=modelos, fixavel=fixavel, hashes=hashes)
+        modelos=modelos, fixavel=fixavel, hashes=hashes, origem_dados=origem_dados)
 
 
-def carregar_risco_simulacao(p: ParamsSimulacao) -> Any:
+def carregar_risco_simulacao(p: ParamsSimulacao, *, ao_vivo: bool = False) -> tuple[Any, str | None]:
+    """Politica de risco APROVADA (hash conferido). Devolve (config, erro).
+
+    Ao vivo o erro se propaga (`ErroConfig`): nunca opera com padrao. Na simulacao cai em ``ConfigRisco()``
+    padrao, mas devolve o erro para que o chamador registre incidente CRITICO e rotule o resultado."""
     try:
-        return carregar_politica(p.risco, p.aprovacao)
-    except Exception:  # sem politica aprovada neste ambiente: padrao de simulacao
+        return carregar_politica(p.risco, p.aprovacao), None
+    except Exception as e:
+        if ao_vivo:
+            raise ErroConfig(f"politica de risco nao aprovada: {type(e).__name__}: {e}") from e
         from robowin.core.tipos import ConfigRisco
-        return ConfigRisco()
+        return ConfigRisco(), f"{type(e).__name__}: {e}"
 
 
 @dataclass
@@ -313,7 +324,7 @@ def construir_orquestrador(
     papeis = carregar_papeis(cfg) if cfg.get("ia", {}).get("papeis") else {}
     if papeis:
         validar_papeis(papeis, catalogo)
-    risco = carregar_risco_simulacao(p)
+    risco, erro_risco = carregar_risco_simulacao(p, ao_vivo=modo_tempo == "real")
     orc = OrcamentoIA(float(cfg.get("ia", {}).get("orcamento_mensal_usd", 400.0)))
     orc.iniciar_pregao(dia_sp(t_ref_ns).isoformat(), 21)
     pz = prazos_de_config(cfg)
@@ -335,8 +346,15 @@ def construir_orquestrador(
     for modo in modos:
         suf = "" if modo == "imediato" else "_cond"
         bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
-    hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "risco": _hash_arquivo(p.risco)}
-    manifesto = montar_manifesto(sessao_id, bracos, catalogo, hashes)
+    hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}}
+    if erro_risco is None:
+        hashes["risco"] = _hash_arquivo(p.risco)
+    else:  # o hash do arquivo NAO foi o aplicado (valeu o padrao): nao gravar como se fosse
+        hashes["risco"] = ""
+        hashes["risco_aplicado"] = "padrao_nao_aprovado"
+    manifesto = montar_manifesto(sessao_id, bracos, catalogo, hashes,
+                                 origem_dados="sinteticos" if sintetico else "desconhecida",
+                                 sigma_brl=p.sigma_brl, mde_brl=p.mde_brl)
     cfg_orq = ConfigOrquestrador(
         instrumento=ins, risco=risco, sessao_id=sessao_id, sintetico=sintetico,
         rotulo=ROTULO_SESSAO if sintetico else "SIMULACAO", seed=p.seed, modo_tempo=modo_tempo,
@@ -345,6 +363,12 @@ def construir_orquestrador(
     orq = Orquestrador(cfg_orq, relogio=rel, registro=registro, bracos=bracos, pipeline=PipelineFeatures(),
                        modelos={modelo.nome: modelo}, statarb=statarb, precos_aux=precos_aux, orcamento=orc,
                        bloqueio=BloqueioDados(idade_max_dado_s=p.idade_max_dado_s))
+    if erro_risco is not None:
+        registro.incidente(t_ns=t_ref_ns, origem="simulacao", severidade="critico",
+                           detalhe=f"risco_nao_aprovado: politica de risco nao aprovada ({erro_risco}); "
+                                   "usando ConfigRisco() padrao. Resultado NAO e comparavel.")
+        for conta in orq.contas.values():
+            conta.rotulos.add("risco_nao_aprovado")
     return Montagem(orq, manifesto, bracos, orc, provedores, real)
 
 

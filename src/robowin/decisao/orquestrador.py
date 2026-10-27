@@ -15,6 +15,7 @@ anonimizado -> bracos -> validadores -> MotorRisco -> Roteador/OMS -> SimuladorE
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import heapq
 import time
 from collections import Counter, deque
@@ -23,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from robowin.core import calendario_b3
 from robowin.core.config import ErroConfig
 from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
 from robowin.core.relogio import Relogio, RelogioSimulado
@@ -118,6 +120,7 @@ class ContaBraco:
     memoria: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=5))
     stats: Counter[str] = field(default_factory=Counter)
     custo_ia_usd: float = 0.0
+    custo_ia_dia: dict[str, float] = field(default_factory=dict)  # dia (SP) -> gasto de IA do braco
     rotulos: set[str] = field(default_factory=set)
     ultimo_bloqueio: tuple[str, ...] | None = None  # evita repetir a mesma recusa de bracos sem IA a cada ciclo
 
@@ -136,6 +139,16 @@ class Snapshot:
     noticias: list[dict[str, Any]]
     noticias_novas: list[float]
     wall_ms: float
+
+
+def pregoes_restantes_no_mes(dia: dt.date) -> int:
+    """Pregoes B3 do mes de `dia` a partir dele (inclusive), no minimo 1."""
+    n, d = 0, dia
+    while d.month == dia.month:
+        if calendario_b3.eh_pregao(d):
+            n += 1
+        d += dt.timedelta(days=1)
+    return max(n, 1)
 
 
 def _meio(tick: Tick) -> float:
@@ -162,6 +175,7 @@ class Orquestrador:
         self.modelos = dict(modelos or {})
         self.statarb, self.precos_aux, self.noticias_fn = statarb, precos_aux, noticias
         self.orcamento = orcamento
+        self._mes_orcamento: str | None = None
         self.bloqueio = bloqueio or BloqueioDados()
         self.eventos = list(eventos)
         self.sim = simulador or SimuladorExecucao(
@@ -252,10 +266,32 @@ class Orquestrador:
         except ValueError:
             self.fora_de_ordem += 1
 
+    def gasto_mes_gravado(self, mes: str) -> float:
+        """Gasto de IA do mes (AAAA-MM) ja gravado na tabela `orcamento_ia` (sobrevive a reinicios)."""
+        linhas = self.registro.banco.consultar(
+            "SELECT COALESCE(SUM(gasto_usd), 0) AS s FROM orcamento_ia WHERE substr(dia, 1, 7) = ?", (mes,))
+        return float(linhas[0]["s"]) if linhas else 0.0
+
+    def _sincronizar_orcamento(self, t: int, forcar: bool = False) -> None:
+        """Na virada de dia (America/Sao_Paulo) reabre o pregao do orcamento; na virada de mes (ou ao iniciar)
+        recarrega o gasto do mes gravado. Sem isto a cota diaria nunca rola e o gasto do mes nao persiste."""
+        orc = self.orcamento
+        if orc is None:
+            return
+        dia = dia_sp(t)
+        if not forcar and orc.dia == dia.isoformat():
+            return
+        mes = dia.strftime("%Y-%m")
+        if forcar or mes != self._mes_orcamento:
+            orc.gasto_mes = self.gasto_mes_gravado(mes)
+            self._mes_orcamento = mes
+        orc.iniciar_pregao(dia.isoformat(), pregoes_restantes_no_mes(dia))
+
     async def on_tick(self, tick: Tick) -> None:
         if self.encerrada:
             return
         t = tick.t_utc_ns
+        self._sincronizar_orcamento(t)
         if self.t_inicio_ns is None:
             self.t_inicio_ns = t
         self._avancar(t)
@@ -287,6 +323,7 @@ class Orquestrador:
     async def on_tempo(self) -> None:
         """Passo de relogio sem tick (modo real): entrega respostas de IA e confere kill/saidas por tempo."""
         t = max(self._agora(), self.t_ultimo_ns)
+        self._sincronizar_orcamento(t)
         self._verificar_flag(t)
         self._saidas(t)
         await self._entregar(t)
@@ -503,6 +540,9 @@ class Orquestrador:
             dono = self.contas.get(rc.braco)
             if dono is not None:
                 dono.custo_ia_usd += rc.chamada.custo_usd
+                dia_c = dia_sp(res.t0_ns).isoformat()
+                dono.custo_ia_dia[dia_c] = dono.custo_ia_dia.get(dia_c, 0.0) + rc.chamada.custo_usd
+                self.registro.orcamento(dia=dia_c, braco=dono.braco.id, gasto_usd=dono.custo_ia_dia[dia_c])
                 dono.stats["chamadas_ia"] += 1
                 if not rc.chamada.valida:
                     dono.stats["chamadas_ia_invalidas"] += 1
@@ -895,6 +935,7 @@ class Orquestrador:
     def iniciar(self, manifesto: ManifestoExperimento | None = None, t_ns: int | None = None) -> None:
         """Grava o inicio da sessao: faixa sintetica, manifesto do experimento e modelos."""
         t = self._agora() if t_ns is None else t_ns
+        self._sincronizar_orcamento(t, forcar=True)
         self.registro.auditar("sessao_inicio", {"sessao": self.cfg.sessao_id, "rotulo": self.cfg.rotulo,
                                                 "sintetico": self.cfg.sintetico, "t_ns": t,
                                                 "bracos": [c.braco.manifesto() for c in self.contas.values()]})
@@ -938,10 +979,10 @@ class Orquestrador:
             t = t2
         for conta in self.contas.values():
             self._gravar_equity(conta, t)
-        dia = dia_sp(t).isoformat()
         for conta in self.contas.values():
-            if conta.custo_ia_usd > 0:
-                self.registro.orcamento(dia=dia, braco=conta.braco.id, gasto_usd=conta.custo_ia_usd)
+            for dia_c, gasto in conta.custo_ia_dia.items():
+                if gasto > 0:
+                    self.registro.orcamento(dia=dia_c, braco=conta.braco.id, gasto_usd=gasto)
         if manifesto is not None:
             self.registro.experimento(manifesto, t_ns=t, status="concluido")
         self.registro.auditar("sessao_fim", {"sessao": self.cfg.sessao_id, "t_ns": t, "resumo": self.resumo()})
