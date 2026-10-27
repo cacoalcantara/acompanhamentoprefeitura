@@ -34,7 +34,7 @@ class Envelope(Base):
 
 class Heartbeat(Base):
     origem: str
-    seq: int
+    hb: int
     t_ns: int
 
 
