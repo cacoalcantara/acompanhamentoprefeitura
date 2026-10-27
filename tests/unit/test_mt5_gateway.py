@@ -31,6 +31,8 @@ def montar_gw(tmp_path, ticks=None, duble_kw=None, **cfg_kw):
 
 
 def ordem(g, lado=Lado.COMPRA, **kw):
+    if kw.get("tipo", "mercado") != "saida":
+        kw.setdefault("sl", 99900.0 if lado == Lado.COMPRA else 100100.0)  # o guardiao exige stop na entrada
     return g.cli.enviar({"tipo": "ordem", "cmd": cmd(lado, **kw).model_dump(mode="json")}, bombear=g.gw.passo)
 
 

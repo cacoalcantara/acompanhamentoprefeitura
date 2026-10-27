@@ -223,7 +223,8 @@ class ExecucaoDemo:
         try:
             return self._enviar(cmd, dono, prioritaria, forcar_dono, corretivo=False)
         except _Recusa as r:
-            self.estados[cmd.intencao_id] = EstadoOrdem.REJEITADA
+            if cmd.intencao_id not in self._enviadas:  # duplicata nao sobrescreve o estado da intencao original
+                self.estados[cmd.intencao_id] = EstadoOrdem.REJEITADA
             self._registrar("recusa_local", {"intencao_id": cmd.intencao_id, "motivo": r.ack.comentario})
             return r.ack
 
@@ -355,6 +356,9 @@ class ExecucaoDemo:
             qtd = min(qtd, int(abs(antes)))
             if any(i["ticket"] == ticket for i in self._incertas.values()):
                 raise self._recusa("saida INCERTA pendente para este ticket: aguardar reconciliacao")
+            tipos_oposto = (C.ORDEM_SELL, C.ORDEM_SELL_LIMIT) if antes > 0 else (C.ORDEM_BUY, C.ORDEM_BUY_LIMIT)
+            if not corretivo and any(int(o.type) in tipos_oposto for o in self._pendentes()):
+                raise self._recusa("saida em voo: ordem aberta de sentido oposto a posicao no simbolo (nao duplicar saida)")
             dono_atual = self._donos.get(ticket)
             if dono_atual is not None and dono_atual != dono and not forcar_dono:
                 raise self._recusa(f"saida do ticket {ticket} pertence a '{dono_atual}' (dono unico)")
@@ -398,7 +402,7 @@ class ExecucaoDemo:
                                              "ticket": ticket if saida else None})
         ack = self._ack(res, t0, t1)
         self.estados[cmd.intencao_id] = estado_do_retcode(ack.retcode)
-        if ack.retcode in (C.RET_EXECUTADA, C.RET_PARCIAL) and int(ack.deal) > 0 and req["action"] == C.ACAO_DEAL:
+        if ack.retcode in (C.RET_EXECUTADA, C.RET_PARCIAL) and req["action"] == C.ACAO_DEAL:  # mesmo com deal==0
             self._conferir_apos_deal(cmd, antes, ack, corretivo)
         return ack
 
@@ -539,6 +543,10 @@ class ExecucaoDemo:
             del self._incertas[iid]
             self._registrar("incerta_resolvida", {"intencao_id": iid, "estado": est.value})
         return resolvidas
+
+    def restaurar_enviadas(self, ids: set[str]) -> None:
+        """Recarrega intencoes ja enviadas (lidas da auditoria) para nunca reenviar apos reinicio."""
+        self._enviadas |= set(ids)
 
     def liberar_dono_saida(self, ticket: int) -> None:
         self._donos.pop(ticket, None)

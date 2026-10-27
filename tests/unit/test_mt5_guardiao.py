@@ -22,7 +22,7 @@ def montar(tmp_path=None, quando=T0_NS, ticks=None, cfg_g=None, **kw):
     ms = quando // 1_000_000
     tk = ticks if ticks is not None else ticks_planos(2000, inicio_ms=ms - 1000, passo_ms=100)
     a = montar_exec(tk, relogio=rel, **kw)
-    cfg = cfg_g or ConfigGuardiao(arquivo_emergencia=(tmp_path / "EMERGENCIA") if tmp_path else None)
+    cfg = cfg_g or ConfigGuardiao(arquivo_emergencia=(tmp_path / "EMERGENCIA") if tmp_path else None, exigir_sl=False)
     g = Guardiao(a.ex, a.d, cfg, rel, a.rs, alerta=lambda t, x: a.alertas.append((t, x)))
     a.g = g
     return a

@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -37,6 +39,25 @@ from .guardiao import ConfigGuardiao, Guardiao
 from .tempo_servidor import RelogioServidor, calibrar
 
 
+def intencoes_enviadas_em(diretorio: Path) -> set[str]:
+    """Intencoes ja gravadas como `intencao_antes_envio` nos arquivos de auditoria (idempotencia apos reinicio)."""
+    ids: set[str] = set()
+    if not Path(diretorio).is_dir():
+        return ids
+    for arq in sorted(Path(diretorio).glob("auditoria-*.jsonl")):
+        with open(arq, encoding="utf-8") as f:
+            for linha in f:
+                try:
+                    reg = json.loads(linha)
+                except ValueError:
+                    continue
+                if isinstance(reg, dict) and reg.get("tipo") == "intencao_antes_envio":
+                    iid = (reg.get("dados") or {}).get("intencao_id")
+                    if iid:
+                        ids.add(str(iid))
+    return ids
+
+
 @dataclass
 class ConfigGateway:
     login: int
@@ -50,6 +71,7 @@ class ConfigGateway:
     intervalo_hb_s: float = 1.0
     intervalo_estado_s: float = 1.0
     dir_log: Path | None = None
+    dir_auditoria: Path | None = None  # None => <dir_log>/auditoria; sem nenhum dos dois => so memoria (alerta)
     offset_fixo_s: int | None = None
     inicio_coleta_ns: int | None = None
     msgs_por_min: int = 20
@@ -79,6 +101,9 @@ class Gateway:
         self._prox: dict[str, int] = {}
         self.erros_coleta = 0
         self.incidentes: list[tuple[str, str]] = []
+        self.auditoria: Any = None
+        self.erros_mensagem = 0
+        self.erros_ciclo = 0
 
     # --- inicializacao -------------------------------------------------------------------------
     def iniciar(self) -> None:
@@ -94,13 +119,25 @@ class Gateway:
             raise GuardaDemoViolada(f"simbolo configurado {self.cfg.simbolo} difere do vigente {simbolo}")
         self.rs = calibrar(self.t, simbolo, self.relogio, amostras=3, intervalo_s=0.3, offset_fixo_s=self.cfg.offset_fixo_s,
                            dormir=self._dormir)
+        dir_aud = self.cfg.dir_auditoria or (self.cfg.dir_log / "auditoria" if self.cfg.dir_log is not None else None)
+        registrar = None
+        ja_enviadas: set[str] = set()
+        if dir_aud is not None:
+            from robowin.auditoria.cadeia import RegistradorAuditoria
+            self.auditoria = RegistradorAuditoria(dir_aud, self.relogio)
+            registrar = self.auditoria.registrar
+            ja_enviadas = intencoes_enviadas_em(dir_aud)
+        else:
+            self._alerta("auditoria_so_memoria", {"motivo": "sem diretorio de auditoria: idempotencia nao sobrevive a reinicio"})
         self.executor = ExecucaoDemo(
             self.t, ConfigDemo(login=self.cfg.login, servidor=self.cfg.servidor, simbolo=simbolo,
                                modo_config=self.cfg.modo_config, msgs_por_min=self.cfg.msgs_por_min,
                                espera_incerta_s=self.cfg.espera_incerta_s),
-            self.relogio, alerta=self._alerta, relogio_srv=self.rs)
+            self.relogio, alerta=self._alerta, registrar=registrar, relogio_srv=self.rs)
+        self.executor.restaurar_enviadas(ja_enviadas)
         self.executor.verificar_guarda()  # falha cedo: conta real/login/servidor errados
-        self.guardiao = Guardiao(self.executor, self.t, self.cfg.guardiao, self.relogio, self.rs, alerta=self._alerta)
+        self.guardiao = Guardiao(self.executor, self.t, self.cfg.guardiao, self.relogio, self.rs, alerta=self._alerta,
+                                 registrar=registrar)
         if not self.rs.confiavel:
             self.guardiao.bloquear_ate_resolver("offset", "offset do relogio do servidor nao calibrado com confianca")
         if self.cfg.dir_log is not None:
@@ -216,13 +253,20 @@ class Gateway:
                     if r is None:
                         break
                     ident, msg = r
+                    mid = msg.get("id") if isinstance(msg, dict) else None
                     try:
+                        if not isinstance(msg, dict):
+                            raise TypeError(f"mensagem nao e dict: {type(msg).__name__}")
                         resp = self.tratar(msg)
                     except GuardaDemoViolada as e:
-                        resp = {"tipo": "ack", "id": msg.get("id"), "estado": "REJEITADA",
+                        resp = {"tipo": "ack", "id": mid, "estado": "REJEITADA",
                                 "ack": AckOrdem(retcode=C.RET_LOCAL_RECUSADO, comentario=f"guarda demo violada: {e}").model_dump(mode="json")}
                         if violacao_de_identidade(e):
                             self.parar(f"guarda demo violada: {e}")
+                    except Exception as e:  # noqa: BLE001 - mensagem malformada/erro de tratamento nao derruba o gateway
+                        self.erros_mensagem += 1
+                        self._alerta("erro_mensagem", {"erro": repr(e), "id": mid})
+                        resp = {"tipo": "erro", "id": mid, "erro": f"falha ao tratar mensagem: {e!r}"}
                     if resp is not None:
                         self.canal.responder(ident, resp)
             elif timeout_ms:
@@ -242,9 +286,21 @@ class Gateway:
                     self.erros_coleta += 1
                     self.incidentes.append(("livro", repr(e)))
             if self._vencido("guardiao", self.cfg.intervalo_guardiao_s):
-                self.guardiao.ciclo()
+                try:
+                    self.guardiao.ciclo()
+                except GuardaDemoViolada:
+                    raise
+                except Exception as e:  # noqa: BLE001 - falha no ciclo do guardiao nao pode parar o laco
+                    self.erros_ciclo += 1
+                    self._alerta("erro_ciclo_guardiao", {"erro": repr(e)})
             if not self.rs.confiavel and self._vencido("recalibrar", 30.0):
-                self._recalibrar()
+                try:
+                    self._recalibrar()
+                except GuardaDemoViolada:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    self.erros_ciclo += 1
+                    self._alerta("erro_recalibrar", {"erro": repr(e)})
             if self._vencido("hb", self.cfg.intervalo_hb_s):
                 self._hb_seq += 1
                 # dict sem a chave `seq`: Heartbeat.seq colidiria com o numero de sequencia do barramento
@@ -294,6 +350,12 @@ class Gateway:
             close()
 
 
+def bind_exposto(endereco: str) -> bool:
+    """True se o endereco escuta em todas as interfaces (0.0.0.0, *, ::) em vez de 127.0.0.1."""
+    host = endereco.split("://", 1)[-1].rsplit(":", 1)[0].strip("[]")
+    return host in ("0.0.0.0", "*", "::", "")
+
+
 def rodar_gateway_zmq(fabrica_terminal: Callable[[], Any], cfg: ConfigGateway, end_pub: str, end_cmd: str,
                       duracao_s: float | None = None, relogio: Relogio | None = None) -> None:
     """Ponto de entrada de PROCESSO: cria terminal, PUB e ROUTER e roda o laco. Picklavel (multiprocessing)."""
@@ -302,5 +364,9 @@ def rodar_gateway_zmq(fabrica_terminal: Callable[[], Any], cfg: ConfigGateway, e
     from .canais import CanalComandosZMQ
     terminal = fabrica_terminal()
     gw = Gateway(terminal, cfg, relogio, PublicadorZMQ(end_pub), CanalComandosZMQ(end_cmd))
+    for nome, end in (("pub", end_pub), ("cmd", end_cmd)):
+        if bind_exposto(end):
+            logging.getLogger(__name__).warning("gateway %s escutando em interface exposta (%s): padrao e 127.0.0.1", nome, end)
+            gw._alerta("bind_exposto", {"canal": nome, "endereco": end})
     gw.iniciar()
     gw.executar(duracao_s=duracao_s)

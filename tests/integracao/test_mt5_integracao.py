@@ -37,7 +37,7 @@ def porta_livre() -> int:
 
 def cfg_gateway(tmp_path: Path, **g) -> ConfigGateway:
     # janela de entradas aberta o dia todo: o relogio e o real e o duble nao tem pregao
-    guard = ConfigGuardiao(entradas_de="00:00", entradas_ate="23:58", zeragem="23:59", exigir_dia_util=False,
+    guard = ConfigGuardiao(entradas_de="00:00", entradas_ate="23:58", zeragem="23:59", exigir_dia_util=False, exigir_sl=False,
                            arquivo_emergencia=tmp_path / "EMERGENCIA", **g)
     return ConfigGateway(login=LOGIN, servidor=SERVIDOR, hoje=HOJE, dir_log=tmp_path / "bruto", guardiao=guard,
                          intervalo_guardiao_s=0.2, intervalo_hb_s=0.2, intervalo_estado_s=0.3, espera_emergencia_s=0.05)

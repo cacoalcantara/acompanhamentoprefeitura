@@ -45,11 +45,14 @@ class ConfigGuardiao:
     arquivo_emergencia: Path | None = None
     magics_permitidos: frozenset[int] = field(default_factory=frozenset)
     exigir_dia_util: bool = True
+    exigir_sl: bool = True  # entrada sem stop e recusada
+    stop_max_pontos: float = 300.0  # distancia maxima preco->SL (pontos do WIN = unidades de preco)
 
     @classmethod
     def de_risco(cls, r: ConfigRisco, **kw: Any) -> ConfigGuardiao:
         return cls(contratos_max=r.contratos_max, entradas_de=r.entradas_de, entradas_ate=r.entradas_ate,
-                   zeragem=r.zeragem, perda_max_dia_brl=r.perda_max_dia_brl, **kw)
+                   zeragem=r.zeragem, perda_max_dia_brl=r.perda_max_dia_brl,
+                   stop_max_pontos=r.stop_max_pontos, **kw)
 
 
 @dataclass
@@ -160,6 +163,25 @@ class Guardiao:
         motivos = self.motivos_bloqueio()
         if motivos:
             return False, "; ".join(motivos)
+        if self.cfg.exigir_sl:
+            return self._validar_stop(cmd)
+        return True, ""
+
+    def _validar_stop(self, cmd: ComandoOrdem) -> tuple[bool, str]:
+        """Entrada exige SL do lado certo do preco e a no maximo `stop_max_pontos` de distancia."""
+        if not cmd.sl:
+            return False, "entrada sem stop (sl obrigatorio)"
+        compra = cmd.lado.value == "compra"
+        ref = cmd.preco if (cmd.tipo == "limitada" and cmd.preco) else None
+        if ref is None:
+            tk = self.t.symbol_info_tick(self.ex._sym)
+            if tk is None:
+                return False, "sem cotacao para validar o stop"
+            ref = float(tk.ask if compra else tk.bid)
+        if (compra and cmd.sl >= ref) or (not compra and cmd.sl <= ref):
+            return False, f"sl {cmd.sl} do lado errado do preco {ref}"
+        if abs(ref - cmd.sl) > self.cfg.stop_max_pontos + 1e-9:
+            return False, f"distancia do stop {abs(ref - cmd.sl):.0f} acima do maximo {self.cfg.stop_max_pontos:.0f}"
         return True, ""
 
     def rearmar(self, motivo: str) -> None:
