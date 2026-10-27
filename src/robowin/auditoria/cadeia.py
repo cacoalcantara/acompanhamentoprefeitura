@@ -21,6 +21,7 @@ class RegistradorAuditoria:
         self._lock = threading.Lock()
         self._rel = relogio
         self._ultimo: dict[str, str] = {}
+        self._n: dict[str, int] = {}
 
     def _arquivo(self, dia: str) -> Path:
         return self.dir / f"auditoria-{dia}.jsonl"
@@ -33,12 +34,15 @@ class RegistradorAuditoria:
         with self._lock:
             arq = self._arquivo(dia)
             prev = self._ultimo.get(dia) or self._ler_ultimo(arq)
-            n = self._contar(arq)
+            n = self._n.get(dia)
+            if n is None:
+                n = self._contar(arq)
             corpo = {"n": n, "t_ns": t, "tipo": tipo, "dados": dados, "prev_hash": prev}
             h = _h(prev, corpo)
             with open(arq, "a", encoding="utf-8") as f:
                 f.write(json.dumps({**corpo, "hash": h}, ensure_ascii=False, default=str) + "\n")
             self._ultimo[dia] = h
+            self._n[dia] = n + 1
             return h
 
     def _ler_ultimo(self, arq: Path) -> str:

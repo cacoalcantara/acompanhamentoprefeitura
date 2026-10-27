@@ -28,3 +28,10 @@ condicional = { expira_min_max = 10 }
 
 [mm]
 demo_mm = false   # ponte para a conta demo nao implementada; ligar levanta NotImplementedError
+
+# Exemplo de braco extra com outra IA (descomente e ajuste). O modelo precisa estar em config/modelos.toml.
+# [[bracos]]
+# id = "D_exemplo"
+# proponente = "anthropic:claude-sonnet-5-5"
+# revisor = "openai:gpt-6.1-sol"
+# modo = "condicional"
