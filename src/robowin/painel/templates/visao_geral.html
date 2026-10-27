@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block titulo %}Visão geral{% endblock %}
+{% block conteudo %}
+<h1>Visão geral e emergência</h1>
+{% if msg == "emergencia" %}<p class="aviso-critico">Kill switch acionado: arquivo EMERGENCIA gravado e incidente registrado.</p>{% endif %}
+{% if flag %}<p class="aviso-critico">O arquivo EMERGENCIA está presente: o sistema deve estar zerado e travado.</p>{% endif %}
+{% if not banco_existe %}<p class="aviso">Banco de dados ainda não encontrado. O painel mostra apenas informações de configuração.</p>{% endif %}
+<div class="grade">
+<section class="cartao"><h2>Conexão e conta</h2>
+<dl><dt>Modo</dt><dd>{{ modo }} (nunca real nesta etapa)</dd>
+<dt>Conta</dt><dd>{{ conta }} (demonstração)</dd>
+<dt>Último dado recebido</dt><dd>{{ v.ultimo_dado or "nenhum dado recebido" }}</dd>
+<dt>Orçamento mensal de IA</dt><dd>{% if orcamento_mensal %}US$ {{ orcamento_mensal|num(2) }}{% else %}não informado{% endif %}</dd></dl></section>
+<section class="cartao"><h2>Contrato vigente e especificações</h2>
+<dl><dt>Símbolo</dt><dd>{{ instr.simbolo }}</dd>
+<dt>Vencimento</dt><dd>{{ instr.vencimento or "não informado" }}</dd>
+<dt>Tamanho do tick</dt><dd>{{ instr.tick_pontos|num(0) }} pontos</dd>
+<dt>Valor do ponto</dt><dd>{{ instr.ponto_valor_brl|brl }}</dd>
+<dt>Valor do tick</dt><dd>{{ instr.tick_valor_brl|brl }}</dd>
+<dt>Lote</dt><dd>{{ instr.lote }}</dd></dl></section>
+</div>
+{% include "_resumo.html" %}
+<section class="cartao emergencia"><h2>Emergência — kill switch</h2>
+<p>Grava o arquivo <code>EMERGENCIA</code> em <code>{{ request.app.state.dir_dados }}</code> e registra um incidente crítico. Exige token e confirmação.</p>
+{% if not tem_token %}<p class="aviso">Token não configurado (variável ROBOWIN_TOKEN): as ações estão desativadas.</p>{% endif %}
+<form method="post" action="/acoes/emergencia" data-confirmar="Confirma o acionamento do kill switch? Isto zera posições e trava o sistema.">
+<label>Token <input type="password" name="token" autocomplete="off"></label>
+<label>Digite EMERGENCIA para confirmar <input type="text" name="confirmacao" autocomplete="off" required></label>
+<button type="submit" class="perigo">Acionar kill switch</button></form></section>
+{% endblock %}

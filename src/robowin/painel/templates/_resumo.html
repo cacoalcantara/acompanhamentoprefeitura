@@ -1,0 +1,28 @@
+<div id="resumo" hx-get="/fragmentos/resumo" hx-trigger="every 5s" hx-swap="outerHTML">
+<div class="grade">
+<section class="cartao"><h2>Posições por braço</h2>
+{% if v.posicoes %}<table><thead><tr><th>Braço</th><th>Lado</th><th>Qtd.</th><th>Preço médio</th><th>Stop</th><th>Alvo</th></tr></thead><tbody>
+{% for p in v.posicoes %}<tr><td>{{ p.braco }}</td><td>{{ p.lado }}</td><td>{{ p.quantidade }}</td><td>{{ p.preco_medio|num(0) }}</td><td>{{ p.stop|num(0) }}</td><td>{{ p.alvo|num(0) }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Nenhuma posição aberta.</p>{% endif %}</section>
+<section class="cartao"><h2>P&amp;L líquido do dia {% if v.dia %}({{ v.dia }}){% endif %}</h2>
+{% if v.pnl %}<table><thead><tr><th>Braço</th><th>Operações</th><th>P&amp;L líquido</th></tr></thead><tbody>
+{% for p in v.pnl %}<tr><td>{{ p.braco }}</td><td>{{ p.n }}</td><td class="{{ 'pos' if p.pnl >= 0 else 'neg' }}">{{ p.pnl|brl }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Sem operações registradas no dia.</p>{% endif %}</section>
+<section class="cartao"><h2>Consumo de limites de risco</h2>
+{% if v.limites %}<table><thead><tr><th>Tipo de evento</th><th>Ocorrências</th><th>Críticos</th></tr></thead><tbody>
+{% for l in v.limites %}<tr><td>{{ l.tipo }}</td><td>{{ l.n }}</td><td>{{ l.criticos or 0 }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Nenhum evento de risco registrado.</p>{% endif %}</section>
+<section class="cartao"><h2>Orçamento de IA do dia</h2>
+{% if v.orcamento %}<table><thead><tr><th>Braço</th><th>Gasto (US$)</th><th>Reservado (US$)</th></tr></thead><tbody>
+{% for o in v.orcamento %}<tr><td>{{ o.braco }}</td><td>{{ o.gasto_usd|num(2) }}</td><td>{{ o.reservado_usd|num(2) }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Sem consumo de IA registrado.</p>{% endif %}</section>
+</div>
+<section class="cartao"><h2>Eventos de risco recentes</h2>
+{% if v.eventos %}<table><thead><tr><th>Hora</th><th>Braço</th><th>Tipo</th><th>Detalhe</th></tr></thead><tbody>
+{% for e in v.eventos %}<tr class="{{ 'critico' if e.critico else '' }}"><td>{{ e.hora }}</td><td>{{ e.braco }}</td><td>{{ e.tipo }}</td><td>{{ e.detalhe }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Sem eventos.</p>{% endif %}</section>
+<section class="cartao"><h2>Incidentes</h2>
+{% if v.incidentes %}<table><thead><tr><th>Hora</th><th>Origem</th><th>Severidade</th><th>Detalhe</th></tr></thead><tbody>
+{% for i in v.incidentes %}<tr><td>{{ i.hora }}</td><td>{{ i.origem }}</td><td>{{ i.severidade }}</td><td>{{ i.detalhe }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Nenhum incidente registrado.</p>{% endif %}</section>
+</div>

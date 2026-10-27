@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>robowin — {% block titulo %}Painel{% endblock %}</title>
+<link rel="stylesheet" href="/static/uPlot.min.css">
+<link rel="stylesheet" href="/static/painel.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/uPlot.iife.min.js" defer></script>
+<script src="/static/painel.js" defer></script>
+</head>
+<body>
+<div class="faixa faixa-sim" role="alert">SIMULAÇÃO — sem ordens reais</div>
+{% if sintetico %}<div class="faixa faixa-sint" role="alert">DADOS SINTÉTICOS</div>{% endif %}
+<nav>
+  <strong>robowin</strong>
+  {% for href, id, nome in [("/", "visao", "Visão geral"), ("/decisoes", "decisoes", "Decisões"), ("/operacoes", "operacoes", "Operações"), ("/desempenho", "desempenho", "Desempenho e latência"), ("/modelos", "modelos", "Modelos e dados"), ("/auditoria", "auditoria", "Auditoria")] %}
+  <a href="{{ href }}" {% if pagina == id %}class="ativa" aria-current="page"{% endif %}>{{ nome }}</a>
+  {% endfor %}
+</nav>
+<main>
+{% block conteudo %}{% endblock %}
+</main>
+<footer>Painel local somente leitura, exceto ações protegidas por token. Nenhuma ordem real é enviada nesta etapa.</footer>
+</body>
+</html>

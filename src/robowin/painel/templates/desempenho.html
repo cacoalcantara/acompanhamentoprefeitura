@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block titulo %}Desempenho e latência{% endblock %}
+{% block conteudo %}
+<h1>Desempenho e latência</h1>
+<p class="nota">A taxa de acerto sempre aparece ao lado da do controle aleatório ({{ CONTROLE }}). Taxa de acerto isolada não indica lucro.</p>
+{% if not d.metricas %}<p class="vazio">Sem operações para calcular métricas.</p>{% else %}
+<section class="cartao"><h2>Comparação entre braços</h2>
+<table><thead><tr><th>Braço</th><th>n</th><th>Taxa de acerto</th><th>IC de Wilson 95%</th><th>Controle aleatório</th><th>Expectativa por operação</th><th>Fator de lucro</th><th>Drawdown máximo</th><th>Total líquido</th><th>Aviso</th></tr></thead><tbody>
+{% for nome, m in d.metricas.items() %}<tr><td>{{ nome }}</td><td>{{ m.n }}</td><td>{{ m.taxa_acerto|pct }}</td>
+<td>{{ m.wilson_inf|pct }} a {{ m.wilson_sup|pct }}</td>
+<td>{% if d.controle %}{{ d.controle.taxa_acerto|pct }} ({{ d.controle.wilson_inf|pct }} a {{ d.controle.wilson_sup|pct }}){% else %}sem controle{% endif %}</td>
+<td>{{ m.expectativa_brl|brl }}</td><td>{{ m.fator_lucro|num(2) }}</td><td>{{ m.drawdown_max_brl|brl }}</td><td>{{ m.total_brl|brl }}</td>
+<td>{% if m.amostra_insuficiente %}<span class="tag aviso-tag">amostra insuficiente (n &lt; {{ N_MIN }})</span>{% endif %}</td></tr>{% endfor %}
+</tbody></table></section>{% endif %}
+<section class="cartao"><h2>Curva de capital</h2><div id="grafico-capital" class="grafico" data-url="/api/capital"></div><p id="capital-vazio" class="vazio" hidden>Sem curva de capital registrada.</p></section>
+<section class="cartao"><h2>Latência por etapa (ms)</h2>
+{% if d.latencia %}<table><thead><tr><th>Braço</th><th>Etapa</th><th>n</th><th>p50</th><th>p95</th><th>p99</th></tr></thead><tbody>
+{% for l in d.latencia %}<tr><td>{{ l.braco }}</td><td>{{ l.etapa }}</td><td>{{ l.n }}</td><td>{{ l.p50|num(1) }}</td><td>{{ l.p95|num(1) }}</td><td>{{ l.p99|num(1) }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Sem medições de latência.</p>{% endif %}</section>
+{% endblock %}

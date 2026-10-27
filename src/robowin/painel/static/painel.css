@@ -1,0 +1,19 @@
+:root{--bg:#f6f7f9;--fg:#1c2330;--card:#fff;--bd:#d9dee6;--ac:#1d4ed8;--neg:#b42318;--pos:#067647;--warn:#b54708;--mut:#667085}
+@media (prefers-color-scheme:dark){:root{--bg:#10151d;--fg:#e6eaf0;--card:#18202b;--bd:#2c3745;--ac:#7aa2ff;--neg:#ff8a80;--pos:#5fd39a;--warn:#ffb74d;--mut:#98a2b3}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
+.faixa{position:sticky;top:0;z-index:5;text-align:center;font-weight:700;padding:.35rem;letter-spacing:.04em}
+.faixa-sim{background:#b54708;color:#fff}.faixa-sint{background:#6941c6;color:#fff;top:2rem}
+nav{display:flex;gap:1rem;flex-wrap:wrap;padding:.6rem 1rem;border-bottom:1px solid var(--bd);background:var(--card)}
+nav a{color:var(--fg);text-decoration:none;padding:.2rem .5rem;border-radius:4px}nav a.ativa{background:var(--ac);color:#fff}
+main{max-width:1200px;margin:0 auto;padding:1rem}
+.grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem}
+.cartao{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:1rem;margin-bottom:1rem;overflow-x:auto}
+table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--bd);padding:.3rem .5rem;text-align:left;font-size:.9rem}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:.2rem 1rem}dt{font-weight:600}dd{margin:0}
+.vazio,.nota,.meta,footer{color:var(--mut)}.pos{color:var(--pos)}.neg,.critico{color:var(--neg)}
+.aviso,.aviso-critico{padding:.5rem .8rem;border-radius:6px;border:1px solid var(--warn);color:var(--warn)}.aviso-critico{border-color:var(--neg);color:var(--neg);font-weight:700}
+.tag{display:inline-block;border:1px solid var(--bd);border-radius:10px;padding:0 .5rem;font-size:.8rem}.cand,.aviso-tag{border-color:var(--warn);color:var(--warn)}
+.st-validado_oos{color:var(--pos)}.st-reprovado{color:var(--neg)}.st-em_validacao,.st-nao_treinado{color:var(--warn)}
+.emergencia{border-color:var(--neg)}.emergencia label{display:block;margin:.4rem 0}
+button.perigo{background:var(--neg);color:#fff;border:0;padding:.5rem 1rem;border-radius:6px;font-weight:700;cursor:pointer}
+.grafico{min-height:300px}.linha-tempo li{margin:.15rem 0}footer{text-align:center;padding:1rem;font-size:.8rem}

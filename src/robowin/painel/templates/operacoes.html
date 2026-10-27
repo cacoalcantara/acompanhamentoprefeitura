@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block titulo %}Operações{% endblock %}
+{% block conteudo %}
+<h1>Operações</h1>
+<section class="cartao"><h2>Operações encerradas (trades)</h2>
+{% if o.trades %}<table><thead><tr><th>Saída</th><th>Braço</th><th>Lado</th><th>Entrada</th><th>Saída</th><th>Bruto</th><th>Tarifas</th><th>Corretagem</th><th>Slippage</th><th>Líquido</th><th>Motivo de saída</th></tr></thead><tbody>
+{% for t in o.trades %}<tr><td>{{ t.hora }}</td><td>{{ t.braco }}</td><td>{{ t.lado }}</td><td>{{ t.entrada|num(0) }}</td><td>{{ t.saida|num(0) }}</td><td>{{ t.bruto_brl|brl }}</td><td>{{ t.tarifas_brl|brl }}</td><td>{{ t.corretagem_brl|brl }}</td><td>{{ t.slippage_brl|brl }}</td><td class="{{ 'pos' if t.liquido_brl >= 0 else 'neg' }}">{{ t.liquido_brl|brl }}</td><td>{{ t.motivo_saida }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Nenhuma operação registrada.</p>{% endif %}</section>
+<section class="cartao"><h2>Ordens</h2>
+{% if o.ordens %}<table><thead><tr><th>Hora</th><th>Braço</th><th>Lado</th><th>Tipo</th><th>Qtd.</th><th>Preço</th><th>Estado</th><th>Simulada</th></tr></thead><tbody>
+{% for r in o.ordens %}<tr><td>{{ r.hora }}</td><td>{{ r.braco }}</td><td>{{ r.lado }}</td><td>{{ r.tipo }}</td><td>{{ r.quantidade }}</td><td>{{ r.preco|num(0) }}</td><td>{{ r.estado }}</td><td>{{ "sim" if r.simulada else "não" }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Nenhuma ordem registrada.</p>{% endif %}</section>
+<section class="cartao"><h2>Execuções (deals)</h2>
+{% if o.execucoes %}<table><thead><tr><th>Hora</th><th>Ordem</th><th>Preço</th><th>Qtd.</th><th>Taxas</th><th>Simulada</th></tr></thead><tbody>
+{% for r in o.execucoes %}<tr><td>{{ r.hora }}</td><td><code>{{ r.ordem_id[:10] }}</code></td><td>{{ r.preco|num(0) }}</td><td>{{ r.quantidade }}</td><td>{{ r.taxas_brl|brl }}</td><td>{{ "sim" if r.simulada else "não" }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Nenhuma execução registrada.</p>{% endif %}</section>
+{% endblock %}
