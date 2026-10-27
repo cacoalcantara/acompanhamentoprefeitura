@@ -9,3 +9,4 @@ dados_locais/
 *.duckdb
 *.sqlite
 .env
+.claude/worktrees/
