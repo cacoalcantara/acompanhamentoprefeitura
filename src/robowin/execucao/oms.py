@@ -188,7 +188,8 @@ class OMS:
         if motivo:
             self._transitar(o, E.REJEITADA, motivo)
             return ResultadoEnvio(o, None, False, motivo)
-        self._recentes[self._chave_dup(o)] = agora
+        if o.eh_entrada:
+            self._recentes[self._chave_dup(o)] = agora
 
         self._transitar(o, E.ENVIADA)
         o.t_envio_ns = agora
@@ -206,16 +207,18 @@ class OMS:
         return (o.braco, c.lado.value, c.tipo, c.quantidade, c.preco)
 
     def _motivo_bloqueio(self, o: OrdemOMS, agora: int) -> str:
+        """SAIDAS (zeragem, kill, protecao) nunca sao bloqueadas por recuo, algotrading desligado ou duplicata:
+        o terminal decide; o pior caso e uma rejeicao registrada. So entradas passam por esses bloqueios."""
+        if not o.eh_entrada:
+            if any(x.id != o.id and not x.eh_entrada for x in self.abertas(o.braco)):
+                return "saida_ja_em_andamento"
+            return ""
         if self.algotrading_desligado:
             return "algotrading_desligado"
         if agora < self.bloqueado_ate_ns:
             return "recuo_ativo"
-        if o.eh_entrada:
-            if self.incertas(o.braco):
-                return "ordem_incerta_pendente"
-        else:
-            if any(x.id != o.id and not x.eh_entrada for x in self.abertas(o.braco)):
-                return "saida_ja_em_andamento"
+        if self.incertas(o.braco):
+            return "ordem_incerta_pendente"
         ult = self._recentes.get(self._chave_dup(o))
         if ult is not None and agora - ult < self.janela_duplicada_ns:
             return "ordem_duplicada_na_janela"

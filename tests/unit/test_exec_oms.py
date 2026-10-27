@@ -254,3 +254,25 @@ def test_propriedade_nunca_reenvia_e_so_transicoes_validas(passos):
     for o in oms._ordens.values():
         for (_, a, _m1), (_, b, _m2) in zip(o.historico, o.historico[1:], strict=False):
             assert EstadoOrdem(b) in TRANSICOES[EstadoOrdem(a)]
+
+
+def test_saidas_nao_sao_bloqueadas_por_recuo_algotrading_ou_duplicata(oms, rel):
+    # recuo apos 10024 bloqueia entrada mas nao a saida
+    assert oms.enviar(cmd("a"), Exec(ack(10024))).ordem.estado == E.REJEITADA
+    assert oms.enviar(cmd("b", lado=Lado.COMPRA), Exec(ack(10008, 1))).motivo == "recuo_ativo"
+    ex = Exec(ack(10009, 2))
+    r = oms.enviar(cmd("s1", lado=Lado.VENDA, tipo="saida"), ex)
+    assert r.enviado and r.ordem.estado == E.EXECUTADA and len(ex.chamadas) == 1
+    # algotrading desligado: entrada bloqueada, saida segue para o terminal
+    rel.avancar(5 * S)
+    oms.enviar(cmd("c"), Exec(ack(10027)))
+    assert oms.algotrading_desligado
+    assert oms.enviar(cmd("d"), Exec(ack(10008, 3))).motivo == "algotrading_desligado"
+    ex2 = Exec(ack(10009, 4))
+    assert oms.enviar(cmd("s2", lado=Lado.VENDA, tipo="saida"), ex2).enviado and len(ex2.chamadas) == 1
+    # duplicata na janela: a segunda saida identica (de outra intencao) tambem e enviada
+    oms.limpar_algotrading()
+    rel.avancar(5 * S)
+    ex3 = Exec(ack(10009, 5), ack(10009, 6))
+    assert oms.enviar(cmd("s3", lado=Lado.VENDA, tipo="saida"), ex3).enviado
+    assert oms.enviar(cmd("s4", lado=Lado.VENDA, tipo="saida"), ex3).enviado
