@@ -25,3 +25,6 @@ condicional = { expira_min_max = 10 }
 # servidor = ""
 # caminho_terminal = "C:/MT5/terminal64.exe"
 # offset_fixo_s = 0      # use se a calibracao automatica nao for confiavel fora do pregao
+
+[mm]
+demo_mm = false   # ponte para a conta demo nao implementada; ligar levanta NotImplementedError
