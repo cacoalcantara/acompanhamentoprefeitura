@@ -167,3 +167,18 @@ def modelos(b: Banco) -> dict[str, Any]:
             or [{"c": 0}])[0]["c"],
     }
     return {"modelos": mods, "experimentos": exps, "qualidade": qual}
+
+
+def confirmacao_emergencia(b: Banco, desde_ns: int) -> dict[str, Any]:
+    """O gateway/nucleo confirmou o kill switch? Procura, apos a gravacao da flag, um incidente de emergencia
+    vindo de OUTRA origem que nao o painel (ex.: alerta `bloqueio_emergencia` do gateway) ou um evento de risco
+    `kill_switch`. Sem isso a flag so foi GRAVADA: nada garante que o sistema esteja zerado."""
+    inc = b.consultar("SELECT origem, detalhe, t_ns FROM incidentes WHERE t_ns >= ? AND origem <> 'painel' "
+                      "AND lower(detalhe) LIKE '%emergencia%' ORDER BY t_ns LIMIT 1", (desde_ns,))
+    if inc:
+        return {"confirmado": True, "fonte": f"incidente de {inc[0]['origem']}: {inc[0]['detalhe']}"}
+    ev = b.consultar("SELECT braco, t_ns FROM eventos_risco WHERE t_ns >= ? AND tipo = 'kill_switch' "
+                     "ORDER BY t_ns LIMIT 1", (desde_ns,))
+    if ev:
+        return {"confirmado": True, "fonte": f"evento de risco kill_switch ({ev[0]['braco']})"}
+    return {"confirmado": False, "fonte": None}

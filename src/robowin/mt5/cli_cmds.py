@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from robowin.core.barramento import BarramentoLocal
-from robowin.core.config import carregar_toml
+from robowin.core.config import caminho_flag_emergencia, carregar_toml
 from robowin.core.relogio import Relogio, RelogioReal
 
 from . import constantes as C
@@ -244,7 +244,8 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
     gcfg = ConfigGateway(
         login=int(login), servidor=str(servidor), modo_config="demo_mt5", dir_log=Path(args.dir_log),
         offset_fixo_s=args.offset_fixo_s,
-        guardiao=ConfigGuardiao(arquivo_emergencia=Path(args.arquivo_emergencia), exigir_dia_util=not args.duble))
+        guardiao=ConfigGuardiao(arquivo_emergencia=caminho_flag_emergencia(args.config, args.arquivo_emergencia),
+                                exigir_dia_util=not args.duble))
     if args.duble:
         # o duble sintetico nao tem horario de pregao: libera a janela so para exercitar a infraestrutura
         gcfg.guardiao.entradas_de, gcfg.guardiao.entradas_ate, gcfg.guardiao.zeragem = "00:00", "23:58", "23:59"
@@ -294,7 +295,7 @@ def _cmd_coletar(args: argparse.Namespace) -> int:
 def _cmd_emergencia(args: argparse.Namespace) -> int:
     rc = 0
     if not args.sem_arquivo:
-        arq = Path(args.arquivo)
+        arq = caminho_flag_emergencia(args.config, args.arquivo)
         arq.parent.mkdir(parents=True, exist_ok=True)
         arq.write_text(f"EMERGENCIA acionada em {dt.datetime.now(dt.UTC).isoformat()} motivo={args.motivo}\n",
                        encoding="utf-8")
@@ -324,7 +325,8 @@ def registrar(sub: Any) -> None:
     g.add_argument("--pub", default="tcp://127.0.0.1:5555")
     g.add_argument("--cmd", default="tcp://127.0.0.1:5556")
     g.add_argument("--dir-log", default="dados_locais/mt5_bruto")
-    g.add_argument("--arquivo-emergencia", default="dados_locais/EMERGENCIA")
+    g.add_argument("--arquivo-emergencia", default=None,
+                   help="padrao: <[geral].dados do robowin.toml>/EMERGENCIA (mesmo caminho do painel e do nucleo)")
     g.add_argument("--offset-fixo-s", type=int, default=None)
     g.add_argument("--duracao-s", type=float, default=None)
     g.set_defaults(func=_cmd_gateway)
@@ -338,7 +340,9 @@ def registrar(sub: Any) -> None:
     c.set_defaults(func=_cmd_coletar)
 
     e = sub.add_parser("emergencia", help="acao de emergencia: cria o arquivo EMERGENCIA e/ou envia o comando")
-    e.add_argument("--arquivo", default="dados_locais/EMERGENCIA")
+    e.add_argument("--arquivo", default=None,
+                   help="padrao: <[geral].dados do robowin.toml>/EMERGENCIA (mesmo caminho do painel e do gateway)")
+    e.add_argument("--config", default="config/robowin.toml")
     e.add_argument("--sem-arquivo", action="store_true")
     e.add_argument("--comando", default=None, help="endereco ROUTER do gateway (ex.: tcp://127.0.0.1:5556)")
     e.add_argument("--motivo", default="acionada pelo operador")

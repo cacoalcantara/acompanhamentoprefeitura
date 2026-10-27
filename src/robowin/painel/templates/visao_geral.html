@@ -2,8 +2,9 @@
 {% block titulo %}Visão geral{% endblock %}
 {% block conteudo %}
 <h1>Visão geral e emergência</h1>
-{% if msg == "emergencia" %}<p class="aviso-critico">Kill switch acionado: arquivo EMERGENCIA gravado e incidente registrado.</p>{% endif %}
-{% if flag %}<p class="aviso-critico">O arquivo EMERGENCIA está presente: o sistema deve estar zerado e travado.</p>{% endif %}
+{% if msg == "emergencia" %}<p class="aviso-critico">Flag gravada; aguardando confirmação do gateway. O painel apenas grava o arquivo EMERGENCIA e registra um incidente: não confirma que o sistema foi zerado.</p>{% endif %}
+{% if flag %}{% if confirmacao and confirmacao.confirmado %}<p class="aviso-critico">O arquivo EMERGENCIA está presente e o gateway/núcleo confirmou o acionamento ({{ confirmacao.fonte }}).</p>
+{% else %}<p class="aviso-critico">O arquivo EMERGENCIA está presente, mas nenhum incidente de emergência do gateway/núcleo foi registrado depois dele: flag gravada; aguardando confirmação do gateway. Não presuma que o sistema esteja zerado — confira o MT5.</p>{% endif %}{% endif %}
 {% if not banco_existe %}<p class="aviso">Banco de dados ainda não encontrado. O painel mostra apenas informações de configuração.</p>{% endif %}
 <div class="grade">
 <section class="cartao"><h2>Conexão e conta</h2>
@@ -21,9 +22,9 @@
 </div>
 {% include "_resumo.html" %}
 <section class="cartao emergencia"><h2>Emergência — kill switch</h2>
-<p>Grava o arquivo <code>EMERGENCIA</code> em <code>{{ request.app.state.dir_dados }}</code> e registra um incidente crítico. Exige token e confirmação.</p>
+<p>Grava o arquivo <code>EMERGENCIA</code> em <code>{{ request.app.state.dir_dados }}</code> e registra um incidente crítico. O gateway/núcleo o lê e confirma (incidente) depois; até lá, é só uma flag gravada. Exige token e confirmação.</p>
 {% if not tem_token %}<p class="aviso">Token não configurado (variável ROBOWIN_TOKEN): as ações estão desativadas.</p>{% endif %}
-<form method="post" action="/acoes/emergencia" data-confirmar="Confirma o acionamento do kill switch? Isto zera posições e trava o sistema.">
+<form method="post" action="/acoes/emergencia" data-confirmar="Confirma gravar a flag de emergência? O gateway deverá zerar posições e travar o sistema.">
 <label>Token <input type="password" name="token" autocomplete="off"></label>
 <label>Digite EMERGENCIA para confirmar <input type="text" name="confirmacao" autocomplete="off" required></label>
 <button type="submit" class="perigo">Acionar kill switch</button></form></section>

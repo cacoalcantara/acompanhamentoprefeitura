@@ -44,6 +44,7 @@ def _cmd_simular(a: argparse.Namespace) -> int:
 
 
 def _cmd_nucleo(a: argparse.Namespace) -> int:
+    from robowin.core.config import caminho_flag_emergencia
     from robowin.core.relogio import RelogioReal
     from robowin.core.tipos import Instrumento
     from robowin.modelos.microestrutura import ModeloMicroestrutura
@@ -55,7 +56,7 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
         saida=Path(a.saida), provedor=a.provedor, config=Path(a.config), catalogo=Path(a.catalogo),
         risco=Path(a.risco), aprovacao=Path(a.aprovacao), passo_s=a.passo_s, checagem_s=a.checagem_s,
         idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 15.0,
-        com_condicional=not a.sem_condicional, arquivo_emergencia=Path(a.arquivo_emergencia))
+        com_condicional=not a.sem_condicional, arquivo_emergencia=caminho_flag_emergencia(a.config, a.arquivo_emergencia))
     rel = RelogioReal()
     sessao_id = f"nucleo-{int(time.time())}"
     try:
@@ -137,6 +138,7 @@ def registrar(sub: Any) -> None:
     n.add_argument("--sem-heartbeat", action="store_true")
     n.add_argument("--simbolo", default="WIN")
     n.add_argument("--saida", default=f"dados_locais/nucleo/sessao-{int(time.time())}")
-    n.add_argument("--arquivo-emergencia", default="dados_locais/EMERGENCIA")
+    n.add_argument("--arquivo-emergencia", default=None,
+                   help="padrao: <[geral].dados do robowin.toml>/EMERGENCIA (mesmo caminho do painel e do gateway)")
     n.add_argument("--duracao-s", type=float, default=None)
     n.set_defaults(func=_cmd_nucleo)

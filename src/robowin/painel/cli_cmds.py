@@ -9,7 +9,8 @@ def _painel(a):
         cfg = carregar_toml(a.config)
     except OSError:
         pass
-    app = criar_app(banco=a.banco, dir_dados=a.dados, config=cfg)
+    from robowin.core.config import dir_dados
+    app = criar_app(banco=a.banco, dir_dados=dir_dados(a.config, a.dados), config=cfg)
     uvicorn.run(app, host=a.host, port=a.porta, log_level="info")
     return 0
 
@@ -23,7 +24,7 @@ def _demo(a):
 def registrar(sub):
     p = sub.add_parser("painel", help="sobe o painel web local (somente simulação)")
     p.add_argument("--banco", default="dados_locais/robowin.sqlite")
-    p.add_argument("--dados", default=None, help="diretório de dados (onde fica o arquivo EMERGENCIA)")
+    p.add_argument("--dados", default=None, help="diretório de dados (padrão: [geral].dados do robowin.toml; é onde fica o EMERGENCIA)")
     p.add_argument("--config", default="config/robowin.toml")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--porta", type=int, default=8765)

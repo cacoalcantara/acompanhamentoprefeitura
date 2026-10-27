@@ -135,3 +135,61 @@ def test_auditoria_verifica_cadeia(tmp_path):
     (tmp_path / "dados" / "auditoria").mkdir(parents=True)
     c = TestClient(criar_app(banco=None, dir_dados=tmp_path / "dados", token="t"))
     assert c.get("/auditoria").status_code == 200
+
+
+def test_ui_diz_flag_gravada_e_so_confirma_com_incidente_do_gateway(cli):
+    import time
+    c, tmp = cli
+    r = c.post("/acoes/emergencia", data={"token": "segredo", "confirmacao": "EMERGENCIA"})
+    assert r.json()["estado"] == "flag_gravada_aguardando_confirmacao_do_gateway"
+    pagina = c.get("/?msg=emergencia").text
+    assert "aguardando confirmação do gateway" in pagina
+    assert "Kill switch acionado" not in pagina and "deve estar zerado" not in pagina
+    assert "gateway/núcleo confirmou" not in pagina
+    # o gateway/nucleo registra o incidente depois da flag: so entao a UI confirma
+    con = sqlite3.connect(tmp / "demo.sqlite")
+    con.execute("INSERT INTO incidentes(t_ns, origem, severidade, detalhe) VALUES (?,?,?,?)",
+                (time.time_ns() + 10**9, "gateway", "alerta", "bloqueio_emergencia"))
+    con.commit()
+    con.close()
+    assert "gateway/núcleo confirmou" in c.get("/").text
+
+
+def test_entrar_tem_limite_de_tentativas(cli):
+    c, _ = cli
+    for _ in range(5):
+        assert c.post("/entrar", data={"token": "x"}, follow_redirects=False).status_code == 401
+    assert c.post("/entrar", data={"token": "x"}, follow_redirects=False).status_code == 429
+    assert c.post("/entrar", data={"token": "segredo"}, follow_redirects=False).status_code == 429
+    assert c.post("/acoes/emergencia", data={"token": "segredo", "confirmacao": "EMERGENCIA"}).status_code == 429
+
+
+def test_flag_de_emergencia_vem_da_config_central_e_nao_do_cwd(tmp_path, monkeypatch):
+    from robowin.core.config import caminho_flag_emergencia, dir_dados
+    raiz = tmp_path / "proj"
+    (raiz / "config").mkdir(parents=True)
+    toml = raiz / "config" / "robowin.toml"
+    toml.write_text('[geral]\ndados = "meus_dados"\n', encoding="utf-8")
+    monkeypatch.delenv("ROBOWIN_DADOS", raising=False)
+    outro = tmp_path / "outro_cwd"
+    outro.mkdir()
+    monkeypatch.chdir(outro)
+    esperado = (raiz / "meus_dados" / "EMERGENCIA").resolve()
+    assert caminho_flag_emergencia(toml) == esperado and dir_dados(toml) == esperado.parent
+    monkeypatch.chdir(raiz)
+    assert caminho_flag_emergencia(toml) == esperado  # mesmo caminho, qualquer CWD
+    assert caminho_flag_emergencia(toml, arquivo=tmp_path / "x" / "F") == (tmp_path / "x" / "F").resolve()
+    monkeypatch.setenv("ROBOWIN_DADOS", str(tmp_path / "env"))
+    assert dir_dados(toml) == (tmp_path / "env").resolve()
+
+
+def test_cli_gateway_painel_e_emergencia_usam_o_mesmo_caminho(tmp_path, monkeypatch):
+    from robowin.cli import main
+    raiz = tmp_path / "proj"
+    (raiz / "config").mkdir(parents=True)
+    toml = raiz / "config" / "robowin.toml"
+    toml.write_text('[geral]\ndados = "dd"\nconta = "demo_mt5"\n', encoding="utf-8")
+    monkeypatch.delenv("ROBOWIN_DADOS", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert main(["emergencia", "--config", str(toml), "--motivo", "teste"]) == 0
+    assert (raiz / "dd" / "EMERGENCIA").exists() and not (tmp_path / "dados_locais").exists()

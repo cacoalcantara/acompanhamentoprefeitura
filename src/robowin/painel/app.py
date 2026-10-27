@@ -22,6 +22,9 @@ AQUI = Path(__file__).parent
 NOME_FLAG = "EMERGENCIA"
 FRASE_CONFIRMACAO = "EMERGENCIA"
 COOKIE = "robowin_token"
+MAX_FALHAS = 5  # tentativas de token invalido por cliente na janela
+JANELA_FALHAS_S = 300.0
+ESTADO_FLAG = "flag_gravada_aguardando_confirmacao_do_gateway"
 ROTULO_CANDIDATO = "candidato não validado"
 
 
@@ -51,7 +54,7 @@ def criar_app(
     """`metricas_provider(banco) -> {braco: metricas}` e o ponto de extensao para robowin.avaliacao."""
     config = config or {}
     geral = config.get("geral", {})
-    dir_d = Path(dir_dados or os.environ.get("ROBOWIN_DADOS") or geral.get("dados", "dados_locais"))
+    dir_d = Path(dir_dados or os.environ.get("ROBOWIN_DADOS") or geral.get("dados", "dados_locais")).resolve()
     tok = token if token is not None else os.environ.get("ROBOWIN_TOKEN", "")
     b = D.Banco(banco)
     instr = Instrumento(simbolo=geral.get("simbolo_base", "WIN"), **config.get("instrumento", {}))
@@ -63,6 +66,20 @@ def criar_app(
     tpl.env.globals.update(ROTULO_CANDIDATO=ROTULO_CANDIDATO, N_MIN=N_MIN_AMOSTRA, CONTROLE=CONTROLE)
     app.state.banco = b
     app.state.dir_dados = dir_d
+
+    falhas: dict[str, list[float]] = {}  # tentativas de token invalido por cliente (limite simples, em memoria)
+
+    def cliente_id(request: Request) -> str:
+        return request.client.host if request.client else "?"
+
+    def limitado(request: Request) -> bool:
+        agora = time.monotonic()
+        recentes = [t for t in falhas.get(cliente_id(request), []) if agora - t < JANELA_FALHAS_S]
+        falhas[cliente_id(request)] = recentes
+        return len(recentes) >= MAX_FALHAS
+
+    def falhou(request: Request) -> None:
+        falhas.setdefault(cliente_id(request), []).append(time.monotonic())
 
     def ctx(request: Request, pagina: str, **extra: Any) -> dict[str, Any]:
         return {"pagina": pagina, "sintetico": b.sintetico() or os.environ.get("ROBOWIN_DADOS_SINTETICOS") == "1",
@@ -84,7 +101,10 @@ def criar_app(
         if not tok:
             return JSONResponse({"erro": "Token não configurado (defina ROBOWIN_TOKEN). Ações estão desativadas."},
                                 status_code=403)
+        if limitado(request):
+            return JSONResponse({"erro": "Muitas tentativas inválidas. Aguarde alguns minutos."}, status_code=429)
         if not token_ok(request, form):
+            falhou(request)
             return JSONResponse({"erro": "Token ausente ou inválido."}, status_code=401)
         return None
 
@@ -92,9 +112,11 @@ def criar_app(
     @app.get("/", response_class=HTMLResponse)
     def visao_geral(request: Request, msg: str | None = None):
         v = D.visao_geral(b)
-        flag = (dir_d / NOME_FLAG).exists()
+        arq = dir_d / NOME_FLAG
+        flag = arq.exists()
+        confirmacao = D.confirmacao_emergencia(b, arq.stat().st_mtime_ns) if flag else None
         return tpl.TemplateResponse(request, "visao_geral.html", ctx(
-            request, "visao", v=v, instr=instr, flag=flag, msg=msg, conta=geral.get("conta", "não informada"),
+            request, "visao", v=v, instr=instr, flag=flag, confirmacao=confirmacao, msg=msg, conta=geral.get("conta", "não informada"),
             modo=geral.get("modo", "simulacao"), orcamento_mensal=config.get("ia", {}).get("orcamento_mensal_usd")))
 
     @app.get("/fragmentos/resumo", response_class=HTMLResponse)
@@ -154,7 +176,10 @@ def criar_app(
     @app.post("/entrar")
     async def entrar(request: Request):
         form = await ler_form(request)
+        if limitado(request):
+            return JSONResponse({"erro": "Muitas tentativas inválidas. Aguarde alguns minutos."}, status_code=429)
         if not tok or not hmac.compare_digest(form.get("token", "").encode(), tok.encode()):
+            falhou(request)
             return JSONResponse({"erro": "Token inválido."}, status_code=401)
         r = RedirectResponse("/", status_code=303)
         r.set_cookie(COOKIE, tok, httponly=True, samesite="strict")
@@ -173,11 +198,12 @@ def criar_app(
         (dir_d / NOME_FLAG).write_text(f"acionado pelo painel em ns={agora}\n", encoding="utf-8")
         try:
             b.escrever("INSERT INTO incidentes(t_ns, origem, severidade, detalhe) VALUES (?,?,?,?)",
-                       (agora, "painel", "critico", "Kill switch acionado manualmente pelo painel (arquivo EMERGENCIA gravado)."))
+                       (agora, "painel", "critico", "Flag EMERGENCIA gravada pelo painel; aguardando confirmacao do gateway/nucleo."))
         except Exception as e:  # a flag ja foi gravada; falha de registro nao pode desfazer a emergencia
-            return JSONResponse({"ok": True, "flag": str(dir_d / NOME_FLAG), "aviso": f"incidente nao registrado: {e}"})
+            return JSONResponse({"ok": True, "flag": str(dir_d / NOME_FLAG), "estado": ESTADO_FLAG,
+                                 "aviso": f"incidente nao registrado: {e}"})
         if "text/html" in request.headers.get("accept", ""):
             return RedirectResponse("/?msg=emergencia", status_code=303)
-        return {"ok": True, "flag": str(dir_d / NOME_FLAG)}
+        return {"ok": True, "flag": str(dir_d / NOME_FLAG), "estado": ESTADO_FLAG}
 
     return app
