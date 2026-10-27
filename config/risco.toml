@@ -1,0 +1,17 @@
+contratos_max = 1
+perda_max_operacao_brl = 60.0
+perda_max_dia_brl = 200.0
+perda_max_semana_brl = 500.0
+dd_alerta_brl = 1000.0
+dd_max_brl = 1500.0
+operacoes_dia_max = 10
+perdas_seguidas_max = 3
+pausa_apos_perda_s = 300
+stop_max_pontos = 300.0
+slippage_folga_pontos = 50.0
+entradas_de = "09:15"
+entradas_ate = "17:30"
+zeragem = "17:45"
+bloqueio_evento_min = 5
+ordens_min_max = 20
+tempo_min_livro_s = 2.0

@@ -1,0 +1,4 @@
+sha256 = "d8c8975e6b90189128d738492dee10b5935739556c0e9fa3dfc9832aced85f9a"
+data = "2026-10-27"
+responsavel = "pendente: usuario deve aprovar antes de qualquer etapa real"
+motivo = "valores padrao de simulacao"

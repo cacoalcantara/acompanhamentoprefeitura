@@ -1,0 +1,20 @@
+[geral]
+modo = "simulacao"          # nunca "real" nesta etapa
+conta = "demo_mt5"          # interno | demo_mt5
+dados = "dados_locais"
+simbolo_base = "WIN"
+
+[ia]
+orcamento_mensal_usd = 400
+[ia.papeis.proponente]
+modelo = "anthropic:claude-opus-5-5"
+effort = "low"
+[ia.papeis.revisor]
+modelo = "openai:gpt-6.1-sol"
+effort = "low"
+[ia.papeis.classificador_nlp]
+modelo = "anthropic:claude-haiku-5-5"
+
+[prazos]
+imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_pts = 20 }
+condicional = { expira_min_max = 10 }
