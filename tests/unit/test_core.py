@@ -51,7 +51,8 @@ def test_cadeia_hash_detecta_adulteracao(tmp_path):
     assert verificar_arquivo(arq)[0]
     linhas = arq.read_text().splitlines()
     # adulteracao
-    alt = json.loads(linhas[2]); alt["dados"]["i"] = 99
+    alt = json.loads(linhas[2])
+    alt["dados"]["i"] = 99
     arq.write_text("\n".join(linhas[:2] + [json.dumps(alt)] + linhas[3:]) + "\n")
     assert not verificar_arquivo(arq)[0]
     # remocao
@@ -63,8 +64,10 @@ def test_cadeia_hash_detecta_adulteracao(tmp_path):
 
 
 def test_risco_exige_hash(tmp_path):
-    rk = tmp_path / "risco.toml"; rk.write_text("contratos_max = 1\n")
-    ap = tmp_path / "ap.toml"; ap.write_text(f'sha256 = "{sha256_arquivo(rk)}"\n')
+    rk = tmp_path / "risco.toml"
+    rk.write_text("contratos_max = 1\n")
+    ap = tmp_path / "ap.toml"
+    ap.write_text(f'sha256 = "{sha256_arquivo(rk)}"\n')
     assert carregar_risco(rk, ap).contratos_max == 1
     rk.write_text("contratos_max = 5\n")
     with pytest.raises(ErroConfig):

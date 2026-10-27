@@ -7,8 +7,19 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from .tipos import (
-    AckOrdem, ChamadaLLM, ClassificacaoNoticia, ComandoOrdem, DecisaoRisco, EstadoConta, EventoNoticia,
-    Instrumento, Intencao, LivroSnapshot, Posicao, Tick, VetorFeatures,
+    AckOrdem,
+    ChamadaLLM,
+    ClassificacaoNoticia,
+    ComandoOrdem,
+    DecisaoRisco,
+    EstadoConta,
+    EventoNoticia,
+    Instrumento,
+    Intencao,
+    LivroSnapshot,
+    Posicao,
+    Tick,
+    VetorFeatures,
 )
 
 
