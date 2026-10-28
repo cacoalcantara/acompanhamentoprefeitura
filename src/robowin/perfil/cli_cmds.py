@@ -1,4 +1,5 @@
-"""Comandos `robowin perfil listar` e `robowin perfil confirmar <ATIVO|bolsa:CODIGO>`."""
+"""Comandos `robowin perfil listar`, `robowin perfil confirmar <ATIVO|bolsa:CODIGO>` e
+`robowin perfil importar-do-terminal <SIMBOLO>` (qualquer mercado do MT4/MT5, sempre a_confirmar)."""
 from __future__ import annotations
 
 import argparse
@@ -108,6 +109,51 @@ def _cmd_confirmar(a: argparse.Namespace, entrada: Callable[[str], str] = _ler) 
     return 0
 
 
+def _cmd_importar(a: argparse.Namespace) -> int:
+    from ..mt5.cli_cmds import _config_mt5, _plataforma
+    from .importacao import ImportacaoRecusada, gerar_perfil, gravar_perfil
+    cfg = _config_mt5(a)
+    try:
+        plat = _plataforma(a, cfg)
+    except ValueError as e:
+        print(f"ERRO: {e}")
+        return 2
+    sufixo = a.sufixo if a.sufixo is not None else str(cfg.get("sufixo_simbolo") or "")
+    try:
+        terminal = _abrir_terminal(a)
+    except Exception as e:  # noqa: BLE001 - MT5IndisponivelErro etc.
+        print(f"RECUSADO: nao foi possivel abrir o terminal {plat.upper()}: {e}")
+        return 3
+    try:
+        imp = gerar_perfil(terminal, a.simbolo, sufixo=sufixo, classe=a.classe, bolsa=a.bolsa, plataforma=plat,
+                           stop_max_ticks=a.stop_max_ticks, slippage_folga_ticks=a.slippage_folga_ticks,
+                           stop_padrao_ticks=a.stop_padrao_ticks, alvo_padrao_ticks=a.alvo_padrao_ticks)
+    except ImportacaoRecusada as e:
+        print(f"RECUSADO: {e}")
+        return 1
+    finally:
+        try:
+            terminal.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+    print(f"=== Perfil {imp.chave} lido do terminal (simbolo {imp.simbolo_terminal}) - a_confirmar = true ===")
+    print(imp.texto_toml())
+    for av in imp.avisos:
+        print(f"AVISO: {av}")
+    if a.so_mostrar:
+        print("(--so-mostrar: nada gravado)")
+        return 0
+    try:
+        acao = gravar_perfil(imp, a.instrumentos, substituir=a.substituir)
+    except Exception as e:  # noqa: BLE001 - ImportacaoRecusada / ErroEdicaoToml / OSError
+        print(f"RECUSADO: {e}")
+        return 1
+    print(f"Perfil {imp.chave} {acao} em {a.instrumentos} com a_confirmar = true (operar segue BLOQUEADO).")
+    print(f"Confira cada valor e confirme: uv run robowin perfil confirmar {imp.chave} --responsavel \"<seu nome>\" "
+          "--comparar-terminal")
+    return 0
+
+
 def registrar(sub: Any) -> None:
     p = sub.add_parser("perfil", help="perfis de ativo/bolsa: status (listar) e confirmacao pelo usuario (confirmar)")
     s = p.add_subparsers(dest="acao_perfil")
@@ -138,5 +184,29 @@ def registrar(sub: Any) -> None:
     c.add_argument("--config", default="config/robowin.toml")
     c.add_argument("--auditoria", default=None, help="pasta da cadeia de auditoria (padrao: <dados>/auditoria)")
     c.set_defaults(func=_cmd_confirmar)
+
+    im = s.add_parser("importar-do-terminal",
+                      help="gera o perfil de QUALQUER mercado (forex, CFD, metal, cripto...) do symbol_info do terminal "
+                           "(sempre a_confirmar)")
+    im.add_argument("simbolo", help="simbolo (ex.: EURUSD; o sufixo da corretora e resolvido: EURUSD.m)")
+    im.add_argument("--sufixo", default=None, help="sufixo da corretora (padrao: [mt5].sufixo_simbolo do TOML)")
+    im.add_argument("--classe", default=None,
+                    help="forex | cfd_indice | cfd_acao | metal | commodity | cripto (padrao: deduzida do terminal)")
+    im.add_argument("--bolsa", default=None, help="codigo em config/bolsas.toml (padrao: FOREX, CFD ou CRIPTO)")
+    im.add_argument("--stop-max-ticks", type=int, default=None)
+    im.add_argument("--slippage-folga-ticks", type=int, default=None)
+    im.add_argument("--stop-padrao-ticks", type=int, default=None)
+    im.add_argument("--alvo-padrao-ticks", type=int, default=None)
+    im.add_argument("--substituir", action="store_true", help="substitui um perfil existente (volta a a_confirmar)")
+    im.add_argument("--so-mostrar", action="store_true", help="so imprime o perfil, sem gravar")
+    im.add_argument("--duble", action="store_true", help="usa o duble sintetico (ensaio; fonte rotulada DUBLE)")
+    im.add_argument("--plataforma", choices=("mt5", "mt4"), default=None)
+    im.add_argument("--terminal", default=None, help="caminho do terminal portatil (terminal64.exe)")
+    im.add_argument("--login", type=int, default=None)
+    im.add_argument("--servidor", default=None)
+    im.add_argument("--mt4-endereco", default=None)
+    im.add_argument("--instrumentos", default="config/instrumentos.toml")
+    im.add_argument("--config", default="config/robowin.toml")
+    im.set_defaults(func=_cmd_importar)
 
     p.set_defaults(func=lambda _a: (p.print_help(), 2)[1])

@@ -62,7 +62,8 @@ class DubleMT4:
     def __init__(self, relogio: Relogio | None = None, *, login: int = 900001, servidor: str = "BROKERMT4-Demo",
                  demo: bool = True, offset_servidor_s: int = 10800, capacidade_ring: int = 20000,
                  slippage_pontos: float = 0.0, margem_por_lote: float = 0.0, token: str = "",
-                 max_posicoes: int = 0, magics_permitidos: tuple[int, ...] = ()) -> None:
+                 max_posicoes: int = 0, magics_permitidos: tuple[int, ...] = (), moeda_conta: str = "BRL") -> None:
+        self.moeda_conta = moeda_conta.upper()
         self.token, self.max_posicoes, self.magics_permitidos = token, int(max_posicoes), tuple(magics_permitidos)
         self.relogio = relogio or RelogioReal()
         self.offset_ms = int(offset_servidor_s) * 1000
@@ -297,7 +298,7 @@ class DubleMT4:
         if cmd == P.CMD_CONTA:
             margem = sum(p["volume"] for p in self.posicoes.values()) * self.margem_por_lote
             flut = sum(self._lucro(p) for p in self.posicoes.values())
-            return {"login": c.login, "servidor": c.servidor, "empresa": "CORRETORA SINTETICA (DUBLE)", "moeda": "BRL",
+            return {"login": c.login, "servidor": c.servidor, "empresa": "CORRETORA SINTETICA (DUBLE)", "moeda": self.moeda_conta,
                     "demo": c.demo, "trade_allowed": c.trade_allowed, "expert_enabled": c.expert,
                     "conectado": self.conectado, "dlls_permitidas": False, "saldo": c.saldo,
                     "patrimonio": c.saldo + flut, "lucro": flut, "margem": margem, "margem_livre": c.saldo + flut - margem,
@@ -560,13 +561,26 @@ def _espec_mt4(e: Any) -> dict[str, Any]:
         "lote_min": e.volume_min, "lote_max": e.volume_max, "lote_passo": e.volume_step,
         "expiracao_s": e.expiration_time, "moeda_lucro": e.currency_profit, "moeda_base": e.currency_base,
         "stop_level": 0, "freeze_level": 0, "margem_requerida": 0.0,
+        **_espec_mt4_generica(e),
     }
+
+
+def _espec_mt4_generica(e: Any) -> dict[str, Any]:
+    """Campos de qualquer mercado (forex/CFD) no formato do EA (MT4: modo de lucro e tipo de swap proprios)."""
+    if getattr(e, "trade_calc_mode", None) is None:
+        return {}
+    mt5_para_mt4_calc = {0: 0, 2: 1, 1: 2}
+    mt5_para_mt4_swap = {1: 0, 2: 1, 5: 2, 3: 3}
+    return {"moeda_margem": e.currency_margin, "modo_lucro": mt5_para_mt4_calc.get(int(e.trade_calc_mode), 1),
+            "swap_long": e.swap_long, "swap_short": e.swap_short,
+            "swap_tipo": mt5_para_mt4_swap.get(int(e.swap_mode), 0), "swap_triplo": e.swap_rollover3days}
 
 
 def criar_duble_mt4_padrao(relogio: Relogio | None = None, *, n_ticks: int = 6000, **kw: Any) -> DubleMT4:
     """DubleMT4 com os mesmos simbolos/series SINTETICOS do `criar_duble_padrao` (sem livro; tempo em segundos)."""
-    base: DubleMT5 = criar_duble_padrao(relogio, n_ticks=n_ticks, semente=1)
-    d = DubleMT4(base.relogio, **kw)
+    moeda_conta = str(kw.pop("moeda_conta", "BRL"))
+    base: DubleMT5 = criar_duble_padrao(relogio, n_ticks=n_ticks, semente=1, moeda_conta=moeda_conta)
+    d = DubleMT4(base.relogio, moeda_conta=moeda_conta, **kw)
     for nome, esp in base.especificacoes.items():
         d.adicionar_simbolo(_espec_mt4(esp), base._ticks[nome])
     return d

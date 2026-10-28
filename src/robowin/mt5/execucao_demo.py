@@ -64,7 +64,7 @@ class ConfigDemo:
     recuo_base_s: float = 1.0
     recuo_max_s: float = 30.0
     espera_incerta_s: float = 5.0
-    lote: int = 1  # unidades de volume do MT5 por "contrato" do robo (do perfil: 1 em futuros, 100 em acoes)
+    lote: float = 1  # volume do MT5 por unidade do robo (perfil: 1 em futuros, 100 em acoes, 0.01 em forex/CFD)
     conta: str = "netting"  # "netting" (MT5/B3) | "hedging" (MT4: posicoes por TICKET; saida SEMPRE por ticket)
     modo_mm: bool = False  # ponte do market making: UMA limitada por lado; a limitada pode REDUZIR a posicao oposta
 
@@ -191,17 +191,17 @@ class ExecucaoDemo:
         if ps is None:
             raise self._recusa("positions_get sem resposta")
         if self.hedging:  # varias posicoes por simbolo: identifica-se por TICKET
-            self._vols_vistos = {int(x.ticket): _sinal(int(x.type)) * float(x.volume) / self.cfg.lote for x in ps}
+            self._vols_vistos = {int(x.ticket): _sinal(int(x.type)) * round(float(x.volume) / self.cfg.lote, 6) for x in ps}
             p = next((x for x in ps if int(x.ticket) == ticket_alvo), None) if ticket_alvo is not None else (ps[0] if ps else None)
             if p is None:
                 return None, 0.0, None
-            return int(p.ticket), _sinal(int(p.type)) * float(p.volume) / self.cfg.lote, p
+            return int(p.ticket), _sinal(int(p.type)) * round(float(p.volume) / self.cfg.lote, 6), p
         if len(ps) > 1:
             raise self._recusa("mais de uma posicao no simbolo (conta nao e netting?)")
         if not ps:
             return None, 0.0, None
         p = ps[0]
-        return int(p.ticket), _sinal(int(p.type)) * float(p.volume) / self.cfg.lote, p  # em lotes do robo
+        return int(p.ticket), _sinal(int(p.type)) * round(float(p.volume) / self.cfg.lote, 6), p  # em lotes do robo
 
     def _pendentes(self) -> tuple[Any, ...]:
         os_ = self.t.orders_get(symbol=self._sym)
@@ -267,7 +267,7 @@ class ExecucaoDemo:
         lado = Lado.VENDA if int(p.type) == C.POS_COMPRA else Lado.COMPRA
         iid = intencao_id or f"zerar-{ticket}-{self._agora_ms()}-{len(self._enviadas)}"
         cmd = ComandoOrdem(intencao_id=iid, magic=self.cfg.magic_guardiao, lado=lado, tipo="saida",
-                           quantidade=max(1, int(p.volume / self.cfg.lote)), position_ticket=ticket)
+                           quantidade=max(1, int(round(p.volume / self.cfg.lote))), position_ticket=ticket)
         self._registrar("zerar_posicao", {"ticket": ticket, "dono": dono, "motivo": motivo})
         return self.enviar(cmd, dono=dono, prioritaria=True, forcar_dono=forcar_dono)
 
@@ -401,7 +401,7 @@ class ExecucaoDemo:
             self._donos = {t: d for t, d in self._donos.items() if t == ticket}
             self._donos[ticket] = dono
             req: dict[str, Any] = {
-                "action": C.ACAO_DEAL, "symbol": self._sym, "volume": float(qtd * self.cfg.lote), "type": tipo_ordem,
+                "action": C.ACAO_DEAL, "symbol": self._sym, "volume": round(qtd * self.cfg.lote, 8), "type": tipo_ordem,
                 "price": float(tk.ask if compra else tk.bid), "deviation": self.cfg.desvio,
                 "magic": cmd.magic, "comment": comentario, "type_filling": fill, "position": ticket,
             }
@@ -410,7 +410,7 @@ class ExecucaoDemo:
             if pos is not None and not (mm and (antes > 0) != compra and not self.hedging):  # MM: so a limitada que REDUZ (netting)
                 raise self._recusa("ja ha posicao aberta: sem piramidacao e sem inversao por entrada")
             pend = self._pendentes()
-            total_pend = sum(float(o.volume_current) for o in pend) / self.cfg.lote
+            total_pend = round(sum(float(o.volume_current) for o in pend) / self.cfg.lote, 6)
             if mm:
                 tipo_lado = C.ORDEM_BUY_LIMIT if compra else C.ORDEM_SELL_LIMIT
                 if any(int(o.type) == tipo_lado for o in pend):
@@ -420,13 +420,13 @@ class ExecucaoDemo:
             sl = self._alinhar(cmd.sl, tick) if cmd.sl else None
             tp = self._alinhar(cmd.tp, tick) if cmd.tp else None
             if cmd.tipo == "mercado":
-                req = {"action": C.ACAO_DEAL, "symbol": self._sym, "volume": float(qtd * self.cfg.lote), "type": tipo_ordem,
+                req = {"action": C.ACAO_DEAL, "symbol": self._sym, "volume": round(qtd * self.cfg.lote, 8), "type": tipo_ordem,
                        "price": float(tk.ask if compra else tk.bid), "deviation": self.cfg.desvio,
                        "magic": cmd.magic, "comment": comentario, "type_filling": fill}
             elif cmd.tipo == "limitada":
                 if cmd.preco is None:
                     raise self._recusa("ordem limitada sem preco")
-                req = {"action": C.ACAO_PENDING, "symbol": self._sym, "volume": float(qtd * self.cfg.lote),
+                req = {"action": C.ACAO_PENDING, "symbol": self._sym, "volume": round(qtd * self.cfg.lote, 8),
                        "type": C.ORDEM_BUY_LIMIT if compra else C.ORDEM_SELL_LIMIT,
                        "price": self._alinhar(cmd.preco, tick), "magic": cmd.magic, "comment": comentario,
                        "type_filling": C.PREENCHE_RETURN if not (info.filling_mode & C.SIMB_FILL_IOC) else fill,

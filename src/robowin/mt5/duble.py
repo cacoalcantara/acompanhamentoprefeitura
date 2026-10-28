@@ -60,9 +60,12 @@ class Falha:
 def gerar_ticks_sinteticos(
     inicio_utc_ms: int, n: int, passo_ms: int = 100, preco_inicial: float = 100000.0, semente: int = 0,
     tick: float = 5.0, spread_ticks: int = 1, p_negocio: float = 0.5, p_mesmo_ms: float = 0.1,
-    passo_max_ticks: int = 2,
+    passo_max_ticks: int = 2, decimais: int | None = None, so_cotacoes: bool = False,
 ) -> list[TickSint]:
-    """Serie SINTETICA (passeio aleatorio em grade de `tick`). Nao representa nenhum mercado real."""
+    """Serie SINTETICA (passeio aleatorio em grade de `tick`). Nao representa nenhum mercado real.
+
+    `so_cotacoes=True` (forex/CFD/cripto na corretora): so atualizacoes bid/ask, sem negocios (last = 0, volume 0);
+    `decimais` arredonda os precos aos digitos do simbolo (evita ruido de ponto flutuante na grade fina)."""
     rng = random.Random(semente)
     n_tk = round(preco_inicial / tick)
     t = inicio_utc_ms
@@ -74,7 +77,11 @@ def gerar_ticks_sinteticos(
         n_tk += rng.randint(-passo_max_ticks, passo_max_ticks)
         bid = n_tk * tick
         ask = bid + spread_ticks * tick
-        if rng.random() < p_negocio:
+        if decimais is not None:
+            bid, ask = round(bid, decimais), round(ask, decimais)
+        if so_cotacoes:
+            out.append((t, bid, ask, 0.0, 0.0, C.FLAG_BID | C.FLAG_ASK))
+        elif rng.random() < p_negocio:
             compra = rng.random() < 0.5
             ultimo = ask if compra else bid
             fl = C.FLAG_LAST | C.FLAG_VOLUME | (C.FLAG_BUY if compra else C.FLAG_SELL)
@@ -100,8 +107,41 @@ def gerar_livros_sinteticos(ticks: Sequence[TickSint], a_cada: int = 10, niveis:
     return out
 
 
-def especificacao(perfil: PerfilInstrumento, nome: str, vencimento_ts: int = 0) -> NS:
-    """symbol_info sintetico de um simbolo do PERFIL (tick, valor do tick por unidade de volume e lote do perfil)."""
+# trade_calc_mode do MT5 por modo de calculo do perfil (SYMBOL_CALC_MODE_FOREX/FUTURES/CFD/EXCH_STOCKS)
+CALC_MODE_MT5 = {"forex": 0, "futuros": 1, "cfd": 2, "bolsa": 32}
+# swap SINTETICO do duble (pontos por lote por noite; triplo na quarta): NAO e o swap de nenhuma corretora
+SWAP_DUBLE_LONG, SWAP_DUBLE_SHORT, SWAP_DUBLE_TRIPLO = -6.5, 1.2, 3
+
+
+def especificacao_generica(perfil: PerfilInstrumento, nome: str, *, moeda_conta: str = "BRL",
+                           fator_conta: float | None = None, vencimento_ts: int = 0) -> NS:
+    """symbol_info SINTETICO de qualquer mercado (forex/CFD/metal/cripto) a partir do perfil: contrato, lote
+    fracionario, digitos, moedas e swap. `trade_tick_value` sai NA MOEDA DA CONTA (como no terminal): com a conta em
+    outra moeda multiplica pelo `fator_conta` (cotacao sintetica de conversao)."""
+    tick = perfil.tick_pontos
+    tv = perfil.tick_valor_por_lote()
+    if moeda_conta.upper() != perfil.moeda.upper() and fator_conta:
+        tv *= fator_conta
+    digitos = perfil.digitos if perfil.digitos is not None else 0
+    vmin = float(perfil.volume_min or 1.0)
+    return NS(
+        name=nome, path=f"{perfil.classe}\\{nome}", description=f"{perfil.descricao} {nome} (SINTETICO)", digits=digitos,
+        point=perfil.ponto or tick, visible=True, select=True, spread=10, spread_float=True,
+        trade_mode=4, trade_exemode=C.EXEC_MARKET, filling_mode=C.SIMB_FILL_FOK | C.SIMB_FILL_IOC,
+        trade_tick_size=tick, trade_tick_value=tv, trade_contract_size=float(perfil.tamanho_contrato or 1.0),
+        trade_calc_mode=CALC_MODE_MT5.get(perfil.modo_calculo_efetivo, 2),
+        volume_min=vmin, volume_max=float(perfil.volume_max or 100.0), volume_step=float(perfil.volume_step or vmin),
+        ticks_bookdepth=0, expiration_time=vencimento_ts, currency_profit=perfil.moeda,
+        currency_base=perfil.moeda_base or perfil.moeda, currency_margin=perfil.moeda_margem or perfil.moeda,
+        swap_mode=1, swap_long=SWAP_DUBLE_LONG, swap_short=SWAP_DUBLE_SHORT, swap_rollover3days=SWAP_DUBLE_TRIPLO,
+    )
+
+
+def especificacao(perfil: PerfilInstrumento, nome: str, vencimento_ts: int = 0, **kw: Any) -> NS:
+    """symbol_info sintetico de um simbolo do PERFIL (tick, valor do tick por unidade de volume e lote do perfil).
+    Perfis do modelo generico (lote fracionario) vao para `especificacao_generica` (`kw`: moeda_conta, fator_conta)."""
+    if perfil.volume_min is not None:
+        return especificacao_generica(perfil, nome, vencimento_ts=vencimento_ts, **kw)
     return NS(
         name=nome, path=f"{perfil.classe}\\{nome}", description=f"{perfil.descricao} {nome} (SINTETICO)", digits=0,
         point=1.0, visible=True, select=True, spread=5, spread_float=True,
@@ -110,7 +150,7 @@ def especificacao(perfil: PerfilInstrumento, nome: str, vencimento_ts: int = 0) 
         trade_contract_size=perfil.ponto_valor_brl / perfil.lote,
         volume_min=float(perfil.lote), volume_max=1000.0 * perfil.lote, volume_step=float(perfil.lote),
         ticks_bookdepth=10 if perfil.aceita_book else 0,
-        expiration_time=vencimento_ts, currency_profit="BRL", currency_base="BRL",
+        expiration_time=vencimento_ts, currency_profit=perfil.moeda, currency_base=perfil.moeda,
     )
 
 
@@ -147,7 +187,9 @@ class DubleMT5:
         self, relogio: Relogio | None = None, *, login: int = 900001, servidor: str = "XPMT5-DEMO",
         trade_mode: str = "demo", margin_mode: int = C.MARGEM_EXCHANGE, offset_servidor_s: int = 10800,
         rejeita_ticket_velho: bool = True, slippage_pontos: float = 0.0, inicializado: bool = False,
+        moeda_conta: str = "BRL",
     ) -> None:
+        self.moeda_conta = moeda_conta.upper()
         self.relogio = relogio or RelogioReal()
         self.offset_ms = int(offset_servidor_s) * 1000
         self.rejeita_ticket_velho = rejeita_ticket_velho
@@ -409,7 +451,7 @@ class DubleMT5:
         c = self._conta
         return NS(
             login=c.login, server=c.servidor, trade_mode=c.trade_mode, margin_mode=c.margin_mode,
-            trade_allowed=c.trade_allowed, trade_expert=c.trade_expert, leverage=1, currency="BRL",
+            trade_allowed=c.trade_allowed, trade_expert=c.trade_expert, leverage=1, currency=self.moeda_conta,
             balance=c.saldo, equity=c.saldo, profit=0.0, margin=0.0, margin_free=c.saldo,
             name="CONTA SINTETICA (DUBLE)", company="CORRETORA SINTETICA (DUBLE)", limit_orders=0,
         )
@@ -719,13 +761,21 @@ class DubleMT5:
         return self._resultado(C.RET_EXECUTADA, req, "Request executed", 0, req["order"])
 
 
+# Mercados da corretora no duble (perfis-modelo de config/instrumentos.toml; tudo SINTETICO)
+MERCADOS_DUBLE = ("EURUSD", "USDJPY", "USDBRL", "XAUUSD", "BTCUSD", "US500")
+
+
 def criar_duble_padrao(
     relogio: Relogio | None = None, *, inicio_utc_ms: int | None = None, n_ticks: int = 6000, passo_ms: int = 100,
-    semente: int = 1, **kw: Any,
+    semente: int = 1, mercados: Sequence[str] | None = None, **kw: Any,
 ) -> DubleMT5:
-    """DubleMT5 pronto para uso com dados 100% SINTETICOS (WINZ26, WING27, INDZ26, WDOX26, BOVA11).
+    """DubleMT5 pronto para uso com dados 100% SINTETICOS (WINZ26, WING27, INDZ26, WDOX26, BOVA11 e os mercados da
+    corretora: EURUSD 5 digitos, USDJPY 3 digitos, USDBRL, XAUUSD, BTCUSD 24x7, US500 CFD - so cotacoes bid/ask).
 
-    A serie do WINZ26 comeca em `inicio_utc_ms` (padrao: 1 s antes de agora) e avanca no tempo do relogio.
+    A serie do WINZ26 (e a de cada mercado da corretora) comeca em `inicio_utc_ms` (padrao: 1 s antes de agora) e
+    avanca no tempo do relogio. `moeda_conta` (kw do DubleMT5, padrao BRL) define a moeda da conta: o
+    `trade_tick_value` dos simbolos em outra moeda sai convertido pela cotacao SINTETICA dos pares do proprio duble.
+    `mercados=()` desliga os mercados da corretora.
     """
     d = DubleMT5(relogio, **kw)
     ini = inicio_utc_ms if inicio_utc_ms is not None else d._agora_ms() - 1000
@@ -746,4 +796,26 @@ def criar_duble_padrao(
     d.adicionar_simbolo(especificacao(dol, "DOLX26"), serie(dol, 50, 1000, semente + 5))
     d.adicionar_simbolo(especificacao(acao, "PETR4"), serie(acao, 50, 1000, semente + 6))
     d.adicionar_simbolo(especificacao(etf, "BOVA11"), serie(etf, 50, 1000, semente + 4))
+    _adicionar_mercados(d, MERCADOS_DUBLE if mercados is None else tuple(mercados), ini, n_ticks, passo_ms, semente)
     return d
+
+
+def _adicionar_mercados(d: DubleMT5, ativos: Sequence[str], ini: int, n_ticks: int, passo_ms: int, semente: int) -> None:
+    """Simbolos de forex/CFD/metal/cripto (so cotacoes, sem livro) com tick value na moeda da conta do duble."""
+    if not ativos:
+        return
+    from robowin.core.moedas import ConversorMoeda, FeedCotacoes, rota_conversao
+    perfis = {a: carregar_perfil(a, permitir_a_confirmar=True) for a in ativos}
+    feed = FeedCotacoes()  # cotacoes SINTETICAS de referencia (preco_sintetico_ref) para converter o tick value
+    for a, p in perfis.items():
+        feed.atualizar(a, p.preco_sintetico_ref, p.preco_sintetico_ref, 0)
+    for k, (a, p) in enumerate(perfis.items()):
+        fator = None
+        if p.moeda != d.moeda_conta:
+            rota = rota_conversao(p.moeda, d.moeda_conta, list(perfis))
+            fator = ConversorMoeda(rota, feed).fator() if rota is not None else None
+        casas = p.digitos if p.digitos is not None else None
+        ticks = gerar_ticks_sinteticos(ini, n_ticks, passo_ms, p.preco_sintetico_ref, semente + 10 + k,
+                                       tick=p.tick_pontos, spread_ticks=10 if p.classe == "forex" else 20,
+                                       passo_max_ticks=10, decimais=casas, so_cotacoes=True)
+        d.adicionar_simbolo(especificacao_generica(p, a, moeda_conta=d.moeda_conta, fator_conta=fator), ticks)

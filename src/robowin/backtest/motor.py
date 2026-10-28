@@ -446,9 +446,18 @@ class MotorBacktest:
             self._rodada_decisao(t)
             self._prox_decisao = t + int(cfg.intervalo_decisao_s * NS)
 
+    def _desligadas(self) -> tuple[str, ...]:
+        """Features que o instrumento nao alimenta (forex/CFD sem negocios; sem livro) => NaN, nunca inventadas."""
+        try:
+            from robowin.core.instrumentos import perfil_de_instrumento
+            from robowin.features.registro import features_desligadas_instrumento
+            return features_desligadas_instrumento(perfil_de_instrumento(self.exec.ins))
+        except Exception:  # noqa: BLE001 - instrumento sem perfil (testes): nada desligado
+            return ()
+
     def _novo_dia(self, d: Any, t: int) -> None:
         self._dia = d
-        self._pipe = PipelineFeatures(usar_recebido=True)
+        self._pipe = PipelineFeatures(usar_recebido=True, desligadas=self._desligadas())
         self._t_dia0 = t
         self._ult_disp = None
         self._gap_ate = 0

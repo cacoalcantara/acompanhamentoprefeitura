@@ -85,7 +85,7 @@ def executar_diagnostico(
     # contrato e especificacoes
     res = None
     try:
-        res = resolver_contrato(terminal, hoje, perfil)
+        res = resolver_contrato(terminal, hoje, perfil, exigir_confirmado=False)
         info = terminal.symbol_info(res.simbolo_corretora)
         esp = EspecEsperada.do_perfil(perfil)
         rel["contrato"] = {"codigo_calendario": res.codigo_calendario, "simbolo_corretora": res.simbolo_corretora,
@@ -97,14 +97,18 @@ def executar_diagnostico(
                                                        "ponto_valor_brl": esp.ponto_valor_brl, "lote": esp.lote},
             "filling_mode": res.instrumento.filling_mode, "trade_exemode": res.instrumento.trade_exemode,
             "ticks_bookdepth": res.instrumento.book_depth, "valor_ponto_calculado": valor_ponto_brl(info),
-            "validas": True,
+            "validas": True, "moeda": res.instrumento.moeda, "moeda_conta": res.instrumento.moeda_conta,
+            "volume_unidade": res.instrumento.volume_por_unidade, "classe": perfil.classe,
         }
+        if perfil.a_confirmar:  # specs conferidas e reportadas, mas operar segue BLOQUEADO
+            perfil.exigir_confirmado()
     except ContratoRecusado as e:
         rec.extend(f"contrato/especificacao: {m}" for m in e.motivos)
         rel["contrato"] = {"codigo_calendario": None, "recusado": e.motivos}
     except PerfilNaoConfirmado as e:
         rec.append(f"perfil de instrumento: {e}")
-        rel["contrato"] = {"codigo_calendario": None, "recusado": [str(e)]}
+        if res is None:
+            rel["contrato"] = {"codigo_calendario": None, "recusado": [str(e)]}
     rel["ativo"] = perfil.simbolo_base
 
     # ativos
@@ -121,12 +125,12 @@ def executar_diagnostico(
         if not rs.confiavel:
             avi.append("offset do servidor nao calibrado com confianca (mercado fechado?): use offset_fixo_s")
         lv = ColetorLivro(terminal, simbolo, relogio, BarramentoLocal())
-        assinou = lv.assinar() if caps.livro else False
+        assinou = lv.assinar() if caps.livro and perfil.aceita_book else False
         lv.sondar()
         rel["livro"] = {"assinado": assinou, "profundidade_declarada": lv.profundidade_declarada,
                         "profundidade_observada": lv.profundidade_observada}
         lv.liberar()
-        if caps.livro and not assinou:
+        if caps.livro and perfil.aceita_book and not assinou:
             avi.append("market_book_add falhou: sem livro L2")
         # order_check SEM envio
         if conta.trade_mode == "demo" and login_esperado is not None and servidor_esperado is not None:
@@ -166,15 +170,16 @@ def texto_relatorio(rel: dict[str, Any]) -> str:
     if k:
         L += ["", "[Contrato vigente]"]
         if k.get("codigo_calendario"):
-            L += [f"  calendario B3: {k['codigo_calendario']}   simbolo da corretora: {k['simbolo_corretora']}",
+            L += [f"  codigo (calendario): {k['codigo_calendario']}   simbolo da corretora: {k['simbolo_corretora']}",
                   f"  vencimento: {k['vencimento']}   outros: {', '.join(k['outros_contratos']) or '-'}"]
         else:
             L += ["  RECUSADO: " + " | ".join(k.get("recusado", []))]
     e = rel.get("especificacoes")
     if e:
         L += ["", "[Especificacoes]", f"  tick: {e['tick_pontos']} pts (esperado {e['esperado']['tick_pontos']})",
-              f"  valor do ponto: R$ {e['ponto_valor_brl']:.2f} (esperado R$ {e['esperado']['ponto_valor_brl']:.2f})",
-              f"  lote: {e['lote']}   filling_mode: {e['filling_mode']}   trade_exemode: {e['trade_exemode']}"]
+              f"  valor do ponto: {e.get('moeda', 'BRL')} {e['ponto_valor_brl']:.6g} (esperado "
+              f"{e.get('moeda', 'BRL')} {e['esperado']['ponto_valor_brl']:.6g}; moeda da conta {e.get('moeda_conta') or '-'})",
+              f"  lote: {e['lote']}   volume por unidade: {e.get('volume_unidade', e['lote'])}   filling_mode: {e['filling_mode']}   trade_exemode: {e['trade_exemode']}"]
     if "livro" in rel:
         b = rel["livro"]
         L += ["", "[Livro L2]", f"  assinado: {b['assinado']}   profundidade declarada: {b['profundidade_declarada']}"

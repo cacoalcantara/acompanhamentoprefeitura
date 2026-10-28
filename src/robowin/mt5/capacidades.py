@@ -106,3 +106,11 @@ def features_dependentes_de_livro() -> tuple[str, ...]:
 def features_desligadas(caps: CapacidadesTerminal) -> tuple[str, ...]:
     """Features que a plataforma nao consegue alimentar (livro ausente => as de livro)."""
     return () if caps.livro else features_dependentes_de_livro()
+
+
+def features_desligadas_por(caps: CapacidadesTerminal | None, perfil: Any) -> tuple[str, ...]:
+    """Plataforma + INSTRUMENTO: forex/CFD/cripto na corretora nao tem negocios publicos (fluxo agressor e volume
+    negociado desligados; atividade = `volume_tick_30s`); perfil sem livro desliga as de livro."""
+    from robowin.features.registro import features_desligadas_instrumento
+    fora = set(features_desligadas(caps)) if caps is not None else set()
+    return tuple(sorted(fora | set(features_desligadas_instrumento(perfil))))

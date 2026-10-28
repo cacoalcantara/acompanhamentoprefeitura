@@ -124,6 +124,11 @@ def _epoch_s(x: Any) -> int:
     return int(float(x))
 
 
+# MODE_PROFITCALCMODE do MT4 (0 forex, 1 CFD, 2 futuros) -> SYMBOL_CALC_MODE do MT5 (0 forex, 2 CFD, 1 futuros)
+CALC_MT4_PARA_MT5 = {0: 0, 1: 2, 2: 1}
+# MODE_SWAPTYPE do MT4 (0 pontos, 1 moeda base, 2 juros, 3 moeda de margem) -> SYMBOL_SWAP_MODE do MT5
+SWAP_MT4_PARA_MT5 = {0: 1, 1: 2, 2: 5, 3: 3}
+
 _DTYPE_TICK = np.dtype([
     ("time", "<i8"), ("bid", "<f8"), ("ask", "<f8"), ("last", "<f8"), ("volume", "<u8"),
     ("time_msc", "<i8"), ("flags", "<u4"), ("volume_real", "<f8"), ("seq", "<i8"), ("gtc", "<i8"),
@@ -298,6 +303,13 @@ class ConectorMT4:
             expiration_time=int(s.get("expiracao_s", 0)), currency_profit=str(s.get("moeda_lucro", "")),
             currency_base=str(s.get("moeda_base", "")), stop_level=int(s.get("stop_level", 0)),
             freeze_level=int(s.get("freeze_level", 0)), margin_required=float(s.get("margem_requerida", 0.0)),
+            # qualquer mercado: campos do MT4 traduzidos para os nomes do MT5 (ausentes no EA antigo => None)
+            currency_margin=str(s.get("moeda_margem", "")),
+            trade_calc_mode=CALC_MT4_PARA_MT5.get(int(s["modo_lucro"])) if "modo_lucro" in s else None,
+            swap_long=float(s["swap_long"]) if "swap_long" in s else None,
+            swap_short=float(s["swap_short"]) if "swap_short" in s else None,
+            swap_mode=SWAP_MT4_PARA_MT5.get(int(s["swap_tipo"])) if "swap_tipo" in s else None,
+            swap_rollover3days=int(s["swap_triplo"]) if "swap_triplo" in s else None,
         )
 
     def symbols_get(self, group: str | None = None) -> Any:

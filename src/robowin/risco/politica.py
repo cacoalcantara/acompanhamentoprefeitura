@@ -9,12 +9,30 @@ from ..core.tipos import ConfigRisco
 from .tempo import hhmm_para_s
 
 TETO_CONTRATOS_V1 = 1  # teto duro da v1 (simulacao): nem a politica aprovada pode exceder
+# teto duro da v1 para `volume_max_lotes` (lote fracionario em forex/CFD): 1,0 lote do terminal. Nos perfis B3 a
+# unidade ja e >= 1 lote, entao o padrao (0 = desligado) mantem 1 contrato no WIN.
+TETO_VOLUME_LOTES_V1 = 1.0
+
+
+def unidades_maximas(cfg: ConfigRisco, volume_por_unidade: float) -> int:
+    """Quantidade maxima (unidades do robo) por posicao/exposicao: `contratos_max` ou, com `volume_max_lotes` > 0,
+    quantos lotes minimos cabem nele (ex.: 0.05 lote com unidade 0.01 => 5). Nunca acima do teto da v1."""
+    if cfg.volume_max_lotes <= 0:
+        return cfg.contratos_max
+    if volume_por_unidade <= 0:
+        return 0
+    teto = min(cfg.volume_max_lotes, TETO_VOLUME_LOTES_V1)
+    return max(0, int(teto / volume_por_unidade + 1e-9))
 
 
 def validar_coerencia(cfg: ConfigRisco) -> ConfigRisco:
     erros: list[str] = []
     if not 1 <= cfg.contratos_max <= TETO_CONTRATOS_V1:
         erros.append(f"contratos_max deve estar entre 1 e {TETO_CONTRATOS_V1}")
+    if not 0 <= cfg.volume_max_lotes <= TETO_VOLUME_LOTES_V1:
+        erros.append(f"volume_max_lotes deve estar entre 0 (desligado) e {TETO_VOLUME_LOTES_V1} lote")
+    if cfg.nocional_max_conta < 0:
+        erros.append("nocional_max_conta nao pode ser negativo (0 = desligado)")
     for nome in ("perda_max_operacao_brl", "perda_max_dia_brl", "perda_max_semana_brl", "dd_max_brl",
                  "stop_max_pontos", "tempo_min_livro_s"):
         if getattr(cfg, nome) <= 0:
@@ -51,7 +69,8 @@ def hash_politica(caminho: str | Path) -> str:
 
 
 def perda_pior_caso_brl(cfg: ConfigRisco, stop_pontos: float, quantidade: int, ponto_valor_brl: float) -> float:
-    """Perda maxima de uma operacao: stop + folga de slippage."""
+    """Perda maxima de uma operacao: stop + folga de slippage. `ponto_valor_brl` ja NA MOEDA DA CONTA (o chamador
+    multiplica pelo fator de conversao do instante quando a moeda de lucro do simbolo difere da conta)."""
     return (stop_pontos + cfg.slippage_folga_pontos) * quantidade * ponto_valor_brl
 
 

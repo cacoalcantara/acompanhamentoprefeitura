@@ -11,7 +11,7 @@ from robowin.core import calendario_b3
 from robowin.core.instrumentos import LETRAS_MES, PerfilInstrumento
 from robowin.core.tipos import Instrumento
 
-from .specs import EspecEsperada, instrumento_de, validar_especificacoes
+from .specs import EspecEsperada, instrumento_de, instrumento_generico_de, validar_especificacoes
 
 
 class ContratoRecusado(Exception):
@@ -87,11 +87,13 @@ def resolver_contrato(
     hoje: dt.date,
     perfil: PerfilInstrumento,
     selecionar: bool = True,
+    exigir_confirmado: bool = True,
 ) -> ResolucaoContrato:
     """Resolve o contrato vigente do ATIVO do perfil em `hoje` e valida as especificacoes da corretora CONTRA o perfil.
 
     Levanta `PerfilNaoConfirmado` se o perfil tem valores a_confirmar e `ContratoRecusado` se a corretora divergir."""
-    perfil.exigir_confirmado()
+    if exigir_confirmado:  # False so no DIAGNOSTICO (que reporta o bloqueio a_confirmar a parte, sem operar)
+        perfil.exigir_confirmado()
     codigo = calendario_b3.contrato_vigente(perfil, hoje)
     simbolos = terminal.symbols_get(f"*{perfil.simbolo_base}*")
     if not simbolos:
@@ -99,7 +101,11 @@ def resolver_contrato(
     if not simbolos:
         raise ContratoRecusado(["symbols_get vazio ou indisponivel"])
     nomes = [str(s.name) for s in simbolos]
-    cand = escolher_simbolo(nomes, codigo, perfil)
+    if perfil.simbolo_corretora and perfil.simbolo_corretora in nomes:  # nome exato do perfil (ex.: EURUSD.m)
+        cand = Candidato(perfil.simbolo_corretora, "", perfil.simbolo_corretora[len(codigo):]
+                         if perfil.simbolo_corretora.startswith(codigo) else "", codigo)
+    else:
+        cand = escolher_simbolo(nomes, codigo, perfil)
     if selecionar and not terminal.symbol_select(cand.nome, True):
         raise ContratoRecusado([f"symbol_select falhou para {cand.nome}"])
     info = terminal.symbol_info(cand.nome)
@@ -109,6 +115,10 @@ def resolver_contrato(
     erros = validar_especificacoes(info, EspecEsperada.do_perfil(perfil), venc, moeda_conta=moeda_conta)
     if erros:
         raise ContratoRecusado([f"{cand.nome}: {e}" for e in erros])
-    inst = instrumento_de(cand.nome, info, venc, ativo=perfil.simbolo_base)
+    if perfil.volume_min is not None:  # qualquer mercado (lote fracionario): valores do perfil, moeda da conta
+        inst = instrumento_generico_de(cand.nome, info, venc, ativo=perfil.simbolo_base, perfil=perfil,
+                                       moeda_conta=moeda_conta)
+    else:
+        inst = instrumento_de(cand.nome, info, venc, ativo=perfil.simbolo_base)
     outros = sorted(c.nome for c in listar_contratos(nomes, perfil) if c.nome != cand.nome)
     return ResolucaoContrato(inst, codigo, cand.nome, cand.prefixo, cand.sufixo, venc, outros)

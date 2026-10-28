@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .tempo import chave_semana, dia_sp
@@ -37,12 +38,16 @@ class EstadoBraco:
 
 
 class ContabilidadeSessao:
-    def __init__(self) -> None:
+    """Valores em dinheiro NA MOEDA DA CONTA (quem registra converte). `dia_de` define o dia de negociacao
+    (padrao: data em Sao Paulo; mercados 24h usam o dia da sessao do instrumento, que termina no rollover)."""
+
+    def __init__(self, dia_de: Callable[[int], dt.date] = dia_sp) -> None:
         self._b: dict[str, EstadoBraco] = {}
+        self._dia_de = dia_de
 
     def estado(self, braco: str, t_ns: int) -> EstadoBraco:
         e = self._b.setdefault(braco, EstadoBraco(braco=braco))
-        d = dia_sp(t_ns)
+        d = self._dia_de(t_ns)
         if e.dia != d:
             e.dia = d
             e.pnl_dia = 0.0

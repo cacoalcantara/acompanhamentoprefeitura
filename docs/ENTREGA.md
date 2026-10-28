@@ -166,6 +166,20 @@ futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido d
 | Modelo persistente | `src/robowin/modelos/persistencia.py`, `uv run robowin treinar` | `tests/unit/test_modelos_persistencia.py` | VA (artefato com hash, recusa de outro ativo) |
 | IA plugável | `src/robowin/ia/provedores/` (Anthropic, OpenAI, Google, Ollama, OpenAI-compatível, falso), `config/robowin.toml` | `tests/unit/test_ia_provedores.py`, `tests/unit/test_ia_catalogo.py` | VD (rede/chaves: DU) |
 
+
+## Qualquer mercado do MT4/MT5 (forex, metais, CFD, cripto)
+
+| Item | Onde está | Evidência | Status |
+|---|---|---|---|
+| Classes forex/cfd_indice/cfd_acao/metal/commodity/cripto com contrato, lote fracionário, dígitos, pip, tick value na moeda de lucro, moedas, modo de cálculo, swap, comissão por lote (a confirmar) | `config/instrumentos.toml` (EURUSD, USDJPY, USDBRL, XAUUSD, US500, BTCUSD: modelos `a_confirmar`), `src/robowin/core/instrumentos.py` | `tests/unit/test_qualquer_mercado.py` (perfis parametrizados WIN, WDO, EURUSD, USDJPY, XAUUSD, BTCUSD, US500) | VA (valores reais da corretora: **DU**) |
+| `robowin perfil importar-do-terminal <SIMBOLO> [--duble] [--plataforma]` (sufixo configurável, sempre `a_confirmar`, fonte do terminal) | `src/robowin/perfil/importacao.py`, `src/robowin/perfil/cli_cmds.py`, `mql4/RobowinBridge.mq4` (swap, modo de lucro, moeda de margem) | `tests/unit/test_qualquer_mercado.py` (MT5 e MT4, contas USD/BRL, sufixo, ambiguidade, recusa sem dado) | VD; terminal real **DU**; EA alterado **não compilado** |
+| P&L e risco na moeda da conta, conversão pela cotação do instante, sem cotação ⇒ entradas bloqueadas | `src/robowin/core/moedas.py`, `src/robowin/risco/motor.py`, `src/robowin/execucao/simulador.py`, `src/robowin/backtest/executor.py` | idem (EURUSD conta USD e BRL, USDJPY via intermediária, histórico sem olhar o futuro) | VD |
+| Custos de corretora (spread na cotação, comissão por lote, swap ao atravessar rollover, sem tarifa de bolsa) | `src/robowin/execucao/custos.py`, `src/robowin/core/instrumentos.py` (`custo_lado_unidade`) | idem | VD |
+| Sessões 24x5/24x7, pausa de rollover, dias fechados, janela do risco no fuso da sessão | `config/bolsas.toml` (FOREX, CFD, CRIPTO), `src/robowin/core/sessoes.py` | idem | VD (horário do servidor: **DU**) |
+| Lote fracionário e hedging no risco (`volume_max_lotes`, `nocional_max_conta`), WIN segue 1 contrato; invariantes com teste de propriedade | `src/robowin/risco/politica.py`, `src/robowin/risco/motor.py`, `src/robowin/mt5/execucao_demo.py`, `src/robowin/mt5/consultas.py` | idem (hypothesis) | VD |
+| Dublês MT5/MT4 com EURUSD (5 dígitos), USDJPY (3), USDBRL, XAUUSD, BTCUSD 24x7, US500, conta USD ou BRL | `src/robowin/mt5/duble.py`, `src/robowin/mt5/duble_mt4.py` | `tests/unit/test_qualquer_mercado.py` (aceitação EURUSD confirmado sem reprovações em MT5 USD/BRL e MT4), `tests/unit/test_mt5_duble.py` | VD |
+| Ticks só bid/ask (volume de tick rotulado), features desligadas por capacidade | `src/robowin/features/registro.py`, `src/robowin/features/pipeline.py`, `src/robowin/decisao/orquestrador.py`, `src/robowin/backtest/motor.py` | idem | VD |
+| Nenhum literal de ativo no código | `tests/estaticos/test_sem_constantes_de_ativo.py` (todos os perfis + pares de moedas/metais/cripto com sufixo) | idem | VA |
 ## Aceitação no Windows do usuário (Fase 5)
 
 | Item | Onde está | Evidência | Status |

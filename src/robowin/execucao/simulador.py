@@ -19,7 +19,9 @@ from typing import Literal
 import numpy as np
 
 from ..core.ids import novo_id
+from ..core.moedas import motivo_sem_cotacao
 from ..core.relogio import Relogio
+from ..core.sessoes import SessaoInstrumento, sessao_especifica
 from ..core.tipos import (
     AckOrdem,
     ComandoOrdem,
@@ -33,7 +35,7 @@ from ..core.tipos import (
 )
 from ..risco.invariantes import stop_so_aperta
 from ..risco.tempo import dia_sp
-from .custos import Custos
+from .custos import CustoLado, Custos
 from .preenchimento import (
     FilaLimitada,
     ParamsSlippage,
@@ -47,6 +49,22 @@ from .preenchimento import (
 RET_DONE, RET_PLACED, RET_REJECT, RET_INVALID, RET_INVALID_VOLUME = 10009, 10008, 10006, 10013, 10014
 RET_INVALID_PRICE, RET_INVALID_STOPS, RET_MARKET_CLOSED, RET_CLIENT_DISABLES_AT, RET_POSITION_CLOSED = (
     10015, 10016, 10018, 10027, 10036)
+
+
+def _sessao_auto(ins: Instrumento) -> SessaoInstrumento | None:
+    try:
+        from ..core.instrumentos import perfil_de_instrumento
+        return sessao_especifica(perfil_de_instrumento(ins))
+    except Exception:  # noqa: BLE001 - instrumento sem perfil (testes): sem rollover
+        return None
+
+
+def _sem_negocios(ins: Instrumento) -> bool:
+    try:
+        from ..core.instrumentos import perfil_de_instrumento
+        return not perfil_de_instrumento(ins).tem_negocios
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @dataclass
@@ -114,10 +132,19 @@ class SimuladorExecucao:
         self, instrumento: Instrumento, relogio: Relogio, custos: Custos | None = None,
         latencia_ns: int | Callable[[], int] = 0, seed: int = 0, slippage: ParamsSlippage | None = None,
         fila_padrao: float = 10.0, fator_fila: float = 1.0,
+        conversor: Callable[[int], float | None] | None = None, sessao: SessaoInstrumento | None | str = "auto",
     ) -> None:
+        """`conversor(t_ns)`: fator moeda de lucro -> moeda da conta no instante (P&L e custos dos trades saem NA
+        MOEDA DA CONTA; entrada sem cotacao e rejeitada). `sessao`: rollovers para o swap ("auto" = do perfil)."""
         self.ins = instrumento
         self.relogio = relogio
         self.custos = custos or Custos.do_instrumento(instrumento)
+        self.conversor = conversor
+        self._ultimo_fator: float | None = None
+        self._sessao = _sessao_auto(instrumento) if sessao == "auto" else (
+            sessao if isinstance(sessao, SessaoInstrumento) else None)
+        self.avisos: list[str] = []
+        self.por_cotacao = _sem_negocios(instrumento)  # forex/CFD: stops e limitadas pela cotacao bid/ask
         self._lat = latencia_ns
         self.rng = np.random.default_rng(seed)
         self.slip = slippage or ParamsSlippage()
@@ -155,6 +182,33 @@ class SimuladorExecucao:
     def _latencia(self) -> int:
         return int(self._lat() if callable(self._lat) else self._lat)
 
+    def fator(self, t_ns: int) -> float | None:
+        """Fator para a moeda da conta no instante (1.0 sem conversao); guarda o ultimo valido."""
+        if not self.ins.precisa_conversao:
+            return 1.0
+        f = None
+        if self.conversor is not None:
+            try:
+                f = self.conversor(t_ns)
+            except Exception:  # noqa: BLE001
+                f = None
+        if f is not None and f > 0 and math.isfinite(f):
+            self._ultimo_fator = f
+            return f
+        return None
+
+    def _fator_saida(self, t_ns: int) -> float:
+        """Saidas nunca sao bloqueadas: sem cotacao no instante, usa a ULTIMA cotacao observada (registrado)."""
+        f = self.fator(t_ns)
+        if f is not None:
+            return f
+        if self._ultimo_fator is not None:
+            self.avisos.append(f"conversao {self.ins.moeda}->{self.ins.moeda_conta} sem cotacao em {t_ns}: usada a "
+                               "ultima observada")
+            return self._ultimo_fator
+        self.avisos.append(f"conversao {self.ins.moeda}->{self.ins.moeda_conta} nunca cotada: valores na moeda de lucro")
+        return 1.0
+
     def _novo_ticket(self) -> int:
         self._tk += 1
         return self._tk
@@ -171,6 +225,8 @@ class SimuladorExecucao:
             return AckOrdem(retcode=RET_MARKET_CLOSED)
         if cmd.quantidade < 1:
             return AckOrdem(retcode=RET_INVALID_VOLUME)
+        if cmd.tipo != "saida" and self.fator(t) is None:
+            return AckOrdem(retcode=RET_REJECT, comentario=motivo_sem_cotacao(self.ins.moeda, self.ins.moeda_conta))
         if cmd.tipo == "limitada":
             if cmd.preco is None or cmd.preco <= 0 or not self._no_grid(cmd.preco):
                 return AckOrdem(retcode=RET_INVALID_PRICE)
@@ -235,8 +291,17 @@ class SimuladorExecucao:
                 ev += self._exec_stop(o, tick)
             elif o.kind in ("limitada", "alvo"):
                 ev += self._ativar_limitada(o, prev or tick, tick)
-        # 2) limitadas ativas consomem o negocio deste tick
-        if eh_negocio(tick):
+        # 2) limitadas ativas consomem o negocio deste tick (mercado de corretora, sem negocios: a COTACAO precisa
+        #    atravessar o preco - estritamente - para preencher no preco limite)
+        if self.por_cotacao:
+            bid, ask = cotacao_valida(tick)
+            for o in sorted(self._ordens.values(), key=lambda x: x.ticket):
+                if o.ticket in self._ordens and o.kind in ("limitada", "alvo") and o.ativada and o.fila:
+                    px = o.preco or 0.0
+                    cruzou = ask < px if o.lado == Lado.COMPRA else bid > px
+                    if cruzou and o.restante > 0:
+                        ev += self._preencher(o, o.restante, px, tick.t_utc_ns, simulada_slip=0.0)
+        elif eh_negocio(tick):
             for o in sorted(self._ordens.values(), key=lambda x: x.ticket):
                 if o.ticket in self._ordens and o.kind in ("limitada", "alvo") and o.ativada and o.fila:
                     q = o.fila.processar_negocio(tick.last, tick.volume)
@@ -287,13 +352,17 @@ class SimuladorExecucao:
         return []
 
     def _checar_stops(self, tick: Tick) -> list[EventoSim]:
-        if not eh_negocio(tick):
+        if not self.por_cotacao and not eh_negocio(tick):
             return []
+        bid, ask = cotacao_valida(tick)
         for c in self._carteiras.values():
             p = c.pos
             if p.qtd <= 0 or p.sl is None or p.stop_pendente or p.lado is None:
                 continue
-            disparou = tick.last <= p.sl if p.lado == Lado.COMPRA else tick.last >= p.sl
+            if self.por_cotacao:  # sem negocios (forex/CFD): o stop do servidor dispara pela cotacao de saida
+                disparou = bid <= p.sl if p.lado == Lado.COMPRA else ask >= p.sl
+            else:
+                disparou = tick.last <= p.sl if p.lado == Lado.COMPRA else tick.last >= p.sl
             if disparou:
                 p.stop_pendente = True
                 tk = self._novo_ticket()
@@ -314,7 +383,9 @@ class SimuladorExecucao:
                 self._ordens.pop(o.ticket, None)
                 return [EventoSim("rejeitada", c.braco, o.ticket, motivo="posicao_inexistente")]
         d = dia_sp(t_ns)
-        custo = self.custos.lado(d, qtd, zeragem=o.zeragem)
+        bruto_custo = self.custos.lado(d, qtd, zeragem=o.zeragem)
+        f = self._fator_saida(t_ns)  # custos na moeda da conta
+        custo = CustoLado(tarifas_brl=bruto_custo.tarifas_brl * f, corretagem_brl=bruto_custo.corretagem_brl * f)
         ex = Execucao(ordem_id=str(o.ticket), preco=preco, quantidade=qtd, t_ns=t_ns,
                       taxas_brl=custo.total, simulada=True)
         c.execucoes.append(ex)
@@ -346,14 +417,16 @@ class SimuladorExecucao:
         # reduz (e possivelmente inverte, apenas via ordem de entrada oposta: netting)
         fecha = min(qtd, p.qtd)
         sinal = 1 if p.lado == Lado.COMPRA else -1
-        bruto = (preco - p.preco_medio) * sinal * fecha * self.ins.ponto_valor_brl
+        f = self._fator_saida(t_ns)  # P&L na MOEDA DA CONTA (cotacao do instante da saida)
+        bruto = (preco - p.preco_medio) * sinal * fecha * self.ins.ponto_valor_brl * f
         frac = fecha / qtd
+        swap = self._swap(p, fecha, t_ns) * f
         tr = Trade(
             id=novo_id("trd"), braco=c.braco, lado=p.lado or Lado.COMPRA, entrada=p.preco_medio, saida=preco,
             t_entrada_ns=p.aberta_ns, t_saida_ns=t_ns, bruto_brl=bruto,
             tarifas_brl=p.tarifa_unit * fecha + tarifa * frac, corretagem_brl=p.corretagem_unit * fecha + corr * frac,
             slippage_brl=0.0,  # slippage ja embutido nos precos de execucao (ver c.slippage_pontos_total)
-            motivo_saida=o.motivo or "saida")
+            motivo_saida=o.motivo or "saida", swap_brl=swap)
         c.trades.append(tr)
         c.saldo_brl += tr.liquido_brl
         ev.append(EventoSim("trade", c.braco, o.ticket, trade=tr, quantidade=fecha))
@@ -368,6 +441,19 @@ class SimuladorExecucao:
                 p.tarifa_unit, p.corretagem_unit = tarifa * (resto / qtd) / resto, corr * (resto / qtd) / resto
                 self._criar_alvo(c, p)
         return ev
+
+    def _swap(self, p: PosicaoSim, qtd: int, t_ns: int) -> float:
+        """Swap (moeda de lucro) se a posicao atravessou o rollover; no day trade com zeragem, normalmente 0."""
+        if self._sessao is None or p.lado is None:
+            return 0.0
+        noites = sum(m for _, m in self._sessao.rollovers_entre(p.aberta_ns, t_ns, self.custos.swap.dia_triplo
+                                                                 if self.custos.swap else ""))
+        v = self.custos.swap_custo(p.lado, qtd, noites)
+        if v is None:
+            self.avisos.append(f"posicao atravessou {noites} rollover(s) e o swap do perfil nao e calculavel "
+                               "(swap_long/short/modo a confirmar): swap NAO incluido")
+            return 0.0
+        return v
 
     def _criar_alvo(self, c: Carteira, p: PosicaoSim) -> None:
         if p.tp is None or p.lado is None:

@@ -23,8 +23,7 @@ CORRETAGEM_ESTRESSE_BRL = 0.22  # corretagem ida e volta do estresse (igual a ex
 
 def custos_do_perfil(perfil: PerfilInstrumento) -> tuple[float, float]:
     """(base, estresse): custo ida e volta por contrato = tarifas B3 do perfil + corretagem + slippage em ticks."""
-    t = max(perfil.tarifas, key=lambda x: x.vigente_desde)
-    tarifas = 2 * t.tarifa_lado_brl
+    tarifas = 2 * perfil.custo_lado_unidade()  # forex/CFD: sem tarifa de bolsa, comissao por lote
     return (tarifas + SLIPPAGE_BASE_TICKS * perfil.tick_valor_brl,
             tarifas + CORRETAGEM_ESTRESSE_BRL + SLIPPAGE_ESTRESSE_TICKS * perfil.tick_valor_brl)
 

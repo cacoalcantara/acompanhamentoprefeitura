@@ -100,3 +100,89 @@ entradas_ate = "14:30"
 zeragem = "14:45"
 [CME.limite_oscilacao]
 percentual = 0.07
+
+# ======================================================================================================================
+# MERCADOS DA CORRETORA (MT4/MT5): forex, CFD de indices/acoes, metais, commodities e cripto. Nao sao bolsas: o
+# preco, o horario e os custos sao os da CORRETORA (servidor do terminal). `moeda = ""` => cada simbolo declara a sua
+# `moeda_lucro` em instrumentos.toml. Sem tarifa de bolsa: custo = spread (na cotacao) + comissao por lote + swap
+# (so se a posicao atravessar o rollover). Tributacao fora do regime brasileiro de day trade: NAO calculada.
+#   sessao_tipo: grade (bolsa) | 24x5 (forex) | 24x7 (cripto). Em 24x5/24x7 `sessoes` e a JANELA de day trade padrao
+#   (no fuso da sessao) e o `rollover` encerra o dia de negociacao: entradas param `entradas_antes_fechamento_min` e a
+#   zeragem e forcada `zeragem_antes_fechamento_min` antes de qualquer fechamento/pausa/rollover (sem swap).
+#   A janela do risco (config/risco.toml ou limites do usuario: entradas_de/entradas_ate/zeragem) e lida NESTE fuso.
+# Todos MODELOS a_confirmar = true: confira o horario do servidor e da corretora antes de confirmar.
+
+[FOREX]
+nome = "Forex na corretora (balcao, 24x5) - MODELO"
+fuso = "America/New_York"   # convencao do mercado: abre domingo 17:00 e fecha sexta 17:00 em Nova York
+calendario = ""             # sem calendario de bolsa; feriados em dias_fechados
+moeda = ""                  # cada par declara moeda_lucro
+modelo_tarifas = "sem_tarifa_de_bolsa"
+regime_tributario = "nao_calculado"
+sessao_tipo = "24x5"
+abertura_semanal = "domingo 17:00"
+fechamento_semanal = "sexta 17:00"
+rollover = "17:00"
+pausas = [["16:55", "17:05"]]   # pausa de rollover (spread alto/sem cotacao); configuravel
+dias_fechados = ["12-25", "01-01"]
+entradas_antes_fechamento_min = 30
+zeragem_antes_fechamento_min = 15
+a_confirmar = true
+a_confirmar_itens = ["horario de abertura/fechamento semanal no servidor da corretora",
+                     "pausa de rollover e horario do swap no servidor", "dias fechados (Natal/Ano Novo) da corretora",
+                     "janela de day trade padrao (sessoes)", "regime tributario do investidor (nao calculado)"]
+[[FOREX.sessoes]]
+vigente_desde = "2025-01-01"
+abertura = "03:00"      # janela de day trade padrao em Nova York (Londres + Nova York); fechamento nao usado em 24x5
+fechamento = "16:55"
+entradas_ate = "11:30"
+zeragem = "12:00"
+
+[CFD]
+nome = "CFD na corretora (indices, acoes, metais, commodities) - MODELO"
+fuso = "America/New_York"
+calendario = ""
+moeda = ""
+modelo_tarifas = "sem_tarifa_de_bolsa"
+regime_tributario = "nao_calculado"
+sessao_tipo = "24x5"
+abertura_semanal = "domingo 18:00"
+fechamento_semanal = "sexta 17:00"
+rollover = "17:00"
+pausas = [["17:00", "18:00"]]   # pausa diaria tipica de indices/metais (a confirmar por simbolo)
+dias_fechados = ["12-25", "01-01"]
+entradas_antes_fechamento_min = 30
+zeragem_antes_fechamento_min = 15
+a_confirmar = true
+a_confirmar_itens = ["grade de cada simbolo CFD na corretora (indices/metais quase 24h; CFD de acao segue a bolsa)",
+                     "pausa diaria e horario do swap no servidor", "dias fechados da corretora",
+                     "janela de day trade padrao (sessoes)", "regime tributario do investidor (nao calculado)"]
+[[CFD.sessoes]]
+vigente_desde = "2025-01-01"
+abertura = "09:30"
+fechamento = "16:00"
+entradas_ate = "15:30"
+zeragem = "15:45"
+
+[CRIPTO]
+nome = "Cripto na corretora (CFD, 24x7) - MODELO"
+fuso = "UTC"
+calendario = ""
+moeda = ""
+modelo_tarifas = "sem_tarifa_de_bolsa"
+regime_tributario = "nao_calculado"
+sessao_tipo = "24x7"
+rollover = "00:00"          # swap diario a meia-noite do servidor (a confirmar)
+pausas = []
+dias_fechados = []
+entradas_antes_fechamento_min = 30
+zeragem_antes_fechamento_min = 15
+a_confirmar = true
+a_confirmar_itens = ["horario do swap/rollover diario no servidor", "manutencoes programadas da corretora",
+                     "janela de day trade padrao (sessoes)", "regime tributario do investidor (nao calculado)"]
+[[CRIPTO.sessoes]]
+vigente_desde = "2025-01-01"
+abertura = "00:30"
+fechamento = "23:59"
+entradas_ate = "22:00"
+zeragem = "23:00"

@@ -49,10 +49,23 @@ class Instrumento(Base):
     filling_mode: int = 0
     trade_exemode: int = 0
     book_depth: int = 0
+    # adicoes opcionais (qualquer mercado): o padrao preserva o contrato antigo
+    volume_unidade: float = 0.0  # volume do terminal por unidade do robo (0 = `lote`); ex.: 0.01 em forex
+    moeda_conta: str = ""  # moeda da conta (limites de risco); vazio/igual a `moeda` = sem conversao
 
     @property
     def tick_valor_brl(self) -> float:
         return self.tick_pontos * self.ponto_valor_brl
+
+    @property
+    def volume_por_unidade(self) -> float:
+        """Volume enviado ao terminal por unidade de `quantidade` (lote fracionario em forex/CFD)."""
+        return self.volume_unidade if self.volume_unidade > 0 else float(self.lote)
+
+    @property
+    def precisa_conversao(self) -> bool:
+        """P&L do simbolo em moeda diferente da conta: exige cotacao de conversao no instante."""
+        return bool(self.moeda_conta) and self.moeda_conta.upper() != self.moeda.upper()
 
 
 class Tick(Base):
@@ -190,10 +203,11 @@ class Trade(Base):
     corretagem_brl: float
     slippage_brl: float
     motivo_saida: str
+    swap_brl: float = 0.0  # adicao opcional: swap PAGO (positivo) ou recebido (negativo) ao atravessar o rollover
 
     @property
     def liquido_brl(self) -> float:
-        return self.bruto_brl - self.tarifas_brl - self.corretagem_brl - self.slippage_brl
+        return self.bruto_brl - self.tarifas_brl - self.corretagem_brl - self.slippage_brl - self.swap_brl
 
 
 class EstadoConta(Base):
@@ -365,6 +379,10 @@ class ConfigRisco(Base):
     bloqueio_evento_min: int = 5
     ordens_min_max: int = 20
     tempo_min_livro_s: float = 2.0
+    # adicoes opcionais (qualquer mercado). Valores em dinheiro estao NA MOEDA DA CONTA. 0 = desligado:
+    # vale `contratos_max` em unidades do perfil (1 contrato no WIN; 1 lote minimo em forex/CFD).
+    volume_max_lotes: float = 0.0  # volume maximo do terminal (lotes) por posicao/exposicao
+    nocional_max_conta: float = 0.0  # nocional maximo (preco x valor do ponto x quantidade), moeda da conta
 
 
 class RegistroAprovacao(Base):

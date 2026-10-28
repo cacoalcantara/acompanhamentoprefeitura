@@ -377,7 +377,13 @@ string CmdSimbolo(const string id, const string req)
               ",\"margem_requerida\":" + D(MarketInfo(sym, MODE_MARGINREQUIRED)) +
               ",\"expiracao_s\":" + L((long)MarketInfo(sym, MODE_EXPIRATION)) +
               ",\"moeda_lucro\":\"" + JEsc(SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT)) + "\"" +
-              ",\"moeda_base\":\"" + JEsc(SymbolInfoString(sym, SYMBOL_CURRENCY_BASE)) + "\"}";
+              ",\"moeda_base\":\"" + JEsc(SymbolInfoString(sym, SYMBOL_CURRENCY_BASE)) + "\"" +
+              ",\"moeda_margem\":\"" + JEsc(SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN)) + "\"" +
+              ",\"modo_lucro\":" + IntegerToString((int)MarketInfo(sym, MODE_PROFITCALCMODE)) +
+              ",\"swap_long\":" + D(MarketInfo(sym, MODE_SWAPLONG)) +
+              ",\"swap_short\":" + D(MarketInfo(sym, MODE_SWAPSHORT)) +
+              ",\"swap_tipo\":" + IntegerToString((int)MarketInfo(sym, MODE_SWAPTYPE)) +
+              ",\"swap_triplo\":" + L(SymbolInfoInteger(sym, SYMBOL_SWAP_ROLLOVER3DAYS)) + "}";
    return(OkJson(id, d));
   }
 

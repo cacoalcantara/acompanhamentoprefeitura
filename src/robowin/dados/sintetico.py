@@ -53,6 +53,10 @@ class ConfigSintetico:
         kw.setdefault("simbolo", f"SINT_{perfil.simbolo_base}")
         kw.setdefault("tick_pontos", perfil.tick_pontos)
         kw.setdefault("preco_inicial", perfil.preco_sintetico_ref)
+        # perfis com tick muito fino em relacao ao stop padrao (forex: 1 tick = 0,1 pip) andam mais ticks por
+        # negocio, na proporcao do stop padrao sobre a referencia de 6 ticks (perfis B3 ate 6 ticks nao mudam)
+        escala = max(1.0, perfil.stop_padrao_ticks / 6.0)
+        kw.setdefault("passo_medio_ticks", cls.passo_medio_ticks * escala)
         return cls(**kw)
 
 

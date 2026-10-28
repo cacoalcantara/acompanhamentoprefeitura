@@ -45,6 +45,9 @@ def _construir() -> dict[str, DefFeature]:
     d += [
         _def("fluxo_intensidade_30s", "fluxo", "30s", "Negocios por segundo", _C_TICKS),
         _def("fluxo_volume_30s", "fluxo", "30s", "Volume negociado", _C_TICKS),
+        _def("volume_tick_30s", "cotacoes", "30s",
+             "Atualizacoes de cotacao (bid/ask) por segundo: 'volume de tick', NAO e volume negociado "
+             "(unica medida de atividade em forex/CFD, que nao tem negocios publicos)", _C_TICKS),
         _def("livro_imb_1", "livro", "instantanea", "Desequilibrio do melhor nivel do livro L2", _C_LIVRO),
         _def("livro_imb_5", "livro", "instantanea", "Desequilibrio dos 5 melhores niveis do livro L2", _C_LIVRO),
         _def("microprice_desvio_pts", "livro", "instantanea", "Microprice menos ponto medio, em pontos", _C_LIVRO),
@@ -99,3 +102,24 @@ def validar_vetor(valores: Mapping[str, float]) -> None:
 
 def nomes_permitidos() -> tuple[str, ...]:
     return tuple(REGISTRO_PERMITIDO)
+
+
+def features_de_negocios() -> tuple[str, ...]:
+    """Features que exigem ticks de NEGOCIO (fluxo agressor e volume negociado)."""
+    return tuple(sorted(n for n, d in REGISTRO_PERMITIDO.items() if d.grupo == "fluxo"))
+
+
+def features_de_livro() -> tuple[str, ...]:
+    return tuple(sorted(n for n, d in REGISTRO_PERMITIDO.items() if "livro" in d.causalidade))
+
+
+def features_desligadas_instrumento(perfil: object) -> tuple[str, ...]:
+    """Features que o INSTRUMENTO nao consegue alimentar (desligadas por capacidade, nunca inventadas):
+    sem negocios publicos (forex/CFD/cripto na corretora) => fluxo agressor e volume negociado; sem livro => livro.
+    Nesses mercados a atividade e medida por `volume_tick_30s` ('volume de tick')."""
+    fora: set[str] = set()
+    if not bool(getattr(perfil, "tem_negocios", True)):
+        fora |= set(features_de_negocios())
+    if not bool(getattr(perfil, "aceita_book", True)):
+        fora |= set(features_de_livro())
+    return tuple(sorted(fora))

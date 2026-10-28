@@ -97,6 +97,9 @@ class ConfigOrquestrador:
     arquivo_emergencia: Path | None = None
     referencias_frequencia: tuple[str, ...] = ("quant", "claude", "claude_gpt")
     exigir_aquecimento: bool = True
+    # qualquer mercado: fator moeda de lucro -> moeda da conta NO INSTANTE (t_ns); None com moedas diferentes
+    # (instrumento.moeda_conta != moeda) => entradas vetadas por falta de cotacao (ver core.moedas)
+    conversor: Callable[[int], float | None] | None = None
 
 
 @dataclass
@@ -190,6 +193,11 @@ class Orquestrador:
         self.perfil = perfil_de_instrumento(cfg.instrumento)
         self.ativo = self.perfil.simbolo_base
         self.pipeline = pipeline or PipelineFeatures()
+        # capacidade do INSTRUMENTO: sem negocios publicos (forex/CFD/cripto) ou sem livro => features desligadas (NaN)
+        from robowin.features.registro import features_desligadas_instrumento
+        fora = features_desligadas_instrumento(self.perfil)
+        if fora:
+            self.pipeline.desligadas = self.pipeline.desligadas | frozenset(fora)
         self.modelos = dict(modelos or {})
         for nome_m, m in self.modelos.items():  # modelo de outro ativo NUNCA e reutilizado (nem o sem ativo, fora de sintetico)
             declarado = str(getattr(m, "ativo", ""))
@@ -207,7 +215,8 @@ class Orquestrador:
         self.bloqueio = bloqueio or BloqueioDados()
         self.eventos = list(eventos)
         self.sim = simulador or SimuladorExecucao(
-            cfg.instrumento, relogio, custos or Custos.do_instrumento(cfg.instrumento), latencia_ns=cfg.latencia_exec_ns, seed=cfg.seed)
+            cfg.instrumento, relogio, custos or Custos.do_instrumento(cfg.instrumento), latencia_ns=cfg.latencia_exec_ns, seed=cfg.seed,
+            conversor=cfg.conversor)
         self.saidas = GestorSaidas()
         self.contas: dict[str, ContaBraco] = {}
         self.grupos: dict[str, list[ContaBraco]] = {}
@@ -238,7 +247,8 @@ class Orquestrador:
         cfg = self.cfg
         ks = KillSwitch(arquivo_flag=cfg.arquivo_emergencia, auditoria=self.registro.auditoria)
         motor = MotorRiscoPadrao(cfg.risco, cfg.instrumento, kill_switch=ks, auditoria=self.registro.auditoria,
-                                 eventos=self.eventos, grade=lambda d: calendario_b3.sessao_em(d, self.perfil))
+                                 eventos=self.eventos, grade=lambda d: calendario_b3.sessao_em(d, self.perfil),
+                                 conversor=cfg.conversor)
         oms = OMS(self.rel, {b.id: magic}, banco=self.registro.banco, auditoria=self.registro.auditoria,
                   simulada=True)
         self.sim.registrar_braco(b.id, magic)

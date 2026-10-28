@@ -33,12 +33,12 @@ from robowin.risco.usuarios import (
 COOKIE_USUARIO = "robowin_sessao_usuario"
 
 ROTULOS = {
-    "contratos_max": "Contratos por operação (máximo)",
-    "perda_max_operacao_brl": "Perda máxima por operação (R$)",
-    "perda_max_dia_brl": "Perda máxima no dia (R$)",
-    "perda_max_semana_brl": "Perda máxima na semana (R$)",
-    "dd_alerta_brl": "Drawdown de alerta (R$)",
-    "dd_max_brl": "Drawdown máximo (R$)",
+    "contratos_max": "Contratos por operação (máximo; em forex/CFD: lotes mínimos)",
+    "perda_max_operacao_brl": "Perda máxima por operação (moeda da conta)",
+    "perda_max_dia_brl": "Perda máxima no dia (moeda da conta)",
+    "perda_max_semana_brl": "Perda máxima na semana (moeda da conta)",
+    "dd_alerta_brl": "Drawdown de alerta (moeda da conta)",
+    "dd_max_brl": "Drawdown máximo (moeda da conta)",
     "operacoes_dia_max": "Operações por dia (máximo)",
     "perdas_seguidas_max": "Perdas seguidas antes de parar",
     "pausa_apos_perda_s": "Pausa após uma perda (s)",
@@ -50,6 +50,8 @@ ROTULOS = {
     "bloqueio_evento_min": "Bloqueio em torno de evento de agenda (min)",
     "ordens_min_max": "Ordens por minuto (máximo)",
     "tempo_min_livro_s": "Tempo mínimo de livro antes de entrar (s)",
+    "volume_max_lotes": "Volume máximo por posição em lotes (forex/CFD; 0 = usa contratos)",
+    "nocional_max_conta": "Nocional máximo por posição (moeda da conta; 0 = desligado)",
 }
 
 

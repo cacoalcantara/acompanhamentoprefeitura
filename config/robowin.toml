@@ -1,6 +1,7 @@
 [geral]
 modo = "simulacao"          # nunca "real" nesta etapa
 conta = "demo_mt5"          # interno | demo_mt5
+# moeda_conta = "BRL"       # opcional: moeda da conta (limites de risco nela); diferente da de lucro do simbolo sem cotacao de conversao no nucleo => entradas bloqueadas
 dados = "dados_locais"
 simbolo_base = "WIN"
 # Espelha UM braco (id) na conta DEMO via gateway (decisao/espelho.py). Vazio = desligado (padrao).
@@ -63,6 +64,7 @@ plataforma = "mt5"      # "mt5" (B3, conta netting, livro L2, ticks em ms) | "mt
 # servidor = ""
 # caminho_terminal = "C:/MT5/terminal64.exe"
 # offset_fixo_s = 0      # use se a calibracao automatica nao for confiavel fora do pregao
+# sufixo_simbolo = ""   # sufixo dos simbolos na corretora (ex.: ".m" => EURUSD.m) para `robowin perfil importar-do-terminal`
 
 [mm]
 demo_mm = false   # ponte do market making para a conta demo (mm/ponte_demo.py); EXCLUSIVA com [geral].espelhar

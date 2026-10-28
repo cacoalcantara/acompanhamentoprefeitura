@@ -190,7 +190,7 @@ def _executor(ctx: Contexto) -> ExecucaoDemo:
         ctx.ex = ExecucaoDemo(
             ctx.terminal,
             ConfigDemo(login=ctx.login, servidor=ctx.servidor, simbolo=ctx.simbolo, modo_config="demo_mt5",
-                       lote=ctx.perfil.lote, conta=ctx.caps.conta, msgs_por_min=ctx.msgs_por_min),
+                       lote=ctx.perfil.volume_unidade, conta=ctx.caps.conta, msgs_por_min=ctx.msgs_por_min),
             ctx.relogio, relogio_srv=ctx.rs)
     return ctx.ex
 
@@ -359,10 +359,25 @@ def a2_conta(ctx: Contexto) -> list[ResultadoEtapa]:
                reprovada("A2.3", f"{nome}: netting/hedging", c_marg,
                          f"margin_mode={est.margin_mode} incompativel com {ctx.plataforma.upper()} ({ctx.caps.conta}); "
                          "o projeto exige netting no MT5 e hedging no MT4"))
-    c_moeda = f"moeda da conta == moeda do perfil ({ctx.perfil.moeda})"
-    out.append(aprovada("A2.4", f"{nome}: moeda", c_moeda, f"{moeda} == {ctx.perfil.moeda}") if moeda == ctx.perfil.moeda.upper() else
-               reprovada("A2.4", f"{nome}: moeda", c_moeda,
-                         f"moeda da conta '{moeda or 'n/d'}' diverge da do perfil {ctx.perfil.moeda}: P&L e limites de risco ficariam em outra moeda"))
+    c_moeda = (f"moeda da conta == moeda do perfil ({ctx.perfil.moeda}) ou, em qualquer mercado (moeda_lucro do perfil), "
+               "par de conversao cotado na corretora (P&L e risco convertidos pela cotacao do instante)")
+    if moeda == ctx.perfil.moeda.upper():
+        out.append(aprovada("A2.4", f"{nome}: moeda", c_moeda, f"{moeda} == {ctx.perfil.moeda}"))
+    elif moeda and ctx.perfil.moeda_lucro:
+        from robowin.core.moedas import conversor_do_terminal
+        conv = conversor_do_terminal(ctx.terminal, ctx.perfil.moeda, moeda)
+        fator = conv.fator() if conv is not None else None
+        if conv is not None and fator is not None:
+            out.append(aprovada("A2.4", f"{nome}: moeda", c_moeda,
+                                f"conta {moeda}, lucro em {ctx.perfil.moeda}: conversao {conv.rota.descrever()} "
+                                f"(fator {fator:.6g} no instante)"))
+        else:
+            out.append(reprovada("A2.4", f"{nome}: moeda", c_moeda,
+                                 f"conta {moeda}, lucro em {ctx.perfil.moeda}: sem par de conversao cotado na corretora "
+                                 f"({'sem rota' if conv is None else conv.ultimo_motivo}): entradas seriam bloqueadas"))
+    else:
+        out.append(reprovada("A2.4", f"{nome}: moeda", c_moeda,
+                             f"moeda da conta '{moeda or 'n/d'}' diverge da do perfil {ctx.perfil.moeda}: P&L e limites de risco ficariam em outra moeda"))
     ctx.conta_ok = all(r.estado != REPROVADO for r in out)
     return out
 
@@ -400,6 +415,11 @@ def a3_contrato(ctx: Contexto) -> list[ResultadoEtapa]:
     info = ctx.terminal.symbol_info(cand.nome)
     obs = _specs_observadas(info)
     obs["valor_ponto_por_unidade"] = valor_ponto_brl(info) if info is not None else None
+    if info is not None and getattr(info, "trade_contract_size", None):  # qualquer mercado: dados do contrato
+        obs.update({k: getattr(info, k) for k in ("trade_contract_size", "digits", "point", "volume_max",
+                                                  "currency_base", "currency_margin", "trade_calc_mode", "swap_long",
+                                                  "swap_short", "swap_mode", "swap_rollover3days")
+                    if getattr(info, k, None) is not None})
     if perfil.a_confirmar:
         itens = "; ".join(perfil.a_confirmar_itens) or "valores sem fonte confirmada"
         return [
@@ -482,7 +502,14 @@ def a4_coleta(ctx: Contexto) -> list[ResultadoEtapa]:
 
     # A4.1 ticks e flags
     c41 = "ticks recebidos; (MT5) ticks de negocio com flags BUY/SELL e last > 0"
-    if ctx.caps.ticks_de_negocio:
+    if ctx.caps.ticks_de_negocio and not ctx.perfil.tem_negocios:
+        # forex/CFD/cripto na corretora: sem negocios publicos; o "volume" e de tick (contagem de cotacoes)
+        ok = n > 0
+        out.append((aprovada if ok else reprovada)(
+            "A4.1", f"{nome}: ticks e flags", c41 + f" ({ctx.perfil.classe}: so cotacoes bid/ask por natureza do mercado)",
+            f"{n} ticks de bid/ask (volume de tick; fluxo do agressor desligado por capacidade do instrumento)",
+            n_ticks=n))
+    elif ctx.caps.ticks_de_negocio:
         if comp + vend == 0 or negocios == 0:
             out.append(reprovada("A4.1", f"{nome}: ticks e flags", c41,
                                  f"{n} ticks mas nenhum de negocio com flag BUY/SELL (compra={comp}, venda={vend}, negocios={negocios}): "
@@ -512,7 +539,11 @@ def a4_coleta(ctx: Contexto) -> list[ResultadoEtapa]:
 
     # A4.3 livro
     c43 = "(MT5) market_book_add ok, snapshots recebidos e profundidade observada >= 1"
-    if not ctx.caps.livro:
+    if ctx.caps.livro and not ctx.perfil.aceita_book:
+        out.append(nao_verificavel("A4.3", f"{nome}: livro de ofertas", c43,
+                                   f"perfil {ctx.perfil.simbolo_base} sem livro (aceita_book = false; {ctx.perfil.classe}): "
+                                   "features de livro desligadas", aplicavel=False))
+    elif not ctx.caps.livro:
         out.append(nao_verificavel("A4.3", f"{nome}: livro de ofertas", c43,
                                    f"{ctx.plataforma.upper()} nao tem livro de ofertas (capacidade declarada): features de livro desligadas",
                                    aplicavel=False))
@@ -576,7 +607,7 @@ def a5_ordens(ctx: Contexto) -> list[ResultadoEtapa]:
         return [bloqueio]
     ex = _executor(ctx)
     out: list[ResultadoEtapa] = []
-    lote = ctx.perfil.lote
+    lote = ctx.perfil.volume_unidade
     tick = ctx.perfil.tick_pontos
     ticket_velho: int | None = None
     try:
