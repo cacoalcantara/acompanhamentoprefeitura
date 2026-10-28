@@ -674,7 +674,7 @@ string CmdOrdemAbrir(const string id, const string req)
    if(SltpEmSeguida && tipo <= OP_SELL && (sl > 0.0 || tp > 0.0))
      {
       ResetLastError();
-      bool ok = OrderModify(ticket, OrderOpenPrice(), sl, tp, 0, clrNONE);
+      bool ok = OrderModify(ticket, p_exec, sl, tp, 0, clrNONE); // p_exec (nao OrderOpenPrice): a selecao pode ter falhado
       int e = GetLastError();
       if(!ok && e != 1) // 1 = sem mudancas
         {
