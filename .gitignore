@@ -10,3 +10,5 @@ dados_locais/
 *.sqlite
 .env
 .claude/worktrees/
+relatorios/
+robowin-aceitacao-*.zip

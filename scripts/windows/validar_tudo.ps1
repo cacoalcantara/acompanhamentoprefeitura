@@ -40,11 +40,17 @@
   Pasta MQL4 da pasta de dados do terminal MT4 (so MT4).
 .PARAMETER Saida
   Pasta dos relatorios (padrao: relatorios).
+.PARAMETER SemTerminal
+  Execucao seca: roda so o que NAO exige terminal MT5/MT4 nem MetaEditor (passos 1-5, pendencias e o zip); pula a
+  compilacao do EA (6) e a aceitacao (7). Nao pode ser combinado com -ConfirmoContaDemo. E o modo usado pela CI
+  (job windows-scripts). Sem esta flag o comportamento e o de sempre.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\windows\validar_tudo.ps1
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\windows\validar_tudo.ps1 -ConfirmoContaDemo -Login 12345678 -Servidor "XPMT5-DEMO"
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\windows\validar_tudo.ps1 -SemTerminal
 #>
 param(
     [ValidateSet("mt5", "mt4")][string]$Plataforma = "mt5",
@@ -56,7 +62,8 @@ param(
     [int]$Repeticoes = 20,
     [string]$MetaEditor = "",
     [string]$PastaMql4 = "",
-    [string]$Saida = "relatorios"
+    [string]$Saida = "relatorios",
+    [switch]$SemTerminal
 )
 
 $ErrorActionPreference = "Continue"
@@ -64,6 +71,13 @@ $raiz = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location -LiteralPath $raiz
 
 Write-Host "AVISO: validar_tudo.ps1 foi escrito sem poder ser executado no ambiente de desenvolvimento (Linux); se um passo falhar por motivo do script, me envie a mensagem." -ForegroundColor Yellow
+if ($SemTerminal -and $ConfirmoContaDemo) {
+    Write-Host "ERRO: -SemTerminal (execucao seca) nao pode ser combinado com -ConfirmoContaDemo (a aceitacao exige o terminal)." -ForegroundColor Red
+    exit 2
+}
+if ($SemTerminal) {
+    Write-Host "MODO -SemTerminal (execucao seca): sem terminal MT5/MT4, sem MetaEditor e sem ordens; os passos 6 e 7 serao pulados." -ForegroundColor Yellow
+}
 Write-Host "SOMENTE CONTA DEMO. Plataforma: $Plataforma. Ordens de teste: $(if ($ConfirmoContaDemo) { 'SIM (-ConfirmoContaDemo)' } else { 'NAO (sem a flag so ha leitura)' })"
 
 $pasta = Join-Path $raiz $Saida
@@ -115,7 +129,9 @@ Passo "5. robowin verificar" { uv run robowin verificar } "05-verificar.txt"
 uv run robowin verificar --json 2>$null | Out-File -Encoding utf8 -FilePath (Join-Path $pasta "05-verificar.json")
 
 # --- 6. compilar o EA (MT4) -----------------------------------------------------------------------------------------
-if ($Plataforma -eq "mt4") {
+if ($SemTerminal) {
+    Write-Host "6. compilar o EA: pulado (-SemTerminal; a CI tenta compilar no job mql)"
+} elseif ($Plataforma -eq "mt4") {
     $args6 = @("-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "compilar_ea.ps1"), "-Log", (Join-Path $pasta "06-compilar-ea-metaeditor.log"))
     if ($MetaEditor) { $args6 += @("-MetaEditor", $MetaEditor) }
     if ($PastaMql4) { $args6 += @("-PastaMql4", $PastaMql4) }
@@ -184,7 +200,9 @@ Get-ChildItem -LiteralPath $pasta -Recurse -File | ForEach-Object {
         $manifesto.Add("$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)  $rel")
     }
 }
-$linhas = @("MANIFESTO do pacote de aceitacao do robowin", "Gerado em: $(Get-Date -Format s)", "Plataforma: $Plataforma", "")
+$linhas = @("MANIFESTO do pacote de aceitacao do robowin", "Gerado em: $(Get-Date -Format s)", "Plataforma: $Plataforma")
+if ($SemTerminal) { $linhas += "Modo: -SemTerminal (execucao seca; sem terminal, sem compilacao do EA, sem aceitacao)" }
+$linhas += ""
 $linhas += "Passos:"
 $resumo | ForEach-Object { $linhas += "  $($_.Passo): $($_.Resultado)" }
 $linhas += ""
