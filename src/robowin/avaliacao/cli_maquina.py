@@ -18,8 +18,11 @@ from . import maquina_do_tempo as mt
 
 
 def piscina_de_armazem(raiz: str | Path, perfil: PerfilInstrumento, *, sessoes: int = 60,
-                       intervalo_s: int = mt.INTERVALO_PADRAO_S) -> mt.PiscinaSessoes:
-    """Le as ultimas ``sessoes`` datas do armazem de ticks para o ativo do perfil e as converte em barras."""
+                       intervalo_s: int = mt.INTERVALO_PADRAO_S, antes_de: dt.date | None = None) -> mt.PiscinaSessoes:
+    """Le as ultimas ``sessoes`` datas do armazem de ticks para o ativo do perfil e as converte em barras.
+
+    ``antes_de`` (opcional): so datas ESTRITAMENTE anteriores (causal; usado pelo nucleo ao vivo com o pregao
+    corrente). Nenhum tick de ``antes_de`` ou posterior e lido."""
     from robowin.dados.ticks import ArmazenamentoTicks
     raiz = Path(raiz)
     if not raiz.is_dir():
@@ -36,7 +39,7 @@ def piscina_de_armazem(raiz: str | Path, perfil: PerfilInstrumento, *, sessoes: 
             "dados contaminados: mistura de simbolos sinteticos e reais no mesmo ativo; separe os diretorios")
     sintetico = bool(arm.eh_sintetico or sinteticos == {True})
     datas = sorted({(d, s) for s in simbolos for d in arm.datas(s)})
-    ultimas = sorted({d for d, _ in datas})[-sessoes:]
+    ultimas = sorted({d for d, _ in datas if antes_de is None or d < antes_de})[-sessoes:] if sessoes > 0 else []
     ticks = []
     for d in ultimas:
         for s in simbolos:

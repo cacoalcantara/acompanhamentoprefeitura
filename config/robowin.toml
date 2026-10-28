@@ -36,6 +36,13 @@ modelo = "anthropic:claude-haiku-5-5"
 veto_por_odds = false      # true: bloqueia a entrada se a fracao de alvos entre os desfechos resolvidos ficar
                            # abaixo do equilibrio liquido de custos + margem (motivo rotulado "veto_por_odds")
 margem_veto_odds = 0.05    # margem somada ao equilibrio liquido (fracao: 0.05 = 5 pontos percentuais)
+# `robowin nucleo` (ao vivo): piscina montada do armazem de ticks (Parquet) so com pregoes ANTERIORES ao corrente e do
+# mesmo ativo; mistura sintetico/real e recusada. Sem sessoes suficientes o nucleo roda SEM avaliador (motivo em
+# incidentes). Ligada por padrao so como EVIDENCIA ao revisor (o veto acima continua desligado).
+odds_nucleo = true
+odds_nucleo_min_sessoes = 20   # minimo de sessoes completas anteriores (nunca abaixo de 20, o minimo da simulacao)
+odds_nucleo_sessoes = 60       # quantas sessoes anteriores (as mais recentes) entram na piscina
+odds_nucleo_dados = ""         # armazem de ticks; vazio = <[geral].dados>/ticks
 
 [prazos]
 imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_ticks = 4 }

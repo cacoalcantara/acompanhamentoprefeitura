@@ -9,14 +9,27 @@ confirma o kill switch ponta a ponta (gateway travado + posicao zerada) para o p
 Falha segura: lacuna de sequencia do PUB/SUB, heartbeat do gateway ausente ou dado velho bloqueiam novas
 entradas; saidas e protecao continuam. O nucleo envia heartbeat ao gateway (sem ele o gateway bloqueia
 ordens novas e depois zera a posicao demo).
+
+Maquina do Tempo ao vivo (``[decisao].odds_nucleo``, ligada por padrao SO como evidencia ao revisor;
+``veto_por_odds`` continua false): ``piscina_odds_nucleo`` monta a piscina de sessoes a partir do armazem de ticks
+(Parquet) com SOMENTE datas estritamente anteriores ao pregao corrente e simbolos do mesmo ativo/perfil. Mistura de
+sintetico e real (ou piscina sintetica com o nucleo em dados reais) e RECUSADA. Sem dados suficientes
+(``odds_nucleo_min_sessoes``) o avaliador nao e ligado (comportamento identico ao anterior) e o motivo vai para
+``incidentes`` (informativo). Se o gateway se revelar DUBLE (dados sinteticos), o avaliador e desligado: nunca
+mistura piscina real com feed sintetico.
 """
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from robowin.avaliacao import maquina_do_tempo as mt
+from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.tipos import LivroSnapshot, NivelBook, Tick
 
 from .orquestrador import Orquestrador
@@ -36,6 +49,101 @@ def tick_de_dict(d: dict[str, Any]) -> Tick:
 
 def livro_de_dict(d: dict[str, Any]) -> LivroSnapshot:
     return LivroSnapshot(t_utc_ns=int(d["t_utc_ns"]), niveis=tuple(NivelBook(**n) for n in d["niveis"]))
+
+
+# ============================================================================ Maquina do Tempo ao vivo ======
+ORIGEM_ODDS = "maquina_do_tempo"
+
+
+@dataclass(frozen=True)
+class ConfigOddsNucleo:
+    ativo: bool = True  # liga a evidencia ao revisor no nucleo (o veto segue em [decisao].veto_por_odds = false)
+    min_sessoes: int = mt.MIN_SESSOES  # abaixo disto o avaliador NAO e ligado (nunca menos que mt.MIN_SESSOES)
+    sessoes: int = 60  # sessoes anteriores mais recentes lidas do armazem
+    dados: str = ""  # armazem de ticks (Parquet); vazio = <[geral].dados>/ticks
+
+    @property
+    def min_efetivo(self) -> int:
+        return max(int(self.min_sessoes), mt.MIN_SESSOES)
+
+
+def config_odds_nucleo(cfg: Mapping[str, Any] | None) -> ConfigOddsNucleo:
+    """Le ``[decisao]`` (``odds_nucleo``, ``odds_nucleo_min_sessoes``, ``odds_nucleo_sessoes``, ``odds_nucleo_dados``)."""
+    sec = dict((cfg or {}).get("decisao", {}) or {})
+    b = ConfigOddsNucleo()
+    return ConfigOddsNucleo(ativo=bool(sec.get("odds_nucleo", b.ativo)),
+                            min_sessoes=int(sec.get("odds_nucleo_min_sessoes", b.min_sessoes)),
+                            sessoes=int(sec.get("odds_nucleo_sessoes", b.sessoes)),
+                            dados=str(sec.get("odds_nucleo_dados", b.dados) or ""))
+
+
+@dataclass(frozen=True)
+class PiscinaNucleo:
+    """Resultado da montagem: ``piscina`` None => o nucleo roda SEM avaliador (motivo registrado)."""
+    piscina: mt.PiscinaSessoes | None
+    motivo: str
+    severidade: str = "info"  # info (sem base) | alerta (recusa por contaminacao/mistura)
+    hoje: dt.date | None = None
+    raiz: str = ""
+
+    @property
+    def ligada(self) -> bool:
+        return self.piscina is not None
+
+    def detalhe(self) -> str:
+        if self.piscina is None:
+            return f"Maquina do Tempo NAO ligada no nucleo: {self.motivo}"[:300]
+        datas = self.piscina.datas()
+        return (f"Maquina do Tempo ligada no nucleo (evidencia ao revisor; SIMULACAO, nao e previsao): "
+                f"{len(datas)} sessoes completas anteriores a {self.hoje}, todas < pregao corrente; origem "
+                f"{'SINTETICO' if self.piscina.sintetico else 'real'}")[:300]
+
+    def registrar(self, registro: Any, t_ns: int) -> None:
+        registro.incidente(t_ns=t_ns, origem=ORIGEM_ODDS, severidade="info" if self.ligada else self.severidade,
+                           detalhe=self.detalhe())
+
+
+def piscina_odds_nucleo(cfg: Mapping[str, Any] | None, perfil: PerfilInstrumento, hoje: dt.date, *,
+                        raiz: str | Path | None = None, config_path: str | Path | None = None,
+                        dados_sinteticos: bool = False) -> PiscinaNucleo:
+    """Piscina CAUSAL do nucleo: so datas < ``hoje`` (pregao corrente), so simbolos do ativo do perfil.
+
+    ``dados_sinteticos``: o nucleo roda sobre dados sinteticos? (ao vivo: False). A origem da piscina tem de
+    coincidir: piscina sintetica com nucleo real (ou vice-versa) e recusada, assim como armazem com mistura."""
+    from robowin.avaliacao.cli_maquina import piscina_de_armazem
+    from robowin.core.config import dir_dados
+
+    from .odds import config_odds
+
+    cn = config_odds_nucleo(cfg)
+    if not cn.ativo:
+        return PiscinaNucleo(None, "desligada por [decisao].odds_nucleo = false", hoje=hoje)
+    base = Path(raiz) if raiz is not None else (Path(cn.dados) if cn.dados else dir_dados(config_path) / "ticks")
+    if not base.is_dir():
+        return PiscinaNucleo(None, f"sem dados: armazem de ticks {base} nao encontrado", hoje=hoje, raiz=str(base))
+    try:
+        piscina = piscina_de_armazem(base, perfil, sessoes=cn.sessoes, intervalo_s=config_odds(cfg).intervalo_s,
+                                     antes_de=hoje)
+    except mt.ErroSessoesInsuficientes as e:
+        return PiscinaNucleo(None, f"sem dados: {e}", hoje=hoje, raiz=str(base))
+    except mt.ErroMaquinaDoTempo as e:  # contaminacao (mistura sintetico/real): recusa, como `maquina-do-tempo`
+        return PiscinaNucleo(None, f"RECUSADO: {e}", "alerta", hoje, str(base))
+    except Exception as e:  # leitura falhou: a evidencia e opcional, o nucleo segue sem ela
+        return PiscinaNucleo(None, f"falha ao ler o armazem: {type(e).__name__}: {e}", "aviso", hoje, str(base))
+    if bool(piscina.sintetico) != bool(dados_sinteticos):
+        return PiscinaNucleo(None, "RECUSADO: mistura de dados sinteticos e reais (piscina "
+                             f"{'SINTETICA' if piscina.sintetico else 'real'} com nucleo em dados "
+                             f"{'SINTETICOS' if dados_sinteticos else 'reais'})", "alerta", hoje, str(base))
+    futuras = [s.data for s in piscina.sessoes if s.data >= hoje]
+    if futuras:  # defensivo: nunca deveria acontecer (antes_de filtra na leitura)
+        return PiscinaNucleo(None, f"RECUSADO: sessao(oes) nao anteriores ao pregao corrente: {futuras[:3]}",
+                             "alerta", hoje, str(base))
+    n = len(piscina.sessoes)
+    if n < cn.min_efetivo:
+        return PiscinaNucleo(None, f"sessoes insuficientes: {n} completas anteriores a {hoje} "
+                             f"(minimo {cn.min_efetivo}; descartadas {len(piscina.descartadas)})", hoje=hoje,
+                             raiz=str(base))
+    return PiscinaNucleo(piscina, "", hoje=hoje, raiz=str(base))
 
 
 class FonteEventos(Protocol):
@@ -116,6 +224,11 @@ class Nucleo:
                 self._marcou_duble = True
                 o.registro.incidente(t_ns=o._agora(), origem=ORIGEM_SINTETICO, severidade="info",
                                      detalhe="gateway em modo DUBLE: dados SINTETICOS (nao e mercado)")
+                av = o.avaliador_odds
+                if av is not None and not (av.piscina is not None and av.piscina.sintetico):
+                    o.avaliador_odds = None  # nunca mistura piscina real com feed sintetico
+                    o.registro.incidente(t_ns=o._agora(), origem=ORIGEM_ODDS, severidade="info",
+                                         detalhe="Maquina do Tempo desligada: gateway DUBLE (sintetico) com piscina real")
             caps = d.get("capacidades") or {}
             if caps.get("livro") is False and not self._avisou_sem_livro:  # plataforma sem livro (MT4)
                 self._avisou_sem_livro = True
