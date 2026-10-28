@@ -145,10 +145,14 @@ def executar_diagnostico(
     return rel
 
 
+AVISO_EA_MT4 = "AVISO: EA mql4/RobowinBridge.mq4 NAO compilado/verificado em MT4 real"
+
+
 def _origem(terminal: Any, rotulo: str) -> str:
+    aviso = f" - {AVISO_EA_MT4}" if rotulo == "MT4" else ""
     if getattr(terminal, "eh_duble", False):
-        return f"DUBLE {rotulo} (dados sinteticos; NAO e o terminal real)"
-    return f"terminal {rotulo} real" + (" (ponte EA)" if rotulo == "MT4" else "")
+        return f"DUBLE {rotulo} (dados sinteticos; NAO e o terminal real){aviso}"
+    return f"terminal {rotulo} real" + (" (ponte EA)" if rotulo == "MT4" else "") + aviso
 
 
 def texto_relatorio(rel: dict[str, Any]) -> str:

@@ -199,6 +199,15 @@ def test_sem_resposta_vira_incerta_e_nunca_reenvia():
     assert not a.ex.bloqueada_incerta
 
 
+def test_incerta_do_mt4_tolera_resolucao_de_1s_do_tempo_do_ea():
+    a = montar_exec4()
+    a.d.injetar_falhas(Falha4(None, executa=True))
+    a.ex.enviar(cmd(Lado.COMPRA, sl=99900.0, iid="x3"))
+    a.ex._incertas["x3"]["t_srv_ms"] += 1700  # deal gravado em segundos inteiros: pode parecer 1,7 s ANTES do envio
+    a.rel.avancar(1_000_000_000)
+    assert a.ex.reconciliar_incertas() == {"x3": EstadoOrdem.EXECUTADA}
+
+
 def test_incerta_sem_efeito_resolve_por_prazo():
     a = montar_exec4(cfg_extra={"espera_incerta_s": 1.0})
     a.d.injetar_falhas(Falha4(None, executa=False))

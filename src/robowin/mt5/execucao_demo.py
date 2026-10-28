@@ -407,7 +407,7 @@ class ExecucaoDemo:
             }
         else:
             mm = self.cfg.modo_mm and cmd.tipo == "limitada"
-            if pos is not None and not (mm and (antes > 0) != compra):  # modo MM: so a limitada que REDUZ a posicao
+            if pos is not None and not (mm and (antes > 0) != compra and not self.hedging):  # MM: so a limitada que REDUZ (netting)
                 raise self._recusa("ja ha posicao aberta: sem piramidacao e sem inversao por entrada")
             pend = self._pendentes()
             total_pend = sum(float(o.volume_current) for o in pend) / self.cfg.lote
@@ -601,6 +601,7 @@ class ExecucaoDemo:
             return {}
         usados: set[int] = set()
         resolvidas: dict[str, EstadoOrdem] = {}
+        tol_ms = 2000 if self.hedging else 1000  # MT4: tempo em SEGUNDOS (truncado) + erro do offset => folga >= 2 s
         for iid, inc in sorted(self._incertas.items(), key=lambda kv: kv[1]["t_ns"]):
             if inc["acao"] != C.ACAO_DEAL and inc["acao"] != C.ACAO_PENDING:
                 # SLTP/REMOVE incertos: a releitura de posicoes/ordens ja reflete o estado; so o prazo resolve
@@ -608,13 +609,13 @@ class ExecucaoDemo:
                     resolvidas[iid] = EstadoOrdem.CANCELADA
                 continue
             achou = next((d for d in deals if int(d.ticket) not in usados and int(d.magic) == inc["magic"]
-                          and int(d.reason) == C.RAZAO_EXPERT and int(d.time_msc) >= inc["t_srv_ms"] - 1000), None)
+                          and int(d.reason) == C.RAZAO_EXPERT and int(d.time_msc) >= inc["t_srv_ms"] - tol_ms), None)
             if achou is not None:
                 usados.add(int(achou.ticket))
                 resolvidas[iid] = EstadoOrdem.EXECUTADA
                 continue
             pend = next((o for o in ordens if int(o.magic) == inc["magic"]
-                         and int(o.time_setup_msc) >= inc["t_srv_ms"] - 1000), None)
+                         and int(o.time_setup_msc) >= inc["t_srv_ms"] - tol_ms), None)
             if pend is not None:
                 resolvidas[iid] = EstadoOrdem.ACEITA
                 continue

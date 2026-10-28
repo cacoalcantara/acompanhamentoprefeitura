@@ -255,3 +255,17 @@ def test_servidor_de_netting_continua_recusando_hedging_e_vice_versa():
     from robowin.mt5.execucao_demo import GuardaDemoViolada
     with pytest.raises(GuardaDemoViolada, match="hedging"):
         a.ex.verificar_guarda()
+
+
+def test_modo_mm_nao_vale_em_hedging_limitada_nao_reduz_e_gateway_recusa(tmp_path):
+    from test_mt4_gateway_capacidades import montar_gw4
+
+    from robowin.mt5.execucao_demo import GuardaDemoViolada
+    a = montar_exec4(cfg_extra={"modo_mm": True})
+    bid, ask = float(a.con.symbol_info_tick(SIMB).bid), float(a.con.symbol_info_tick(SIMB).ask)
+    a.ex.enviar(cmd(Lado.COMPRA, sl=bid - 100))
+    assert len(a.d.posicoes) == 1
+    ack = a.ex.enviar(cmd(Lado.VENDA, tipo="limitada", preco=ask + 50, sl=ask + 150))
+    assert "ja ha posicao" in ack.comentario and len(a.d.posicoes) == 1 and a.d.pendentes == {}  # sem 'reduz': nada de 2a perna
+    with pytest.raises(GuardaDemoViolada, match="modo_mm"):
+        montar_gw4(tmp_path, modo_mm=True)

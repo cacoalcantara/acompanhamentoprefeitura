@@ -119,6 +119,8 @@ class Gateway:
     def iniciar(self) -> None:
         if self.caps.plataforma != normalizar_plataforma(self.cfg.plataforma):
             raise GuardaDemoViolada(f"plataforma configurada '{self.cfg.plataforma}' difere do terminal '{self.caps.plataforma}'")
+        if self.cfg.modo_mm and self.caps.conta == "hedging":
+            raise GuardaDemoViolada("modo_mm nao e suportado em conta hedging (MT4): a limitada 'que reduz' abriria outra posicao")
         if not self.t.initialize():
             raise GuardaDemoViolada(f"initialize do MT5 falhou: {self.t.last_error()}")
         est = ler_estado_conta(self.t)
