@@ -36,16 +36,20 @@ class ExecucaoBacktest:
         politica: PoliticaExecucao | None = None, janela_duplicada_s: float = 2.0, fator_fila: float = 1.0,
         ao_ordem: Callable[[OrdemOMS], None] | None = None,
         ao_kill: Callable[[EventoKill], None] | None = None,
+        conversor: Callable[[int], float | None] | None = None,
     ) -> None:
+        """`conversor(t_ns)`: fator moeda de lucro -> moeda da conta no instante (ex.: `core.moedas.ConversorHistorico`
+        sobre os ticks gravados do par de conversao, sem olhar o futuro); P&L, custos e limites saem na moeda da conta."""
         self.ins, self.relogio, self.latencia = instrumento, relogio, latencia
         self.bracos = list(bracos)
         self.magics = {b: MAGIC_BASE + i for i, b in enumerate(self.bracos)}
         self.sim = SimuladorExecucao(instrumento, relogio, custos, latencia_ns=latencia, seed=seed,
-                                     slippage=slippage, fator_fila=fator_fila)
+                                     slippage=slippage, fator_fila=fator_fila, conversor=conversor)
         for b, m in self.magics.items():
             self.sim.registrar_braco(b, m)
         self.kill = kill or KillSwitch()
-        self.motor = MotorRiscoPadrao(cfg_risco, instrumento, kill_switch=self.kill, eventos=eventos_agenda)
+        self.motor = MotorRiscoPadrao(cfg_risco, instrumento, kill_switch=self.kill, eventos=eventos_agenda,
+                                      conversor=conversor)
         self.oms = OMS(relogio, self.magics, banco=banco, janela_duplicada_s=janela_duplicada_s, simulada=True)
         self.rot = Roteador("simulado", instrumento, relogio, self.oms, self.motor, simulador=self.sim,
                             politica=politica or PoliticaPadrao(), antimanipulacao=antimanipulacao,

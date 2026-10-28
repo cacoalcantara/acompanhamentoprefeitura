@@ -167,6 +167,36 @@ class FeedCotacoes:
         return self._ult.get(simbolo)
 
 
+class ConversorHistorico:
+    """Fator de conversao a partir de cotacoes GRAVADAS (backtest/replay): para cada instante usa a ULTIMA cotacao
+    de cada perna com t <= t_ref (nunca olha o futuro) e recusa cotacao mais velha que `idade_max_s`.
+
+    `series[simbolo]` = sequencia ordenada de (t_ns, bid, ask) no mesmo relogio (UTC) dos ticks do backtest."""
+
+    def __init__(self, rota: RotaConversao, series: dict[str, Sequence[tuple[int, float, float]]], *,
+                 idade_max_s: float = 120.0) -> None:
+        import bisect
+        self._bisect = bisect.bisect_right
+        self.rota = rota
+        self.idade_max_s = idade_max_s
+        self._t = {s: [int(x[0]) for x in v] for s, v in series.items()}
+        self._q = {s: list(v) for s, v in series.items()}
+
+    def _cotacao(self, simbolo: str, t_ns: int) -> Cotacao | None:
+        ts = self._t.get(simbolo)
+        if not ts:
+            return None
+        i = self._bisect(ts, t_ns) - 1
+        if i < 0:
+            return None
+        t, bid, ask = self._q[simbolo][i]
+        return float(bid), float(ask), int(t) // 1_000_000
+
+    def __call__(self, t_ns: int) -> float | None:
+        conv = ConversorMoeda(self.rota, lambda s: self._cotacao(s, t_ns), idade_max_s=self.idade_max_s)
+        return conv.fator(t_ns // 1_000_000)
+
+
 def conversor_do_terminal(terminal: Any, de: str, para: str, *, idade_max_s: float = 120.0,
                           intermediarias: Sequence[str] = INTERMEDIARIAS_PADRAO) -> ConversorMoeda | None:
     """Conversor que le `symbol_info_tick` do terminal a cada consulta (relogio do SERVIDOR: t_ms = time_msc).

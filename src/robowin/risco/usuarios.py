@@ -221,7 +221,9 @@ def modelo_inicial(perfil: PerfilInstrumento) -> ConfigRisco:
         "contratos_max": 1, "perda_max_operacao_brl": op, "perda_max_dia_brl": 2 * op, "perda_max_semana_brl": 5 * op,
         "dd_alerta_brl": 6 * op, "dd_max_brl": 8 * op, "operacoes_dia_max": 3, "perdas_seguidas_max": 2,
         "pausa_apos_perda_s": 900, "stop_max_pontos": float(stop), "slippage_folga_pontos": float(folga),
-        "bloqueio_evento_min": 15, "ordens_min_max": 6})
+        "bloqueio_evento_min": 15, "ordens_min_max": 6,
+        # forex/CFD (lote fracionario): 1 unidade = 1 lote minimo; o teto em lotes fica explicito no modelo
+        "volume_max_lotes": float(perfil.volume_unidade) if perfil.volume_min is not None else 0.0})
     return validar_coerencia(cfg)
 
 
