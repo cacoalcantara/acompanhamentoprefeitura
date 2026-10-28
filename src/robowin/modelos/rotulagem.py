@@ -47,9 +47,9 @@ class Custos:
 
     @classmethod
     def do_perfil(cls, perfil: PerfilInstrumento, d: dt.date | None = None) -> Custos:
-        """Tarifas B3 do perfil (2 lados, vigentes em `d`; padrao: a mais recente) + 1 tick de slippage no stop."""
-        t = perfil.tarifa_em(d) if d else max(perfil.tarifas, key=lambda x: x.vigente_desde)
-        return cls(tarifas_corretagem_brl=2 * t.tarifa_lado_brl, slippage_stop_pontos=perfil.tick_pontos)
+        """Tarifas B3 do perfil (2 lados, vigentes em `d`; padrao: a mais recente) ou comissao por lote (forex/CFD)
+        + 1 tick de slippage no stop."""
+        return cls(tarifas_corretagem_brl=2 * perfil.custo_lado_unidade(d), slippage_stop_pontos=perfil.tick_pontos)
 
 
 @dataclass(frozen=True)

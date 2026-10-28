@@ -248,6 +248,15 @@ class PerfilInstrumento(Base):
             raise ValueError(f"sem tarifa B3 vigente em {d} para {self.simbolo_base}")
         return max(vig, key=lambda t: t.vigente_desde)
 
+    def custo_lado_unidade(self, d: dt.date | None = None) -> float:
+        """Custo por lado e por unidade do robo, na moeda de lucro: tarifa de bolsa vigente em `d` (padrao: a mais
+        recente; nenhuma em forex/CFD) + comissao por lote da corretora (x volume da unidade). Sem corretagem."""
+        tarifa = 0.0
+        if self.tarifas:
+            t = self.tarifa_em(d) if d else max(self.tarifas, key=lambda x: x.vigente_desde)
+            tarifa = t.tarifa_lado_brl
+        return tarifa + float(self.comissao_lote_lado or 0.0) * self.volume_unidade
+
     def instrumento(self, simbolo: str | None = None, vencimento: dt.date | str | None = None, **extra: Any) -> Instrumento:
         """`Instrumento` operacional deste perfil (``simbolo`` da corretora; por padrao o proprio simbolo_base)."""
         if self.volume_min is not None:
