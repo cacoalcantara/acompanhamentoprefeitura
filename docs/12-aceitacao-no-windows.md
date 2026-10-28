@@ -60,6 +60,24 @@ como aceitação**).
 > desenvolvimento (Linux). Se um deles falhar por motivo do próprio script (caminho do MetaEditor, codificação do log),
 > compile pelo MetaEditor (F7) e me mande a mensagem.
 
+### O que a CI já conferiu antes de chegar a você
+
+A CI do GitHub roda num Windows de verdade (sem terminal nem conta) e cobre a parte dos scripts que não depende da
+sua máquina (detalhes em `docs/11-validacao-sandbox.md`):
+
+- **Todos** os `scripts\windows\*.ps1` passam no parser do PowerShell 7 e do Windows PowerShell 5.1, são ASCII puro e
+  não têm erro do PSScriptAnalyzer (job `windows-scripts`).
+- `instalar.ps1 -SemTerminal` e `validar_tudo.ps1 -SemTerminal` rodam de ponta a ponta (instalação, pytest,
+  constantes do MT5, lint do EA, `robowin verificar`, pendências e o zip com `MANIFESTO.txt`). Você também pode usar
+  `-SemTerminal` para ensaiar o script sem o terminal aberto; ele pula a compilação do EA e a aceitação, e recusa
+  (código 2) se for combinado com `-ConfirmoContaDemo`. **Ensaio não vale como aceitação.**
+- Job `mql` (**experimental**): instala o MetaTrader oficial no runner e tenta compilar `RobowinBridge.mq4` com
+  `compilar_ea.ps1` e os headers do `mql-zmq`. Se só houver o MetaEditor do MT5, o resultado é só indício (ele pode
+  não compilar `.mq4`); a compilação que vale continua sendo a do **seu** MetaEditor do MT4 (passo 6).
+
+O que a CI **não** cobre: terminal MT5/MT4, conta DEMO, ordens, pregão, latência real, chaves de API e o EA rodando. Isso
+é exatamente o que este roteiro mede na sua máquina.
+
 ## Decisões que só você toma
 
 Duas decisões não podem ser tomadas por nenhum agente nem script: **aprovar a política de risco** e **confirmar os
