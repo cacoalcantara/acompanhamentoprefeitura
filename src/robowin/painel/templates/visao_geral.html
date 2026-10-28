@@ -3,7 +3,8 @@
 {% block conteudo %}
 <h1>Visão geral e emergência</h1>
 {% if msg == "emergencia" %}<p class="aviso-critico">Flag gravada; aguardando confirmação do gateway. O painel apenas grava o arquivo EMERGENCIA e registra um incidente: não confirma que o sistema foi zerado.</p>{% endif %}
-{% if flag %}{% if confirmacao and confirmacao.confirmado %}<p class="aviso-critico">O arquivo EMERGENCIA está presente e o gateway/núcleo confirmou o acionamento ({{ confirmacao.fonte }}).</p>
+{% if flag %}{% if confirmacao and confirmacao.confirmado %}<p class="aviso-critico"><strong>Confirmado:</strong> o arquivo EMERGENCIA está presente e o gateway/núcleo confirmou o acionamento ({{ confirmacao.fonte }}).</p>
+{% elif confirmacao and confirmacao.gateway %}<p class="aviso-critico">O arquivo EMERGENCIA está presente e o gateway está reportando, mas ainda NÃO reportou a posição zerada com o gateway travado depois da flag: aguardando confirmação do gateway. Não presuma que o sistema esteja zerado — confira o MT5.</p>
 {% else %}<p class="aviso-critico">O arquivo EMERGENCIA está presente, mas nenhum incidente de emergência do gateway/núcleo foi registrado depois dele: flag gravada; aguardando confirmação do gateway. Não presuma que o sistema esteja zerado — confira o MT5.</p>{% endif %}{% endif %}
 {% if not banco_existe %}<p class="aviso">Banco de dados ainda não encontrado. O painel mostra apenas informações de configuração.</p>{% endif %}
 <div class="grade">

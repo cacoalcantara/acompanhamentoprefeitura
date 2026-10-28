@@ -3,6 +3,9 @@ modo = "simulacao"          # nunca "real" nesta etapa
 conta = "demo_mt5"          # interno | demo_mt5
 dados = "dados_locais"
 simbolo_base = "WIN"
+# Espelha UM braco (id) na conta DEMO via gateway (decisao/espelho.py). Vazio = desligado (padrao).
+# Exige conta = "demo_mt5", gateway no ar, conta demo zerada e SL em toda entrada; exclusivo com [mm].demo_mm.
+espelhar = ""
 
 [ia]
 orcamento_mensal_usd = 400
@@ -29,7 +32,7 @@ plataforma = "mt5"      # "mt5" (B3, conta netting, livro L2, ticks em ms) | "mt
 # offset_fixo_s = 0      # use se a calibracao automatica nao for confiavel fora do pregao
 
 [mm]
-demo_mm = false   # ponte para a conta demo nao implementada; ligar levanta NotImplementedError
+demo_mm = false   # ponte do market making para a conta demo (mm/ponte_demo.py); EXCLUSIVA com [geral].espelhar
 
 # Exemplo de braco extra com outra IA (descomente e ajuste). O modelo precisa estar em config/modelos.toml.
 # [[bracos]]

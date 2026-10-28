@@ -11,7 +11,7 @@ from robowin.mm.avellaneda_stoikov import (
     preco_reserva,
     spread_otimo,
 )
-from robowin.mm.config import ConfigMM, exigir_simulador_apenas
+from robowin.mm.config import ConfigMM
 from robowin.mm.cotacao import CotadorMM
 from robowin.mm.markouts import Preenchimento, markouts
 from robowin.mm.simulacao import simular_mm
@@ -138,11 +138,13 @@ def test_cotador_execucao_remove_ordem_do_lado():
     assert "bid" not in cot.vivas and "ask" in cot.vivas
 
 
-def test_flag_demo_mm_desligada_por_padrao_e_nao_implementada():
+def test_flag_demo_mm_desligada_por_padrao_e_ligada_nao_levanta_mais():
     assert ConfigMM().demo_mm is False
-    exigir_simulador_apenas(ConfigMM())
-    with pytest.raises(NotImplementedError):
-        exigir_simulador_apenas(ConfigMM(demo_mm=True))
+    cfg = ConfigMM(demo_mm=True)  # a ponte com a demo existe (mm/ponte_demo.py): a flag nao levanta NotImplementedError
+    assert cfg.demo_mm is True
+    d = gerar(ConfigSintetico.do_perfil(WIN, seed=5, n_ticks=3000))
+    r = simular_mm(d.ticks, d.livros, CotadorMM(params=P, cfg=cfg), instrumento=INS_WIN, seed=1)  # simulador segue valendo
+    assert r.max_abs_estoque <= 1
 
 
 def test_simulacao_mm_respeita_estoque_unitario_e_orcamento():

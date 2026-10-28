@@ -210,6 +210,7 @@ class Orquestrador:
         self.ticks_processados = 0
         self.erros_braco: Counter[str] = Counter()
         self.encerrada = False
+        self.espelho: Any = None  # EspelhoDemo (decisao/espelho.py): espelha UM braco na conta DEMO; None => desligado
         for i, b in enumerate(bracos):
             self._criar_conta(b, 1001 + i)
         self._ligar_controles()
@@ -390,6 +391,8 @@ class Orquestrador:
             self.registro.latencia(
                 CarimboLatencia(etapa="ordem_para_fill", braco=conta.braco.id, t_ini_ns=conta.t_envio_entrada_ns,
                                 t_fim_ns=e.execucao.t_ns, injetado=True), t_ns=t)
+        self._espelhar(conta, t, "espelhar_entrada", t, pos, meta.intencao, meta.stop_pontos, meta.alvo_pontos,
+                       meta.tempo_max_s)
 
     def _fechar_posicao(self, conta: ContaBraco, tr: Trade, t: int) -> None:
         braco = conta.braco.id
@@ -407,6 +410,7 @@ class Orquestrador:
         conta.eventos_posicao.append("fechou")
         self.registro.posicao(braco=braco, t_ns=t, lado=None, quantidade=0, preco_medio=0.0, stop=None, alvo=None)
         self._gravar_equity(conta, t)
+        self._espelhar(conta, t, "sim_fechou", motivo, t)  # stop/alvo do simulador: a demo fecha junto (se ainda aberta)
 
     # ============================================================================ risco e protecao ======
     def _verificar_flag(self, t: int) -> None:
@@ -435,6 +439,7 @@ class Orquestrador:
         pos = self.sim.posicao(braco)
         if pos.quantidade > 0 and ev.zerar:
             self._sair(conta, "kill", ev.t_ns, forcado=True)
+        self._espelhar(conta, ev.t_ns, "ao_kill", f"{ev.origem}: {ev.motivo}", ev.t_ns)
 
     def _marcar_a_mercado(self, t: int, tick: Tick) -> None:
         ins = self.cfg.instrumento
@@ -486,7 +491,21 @@ class Orquestrador:
         conta.stats[f"saida_{motivo}"] += 1
         self.registro.evento_risco(t_ns=t, braco=braco, tipo=f"saida_{motivo}", detalhe=detalhe or motivo,
                                    critico=motivo == "kill")
+        # o kill vai ao gateway como EMERGENCIA (cancela, zera e trava); as demais saidas, como saida por ticket
+        self._espelhar(conta, t, "ao_kill" if motivo == "kill" else "saida", detalhe or motivo, t)
         return True
+
+    def _espelhar(self, conta: ContaBraco, t: int, metodo: str, *args: Any) -> None:
+        """Delega ao espelho (so do braco espelhado). Falha do espelho NUNCA derruba a sessao: desliga novas entradas."""
+        esp = self.espelho
+        if esp is None or conta.braco.id != esp.cfg.braco:
+            return
+        try:
+            getattr(esp, metodo)(*args)
+        except Exception as e:  # noqa: BLE001
+            self.registro.incidente(t_ns=t, origem="espelho", severidade="erro",
+                                    detalhe=f"{metodo}: {type(e).__name__}: {e}"[:300])
+            esp.desligar(f"erro em {metodo}: {type(e).__name__}", t)
 
     # ====================================================================================== planos ======
     def _registrar_evento_plano(self, ev: EventoPlano) -> None:
@@ -988,6 +1007,11 @@ class Orquestrador:
             fim = u.model_copy(update={"t_utc_ns": t2, "t_recebido_ns": t2, "t_servidor_ms": t2 // 1_000_000})
             self._rotear_eventos(self.sim.on_tick(fim), t2)
             t = t2
+        if self.espelho is not None:
+            try:
+                self.espelho.encerrar(t)
+            except Exception as e:  # noqa: BLE001
+                self.registro.incidente(t_ns=t, origem="espelho", severidade="erro", detalhe=f"encerrar: {e}"[:300])
         for conta in self.contas.values():
             self._gravar_equity(conta, t)
         for conta in self.contas.values():

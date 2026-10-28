@@ -1,8 +1,10 @@
 """``robowin nucleo``: o mesmo orquestrador alimentado AO VIVO pelo gateway via ZeroMQ.
 
-O nucleo NUNCA envia ordem real: os bracos operam no simulador interno com os ticks/livros vivos; o
-espelhamento de UM braco na conta demo (comandos ao gateway, unico dono de ``order_send``) fica como ponto
-de extensao (``Roteador(modo="gateway_demo", emissor_gateway=...)``) e nao e ligado aqui.
+O nucleo NUNCA envia ordem real: os bracos operam no simulador interno com os ticks/livros vivos. Opcionalmente
+(``[geral].espelhar = "<id do braco>"``, desligado por padrao) UM braco e espelhado na conta DEMO por
+``decisao.espelho.EspelhoDemo`` (``Roteador(modo="gateway_demo")`` -> comandos ao gateway, unico dono de
+``order_send``). O ``MonitorGateway`` grava o estado/heartbeat do gateway em ``incidentes``/``eventos_risco`` e
+confirma o kill switch ponta a ponta (gateway travado + posicao zerada) para o painel.
 
 Falha segura: lacuna de sequencia do PUB/SUB, heartbeat do gateway ausente ou dado velho bloqueiam novas
 entradas; saidas e protecao continuam. O nucleo envia heartbeat ao gateway (sem ele o gateway bloqueia
@@ -13,12 +15,15 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable, Iterable
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from robowin.core.tipos import LivroSnapshot, NivelBook, Tick
 
 from .orquestrador import Orquestrador
 from .registro import ORIGEM_SINTETICO
+
+if TYPE_CHECKING:
+    from .espelho import EspelhoDemo, MonitorGateway
 
 NS = 1_000_000_000
 CAMPOS_TICK = ("t_servidor_ms", "t_utc_ns", "t_recebido_ns", "bid", "ask", "last", "volume", "flags")
@@ -75,8 +80,10 @@ class FonteLista:
 
 class Nucleo:
     def __init__(self, orq: Orquestrador, fonte: FonteEventos, *, heartbeat: Callable[[], None] | None = None,
-                 intervalo_hb_s: float = 1.0, hb_gateway_max_s: float = 15.0, cooperar_s: float = 0.005) -> None:
+                 intervalo_hb_s: float = 1.0, hb_gateway_max_s: float = 15.0, cooperar_s: float = 0.005,
+                 espelho: EspelhoDemo | None = None, monitor: MonitorGateway | None = None) -> None:
         self.orq, self.fonte, self.heartbeat = orq, fonte, heartbeat
+        self.espelho, self.monitor = espelho, monitor
         self.intervalo_hb_s, self.hb_gateway_max_s, self.cooperar_s = intervalo_hb_s, hb_gateway_max_s, cooperar_s
         self._lacunas_vistas = 0
         self._ult_hb_gw = time.monotonic()
@@ -101,6 +108,10 @@ class Nucleo:
             self._ult_hb_gw = time.monotonic()
         elif topico == "estado":
             self.estado_gateway = d
+            if self.monitor is not None:
+                self.monitor.ao_estado(d, o._agora())
+            if self.espelho is not None:
+                self.espelho.ao_estado_gateway(d)
             if d.get("duble") and not self._marcou_duble:  # dados do DUBLE sao sinteticos: acende a faixa no painel
                 self._marcou_duble = True
                 o.registro.incidente(t_ns=o._agora(), origem=ORIGEM_SINTETICO, severidade="info",
@@ -125,8 +136,11 @@ class Nucleo:
             o.bloqueio.lacuna_sequencia(agora, f"{n} lacuna(s) de sequencia no PUB/SUB")
             o.registro.incidente(t_ns=agora, origem="nucleo", severidade="alerta",
                                  detalhe=f"lacuna de sequencia ({n}): entradas bloqueadas")
-        if time.monotonic() - self._ult_hb_gw > self.hb_gateway_max_s:
+        mudo = time.monotonic() - self._ult_hb_gw > self.hb_gateway_max_s
+        if mudo:
             o.bloqueio.marcar("heartbeat_gateway", agora, "sem heartbeat do gateway")
+        if self.monitor is not None:
+            self.monitor.silencio(agora, mudo)
 
     async def executar(self, duracao_s: float | None = None) -> None:
         ini = time.monotonic()
@@ -137,6 +151,8 @@ class Nucleo:
                 n += 1
             self._verificar_integridade()
             await self.orq.on_tempo()
+            if self.espelho is not None:
+                self.espelho.passo(self.orq._agora())
             agora = time.monotonic()
             if self.heartbeat is not None and agora >= self._prox_hb:
                 self._prox_hb = agora + self.intervalo_hb_s

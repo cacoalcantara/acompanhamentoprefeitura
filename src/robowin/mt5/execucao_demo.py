@@ -66,6 +66,7 @@ class ConfigDemo:
     espera_incerta_s: float = 5.0
     lote: int = 1  # unidades de volume do MT5 por "contrato" do robo (do perfil: 1 em futuros, 100 em acoes)
     conta: str = "netting"  # "netting" (MT5/B3) | "hedging" (MT4: posicoes por TICKET; saida SEMPRE por ticket)
+    modo_mm: bool = False  # ponte do market making: UMA limitada por lado; a limitada pode REDUZIR a posicao oposta
 
 
 class OrcamentoMensagens:
@@ -316,6 +317,24 @@ class ExecucaoDemo:
         except _Recusa as r:
             return r.ack
 
+    def modificar_ordem(self, ticket: int, preco: float, sl: float | None = None, dono: str = "nucleo",
+                        prioritaria: bool = False) -> AckOrdem:
+        """Altera o preco (e o SL, se informado) de uma ordem PENDENTE (conta na franquia de mensagens)."""
+        self.verificar_guarda()
+        iid = f"modif-{ticket}-{self._agora_ms()}-{len(self._enviadas)}"
+        try:
+            o = next((x for x in self._pendentes() if int(x.ticket) == ticket), None)
+            if o is None:
+                raise self._recusa("ordem pendente inexistente")
+            tick = float(self._info().trade_tick_size)
+            novo_sl = self._alinhar(sl, tick) if sl else float(o.sl)
+            req = {"action": C.ACAO_MODIFY, "order": ticket, "symbol": self._sym, "price": self._alinhar(preco, tick),
+                   "sl": novo_sl, "tp": float(o.tp), "type_time": C.VALIDADE_DIA}
+            res, t0, t1 = self._transmitir(req, iid, checar=True, prioritaria=prioritaria)
+            return self._ack(res, t0, t1)
+        except _Recusa as r:
+            return r.ack
+
     def checar_sem_enviar(self, lado: Lado = Lado.COMPRA) -> dict[str, Any]:
         """Diagnostico: monta uma ordem a mercado de 1 lote e roda SOMENTE order_check (nunca order_send)."""
         est = self.verificar_guarda()
@@ -387,11 +406,16 @@ class ExecucaoDemo:
                 "magic": cmd.magic, "comment": comentario, "type_filling": fill, "position": ticket,
             }
         else:
-            if pos is not None:
+            mm = self.cfg.modo_mm and cmd.tipo == "limitada"
+            if pos is not None and not (mm and (antes > 0) != compra):  # modo MM: so a limitada que REDUZ a posicao
                 raise self._recusa("ja ha posicao aberta: sem piramidacao e sem inversao por entrada")
             pend = self._pendentes()
             total_pend = sum(float(o.volume_current) for o in pend) / self.cfg.lote
-            if len(vols_antes) + total_pend + qtd > self.cfg.contratos_max:
+            if mm:
+                tipo_lado = C.ORDEM_BUY_LIMIT if compra else C.ORDEM_SELL_LIMIT
+                if any(int(o.type) == tipo_lado for o in pend):
+                    raise self._recusa("modo MM: ja ha limitada viva deste lado")
+            elif len(vols_antes) + total_pend + qtd > self.cfg.contratos_max:
                 raise self._recusa("posicao + pendentes excederiam o maximo de contratos")
             sl = self._alinhar(cmd.sl, tick) if cmd.sl else None
             tp = self._alinhar(cmd.tp, tick) if cmd.tp else None

@@ -96,10 +96,35 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
     if a.cmd and not a.sem_heartbeat:
         from robowin.mt5.canais import ClienteComandosZMQ
         cliente = ClienteComandosZMQ(a.cmd)
+    espelho = monitor = None
+    espelhar = (a.espelhar if a.espelhar is not None else str(cfg_geral.get("geral", {}).get("espelhar", "") or "")).strip()
+    if cliente is not None:
+        from .espelho import MonitorGateway
+        monitor = MonitorGateway(m.orq.registro, arquivo_flag=p.arquivo_emergencia)
+    if espelhar:  # desligado por padrao; UM braco por vez; so conta demo (ver `decisao/espelho.py`)
+        from robowin.core.config import dir_dados
+        from robowin.execucao.ponte_gateway import TravaEspelho
+
+        from .espelho import ConfigEspelho, EspelhoDemo, EspelhoRecusado, validar_config_espelhamento
+        try:
+            validar_config_espelhamento(cfg_geral, espelhar, canal_ok=cliente is not None)
+            espelho = EspelhoDemo(m.orq, ConfigEspelho(braco=espelhar), cliente,
+                                  trava=TravaEspelho(dir_dados(a.config) / "ESPELHO.lock"))
+            espelho.iniciar()
+        except (EspelhoRecusado, ErroConfig) as e:
+            print(f"ERRO (espelhamento recusado): {e}")
+            fonte.fechar()
+            if cliente is not None:
+                cliente.fechar()
+            banco.fechar()
+            return 2
     nucleo = Nucleo(m.orq, fonte, heartbeat=(lambda: cliente.enviar_sem_resposta({"tipo": "heartbeat"}))
-                    if cliente else None)
+                    if cliente else None, espelho=espelho, monitor=monitor)
     print(f"SIMULACAO: nucleo ao vivo em {a.pub} (comandos {a.cmd or '-'}); braco(s): "
           f"{', '.join(m.orq.contas)}. Nenhuma ordem real; Ctrl+C encerra.")
+    if espelho is not None:
+        print(f"ESPELHAMENTO NA CONTA DEMO: braco '{espelhar}' (SL obrigatorio; mesmo veto de risco; um braco por vez). "
+              "Ordens SOMENTE em conta DEMO, via gateway.")
     m.orq.iniciar(m.manifesto, t_ns=rel.agora_ns())
 
     async def rodar() -> None:
@@ -123,7 +148,8 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
     print(formatar_resumo(
         m.orq.resumo(), rotulo_ia="real" if m.real else "falso", caminho_banco=caminho, dir_auditoria=dir_aud,
         rotulo_dados=rotulo, extra=f"ticks processados: {m.orq.ticks_processados}; fora de ordem: "
-        f"{m.orq.fora_de_ordem}; lacunas de sequencia: {fonte.lacunas}; mensagens: {nucleo.mensagens}"))
+        f"{m.orq.fora_de_ordem}; lacunas de sequencia: {fonte.lacunas}; mensagens: {nucleo.mensagens}"
+        + (f"\nespelho (demo): {espelho.resumo()}" if espelho is not None else "")))
     return 0
 
 
@@ -166,6 +192,8 @@ def registrar(sub: Any) -> None:
     n.add_argument("--pub", default="tcp://127.0.0.1:5555")
     n.add_argument("--cmd", default="tcp://127.0.0.1:5556", help="ROUTER do gateway (heartbeat); '' desliga")
     n.add_argument("--sem-heartbeat", action="store_true")
+    n.add_argument("--espelhar", default=None, metavar="BRACO",
+                   help="espelha UM braco na conta DEMO via gateway (padrao: [geral].espelhar; vazio desliga)")
     n.add_argument("--simbolo", default=None, help="simbolo da corretora (padrao: o simbolo_base do ativo)")
     n.add_argument("--saida", default=f"dados_locais/nucleo/sessao-{int(time.time())}")
     n.add_argument("--arquivo-emergencia", default=None,

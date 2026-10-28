@@ -170,9 +170,21 @@ def modelos(b: Banco) -> dict[str, Any]:
 
 
 def confirmacao_emergencia(b: Banco, desde_ns: int) -> dict[str, Any]:
-    """O gateway/nucleo confirmou o kill switch? Procura, apos a gravacao da flag, um incidente de emergencia
-    vindo de OUTRA origem que nao o painel (ex.: alerta `bloqueio_emergencia` do gateway) ou um evento de risco
-    `kill_switch`. Sem isso a flag so foi GRAVADA: nada garante que o sistema esteja zerado."""
+    """O gateway/nucleo confirmou o kill switch ponta a ponta?
+
+    * COM gateway reportando (existe incidente `origem='gateway_estado'`, gravado pelo nucleo ao vivo): so conta a
+      confirmacao do PROPRIO gateway depois da flag (`origem='gateway'`, `emergencia_confirmada`: gateway TRAVADO,
+      posicao zerada e sem ordens pendentes). O kill switch do nucleo ou o alerta `bloqueio_emergencia` do gateway
+      NAO bastam: dizem que a ordem de zerar foi dada, nao que a demo esta zerada.
+    * SEM gateway reportando (simulacao pura): vale o criterio antigo (incidente de emergencia de outra origem ou
+      evento de risco `kill_switch`), pois nao ha conta demo para zerar.
+    """
+    conf = b.consultar("SELECT detalhe, t_ns FROM incidentes WHERE t_ns >= ? AND origem = 'gateway' "
+                       "AND detalhe LIKE 'emergencia_confirmada%' ORDER BY t_ns LIMIT 1", (desde_ns,))
+    if conf:
+        return {"confirmado": True, "fonte": "gateway: posicao zerada e sem ordens pendentes, gateway travado"}
+    if b.consultar("SELECT 1 FROM incidentes WHERE origem = 'gateway_estado' LIMIT 1"):
+        return {"confirmado": False, "fonte": None, "gateway": True}
     inc = b.consultar("SELECT origem, detalhe, t_ns FROM incidentes WHERE t_ns >= ? AND origem <> 'painel' "
                       "AND lower(detalhe) LIKE '%emergencia%' ORDER BY t_ns LIMIT 1", (desde_ns,))
     if inc:

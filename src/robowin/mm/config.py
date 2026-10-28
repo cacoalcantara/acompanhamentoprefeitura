@@ -1,10 +1,14 @@
 """Configuracao do market making (experimental).
 
 `demo_mm` esta DESLIGADA por padrao. Com ela desligada o MM so roda no SIMULADOR interno (fila conservadora).
-Ligar `demo_mm` significaria espelhar as cotacoes na conta DEMO do MT5 (so para medir confirmacao e
-cancelamento; a demo preenche limitada sem fila e NAO e evidencia de lucro), com teto de mensagens dentro da
-franquia e espelhamento exclusivo. Essa ponte NAO esta implementada em src/robowin/mm: `exigir_simulador_apenas`
-levanta NotImplementedError se a flag vier ligada.
+Ligada, ``mm/ponte_demo.py`` espelha as cotacoes na conta DEMO do MT5 pelo gateway (so para medir confirmacao,
+modificacao e cancelamento; a demo preenche limitada sem fila e NAO e evidencia de lucro), com:
+
+* teto de mensagens dentro da franquia (``mensagens_min_max`` e o monitor ``risco/antimanipulacao``) e tempo
+  minimo no livro antes de alterar/cancelar (2 s);
+* espelhamento EXCLUSIVO: ou um braco do nucleo (``[geral].espelhar``) ou o MM, nunca os dois (trava de arquivo
+  ``execucao.ponte_gateway.TravaEspelho`` + validacao de configuracao);
+* a capacidade ``livro`` do terminal (sem livro de ofertas nao ha MM).
 """
 from __future__ import annotations
 
@@ -28,7 +32,6 @@ def exigir_livro(caps: CapacidadesTerminal) -> None:
 
 
 def exigir_simulador_apenas(cfg: ConfigMM, caps: CapacidadesTerminal | None = None) -> None:
-    if caps is not None:  # terminal informado: sem livro (MT4) o MM fica bloqueado
+    """Valida a plataforma para o MM: sem livro (MT4) o MM fica bloqueado. demo_mm e permitido (ponte na demo)."""
+    if caps is not None:
         exigir_livro(caps)
-    if cfg.demo_mm:
-        raise NotImplementedError("demo_mm: espelhamento na conta demo nao implementado neste modulo; use o simulador")
