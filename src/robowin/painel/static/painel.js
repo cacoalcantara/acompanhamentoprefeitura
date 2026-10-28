@@ -12,7 +12,10 @@ document.addEventListener("DOMContentLoaded", function () {
     var ts = [];
     nomes.forEach(function (n) { dados[n].t.forEach(function (t) { ts.push(t); }); });
     ts = Array.from(new Set(ts)).sort(function (a, b) { return a - b; });
-    var series = [{ label: "Hora" }];
+    // rotulos em pt-BR e em UTC (como o restante do painel); o padrao do uPlot e en-US (am/pm) e fuso do navegador
+    var fmtEixo = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+    var fmtCompleto = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC", dateStyle: "short", timeStyle: "medium", hour12: false });
+    var series = [{ label: "Hora (UTC)", value: function (u, v) { return v == null ? "--" : fmtCompleto.format(new Date(v * 1000)); } }];
     var cols = [ts];
     var cores = ["#1d4ed8", "#067647", "#b54708", "#6941c6", "#b42318", "#0e7090"];
     nomes.forEach(function (n, i) {
@@ -22,6 +25,7 @@ document.addEventListener("DOMContentLoaded", function () {
       series.push({ label: n, stroke: cores[i % cores.length], spanGaps: true });
     });
     new uPlot({ width: el.clientWidth || 800, height: 300, series: series,
-      axes: [{}, { label: "Capital (R$)" }] }, cols, el);
+      axes: [{ values: function (u, ticks) { return ticks.map(function (v) { return fmtEixo.format(new Date(v * 1000)); }); } },
+        { label: "Capital (R$)" }] }, cols, el);
   });
 });
