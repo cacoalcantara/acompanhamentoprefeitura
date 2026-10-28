@@ -51,6 +51,17 @@ def validar_evidencias(textos: tuple[str, ...], dossie: dict[str, Any]) -> list[
     return v
 
 
+def validar_textos_livres(textos: tuple[str, ...], *, max_chars: int = 600) -> list[str]:
+    """Texto livre de um agente auxiliar (debate, reflexao): sem indicador tradicional e com tamanho limitado."""
+    v: list[str] = []
+    for t in textos:
+        if len(t) > max_chars:
+            v.append(f"texto acima de {max_chars} caracteres: {t[:40]!r}")
+        if (m := _RE_INDICADOR.search(t)):
+            v.append(f"indicador tecnico tradicional citado: {m.group(0)}")
+    return v
+
+
 def validar_texto_sem_indicadores(p: PropostaIA) -> list[str]:
     textos = [*p.hipoteses, *p.evidencias_a_favor, *p.evidencias_contra, *p.riscos, *p.invalidacoes,
               p.justificativa_curta]

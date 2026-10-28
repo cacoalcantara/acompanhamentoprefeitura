@@ -43,12 +43,14 @@ from robowin.dados.banco import BancoSQLite
 from robowin.dados.sintetico import ConfigSintetico, DadosSinteticos, gerar_dias
 from robowin.features.pipeline import PipelineFeatures
 from robowin.ia.catalogo import Catalogo, dividir_modelo
+from robowin.ia.esquemas import ArgumentoDebate, ParecerRisco, ReflexaoIA
 from robowin.ia.orcamento import OrcamentoIA, ProvedorComOrcamento
 from robowin.ia.papeis import carregar_papeis, validar_papeis
 from robowin.ia.prompts import hashes_prompts
 from robowin.ia.provedores import criar_provedor
 from robowin.ia.provedores.base import Medidor, RespostaBruta
 from robowin.ia.provedores.falso import ProvedorFalso
+from robowin.ia.reflexao import MemoriaReflexiva
 from robowin.modelos.demo_sintetico import montar_amostras
 from robowin.modelos.microestrutura import CriterioOOS, ModeloMicroestrutura
 from robowin.modelos.rotulagem import ConfigBarreiras
@@ -60,6 +62,7 @@ from robowin.statarb.sinais import SinalStatArbPadrao
 from .bracos.base import BracoBase, Geometria, Modo
 from .bracos.controles import BracoAleatorio, BracoNaoOperar
 from .bracos.fabrica import FabricaBracos, extras_de_config
+from .bracos.llm import ServicoLLM
 from .bracos.quant import BracoQuant
 from .gatilhos import ConfigGatilhos
 from .orquestrador import ConfigOrquestrador, Orquestrador, geometria_de
@@ -107,6 +110,29 @@ def proposta_falsa(dossie: dict[str, Any], modo: str) -> PropostaIA:
         plano=plano)
 
 
+def argumento_falso(dossie: dict[str, Any], lado: str) -> ArgumentoDebate:
+    """Pesquisador FALSO: cita campos que existem no dossie; a forca vem do movimento de 60 s (so encanamento)."""
+    ret = (dossie.get("movimento") or {}).get("ret_60s_pts")
+    a_favor = ret is not None and ((ret > 0) == (lado == "altista"))
+    return ArgumentoDebate(
+        lado="altista" if lado == "altista" else "baixista",
+        tese=f"[FALSO] leitura {lado} pelo movimento de 60 s",
+        evidencias=(f"movimento.ret_60s_pts = {ret}",),
+        pontos_fracos_do_oponente=("microestrutura.spread_ticks pode alargar",), forca=0.7 if a_favor else 0.3)
+
+
+def parecer_falso(dossie: dict[str, Any], perfil: str) -> ParecerRisco:
+    """Debatedor de risco FALSO: o conservador so aceita spread curto e movimento claro; o agressivo opera mais."""
+    spread = (dossie.get("microestrutura") or {}).get("spread_ticks")
+    ret = (dossie.get("movimento") or {}).get("ret_60s_pts")
+    claro = ret is not None and abs(ret) >= 10 and spread is not None and spread <= 2
+    ok = claro or (perfil == "agressivo" and ret is not None and abs(ret) >= 5)
+    return ParecerRisco(
+        perfil="agressivo" if perfil == "agressivo" else ("conservador" if perfil == "conservador" else "neutro"),
+        recomendacao="operar" if ok else "nao_operar", riscos=("microestrutura.spread_ticks pode alargar",),
+        evidencias=(f"movimento.ret_60s_pts = {ret}",), justificativa_curta="[FALSO] parecer de demonstracao")
+
+
 def revisao_falsa(mensagem: str, dossie: dict[str, Any]) -> RevisaoIA:
     """Revisor FALSO: aprova entradas com spread curto, rejeitando ~25% por um hash da mensagem (determinista)."""
     spread = (dossie.get("microestrutura") or {}).get("spread_ticks")
@@ -136,6 +162,12 @@ class ProvedorFalsoSessao(ProvedorFalso):
             obj: BaseModel = proposta_falsa(_dossie_da_mensagem(mensagem), modo)
         elif schema is RevisaoIA:
             obj = revisao_falsa(mensagem, _dossie_da_mensagem(mensagem))
+        elif schema is ArgumentoDebate:
+            obj = argumento_falso(_dossie_da_mensagem(mensagem), mensagem.split("LADO:", 1)[1].split()[0])
+        elif schema is ParecerRisco:
+            obj = parecer_falso(_dossie_da_mensagem(mensagem), mensagem.split("PERFIL:", 1)[1].split()[0])
+        elif schema is ReflexaoIA:
+            obj = ReflexaoIA(licao="FALSO: uma unica operacao e amostra minima; manter a cautela.", vies="mais_cautela")
         else:
             obj = self._gerador(schema)
         self._roteiro, self._i = [obj], 0
@@ -144,7 +176,8 @@ class ProvedorFalsoSessao(ProvedorFalso):
 
     async def gerar_estruturado(self, **kw: Any) -> tuple[BaseModel | None, Any]:
         obj, ch = await super().gerar_estruturado(**kw)
-        mediana = self.mediana_revisor_s if kw["schema"] is RevisaoIA else self.mediana_proponente_s
+        mediana = (self.mediana_revisor_s if kw["schema"] in (RevisaoIA, ArgumentoDebate, ParecerRisco, ReflexaoIA)
+                   else self.mediana_proponente_s)
         lat_s = mediana * float(np.exp(self.sigma * self._rng.gauss(0, 1)))
         u = self._rng.random()
         prazo = float(kw["prazo_s"])
@@ -298,6 +331,19 @@ def montar_provedores(p: ParamsSimulacao, cfg: dict[str, Any], catalogo: Catalog
     return out, real
 
 
+def montar_reflexao(cfg: Mapping[str, Any], fab: FabricaBracos, provedores: Mapping[str, Any], *,
+                    ativo: bool = True) -> tuple[MemoriaReflexiva | None, ServicoLLM | None]:
+    """Memoria reflexiva de ``[reflexao]`` (desligada por padrao). Papel e modelo vem de ``[ia.papeis]``."""
+    sec = cfg.get("reflexao", {}) or {}
+    if not sec.get("ativo", False) or not ativo:
+        return None, None
+    ref, eff = fab.resolver(str(sec.get("papel", "reflexao")), None)
+    prov, _ = dividir_modelo(ref)
+    serv = ServicoLLM(provedores[prov], ref, "reflexao", ReflexaoIA, effort=eff, max_tokens=300)
+    mem = MemoriaReflexiva(float(sec.get("atraso_liquidacao_s", 300.0)), int(sec.get("max_reflexoes", 3)))
+    return mem, serv
+
+
 def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str],
                      origem_dados: str = "sinteticos", sigma_brl: float = 35.0, mde_brl: float = 5.0,
                      ativo: str = "") -> ManifestoExperimento:
@@ -315,11 +361,21 @@ def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo
                     fixavel[ref] = bool(catalogo.obter(ref).fixavel)
                 except Exception:
                     fixavel[ref] = False
+        for etapa, d in (m.get("debate") or {}).get("etapas", {}).items():  # etapas do braco de debate
+            modelos[f"{b.id}.debate.{etapa}"] = d["modelo"]
+            try:
+                fixavel[d["modelo"]] = bool(catalogo.obter(d["modelo"]).fixavel)
+            except Exception:
+                fixavel[d["modelo"]] = False
+    hipoteses = ("H1: o braco com IA tem expectativa liquida maior que o controle aleatorio",
+                 "H2: o revisor (C) melhora a expectativa liquida sobre a proposta sem revisor (B)",
+                 "H3: o modo condicional difere do imediato")
+    if any(b.familia == "debate" for b in bracos):
+        hipoteses += ("H4 (experimental): o debate (pesquisadores + risco + sintese) difere do proponente unico "
+                      "no modo condicional, com Holm e custo/latencia",)
     return ManifestoExperimento(
         id=sessao_id,
-        hipoteses=("H1: o braco com IA tem expectativa liquida maior que o controle aleatorio",
-                   "H2: o revisor (C) melhora a expectativa liquida sobre a proposta sem revisor (B)",
-                   "H3: o modo condicional difere do imediato"),
+        hipoteses=hipoteses,
         metrica_primaria="expectativa_liquida_por_operacao_brl", mde_brl=mde_brl,
         n_alvo=n_expectativa(sigma_brl, mde_brl, alfa=0.05),
         regras_parada=("kill switch", "perda diaria", "orcamento de IA esgotado"),
@@ -366,7 +422,8 @@ def construir_orquestrador(
     g = geometria_de(risco, ins, perfil.stop_padrao_pontos, perfil.alvo_padrao_pontos, 60)
     modos: tuple[Modo, ...] = ("imediato", "condicional") if p.com_condicional else ("imediato",)
     refs = [pp.modelo for pp in papeis.values()] + [
-        r for e in extras_de_config(cfg) for r in ([e.proponente] + ([e.revisor] if e.revisor else [])) if ":" in r]
+        r for e in extras_de_config(cfg)
+        for r in (e.proponente, e.revisor, e.pesquisador, e.debatedor_risco) if r and ":" in r]
     provedores, real = montar_provedores(p, cfg, catalogo, orc, refs)
     fab = FabricaBracos(provedores, catalogo=catalogo, papeis=papeis, prazos=pz,
                         stop_max_pontos=stop_maximo_efetivo_pontos(risco, ins.ponto_valor_brl),
@@ -383,6 +440,9 @@ def construir_orquestrador(
         suf = "" if modo == "imediato" else "_cond"
         bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
     hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "perfil": perfil.hash()}
+    memoria_reflexiva, servico_reflexao = montar_reflexao(cfg, fab, provedores, ativo=bool(papeis))
+    if memoria_reflexiva is not None:
+        hashes["reflexao"] = f"ativa:{servico_reflexao.chave}"
     if erro_risco is None or erro_risco == ERRO_APROVACAO_PENDENTE:
         hashes["risco"] = _hash_arquivo(p.risco)  # o arquivo foi o aplicado (aprovacao pendente fica registrada)
         if erro_risco is not None:
@@ -400,7 +460,8 @@ def construir_orquestrador(
         gatilhos=ConfigGatilhos(periodo_s=p.periodo_ia_s, e_brl_min=1.0, z_statarb_min=2.0))
     orq = Orquestrador(cfg_orq, relogio=rel, registro=registro, bracos=bracos, pipeline=PipelineFeatures(),
                        modelos={modelo.nome: modelo}, statarb=statarb, precos_aux=precos_aux, orcamento=orc,
-                       bloqueio=BloqueioDados(idade_max_dado_s=p.idade_max_dado_s))
+                       bloqueio=BloqueioDados(idade_max_dado_s=p.idade_max_dado_s),
+                       memoria_reflexiva=memoria_reflexiva, servico_reflexao=servico_reflexao)
     if erro_risco is not None:
         registro.incidente(t_ns=t_ref_ns, origem="simulacao", severidade="critico",
                            detalhe=f"risco_nao_aprovado: politica de risco nao aprovada ({erro_risco}); "

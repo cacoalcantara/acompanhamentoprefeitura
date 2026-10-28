@@ -12,12 +12,14 @@ from .base import (
 from .claude import BracoClaude, BracoProponente
 from .claude_gpt import BracoClaudeGPT, BracoProponenteRevisor
 from .controles import BracoAleatorio, BracoNaoOperar
+from .debate import BracoDebate, ConfigDebate, EnvelopeAgente, EtapaDebate, ServicoPropostaDebate
 from .fabrica import ConfigBracoExtra, ErroConfigBraco, FabricaBracos, extras_de_config
 from .llm import BracoLLM, PropostaObtida, RevisaoObtida, ServicoProposta, ServicoRevisao
 from .quant import BracoQuant
 
 __all__ = [
-    "MODOS", "BracoAleatorio", "BracoBase", "BracoClaude", "BracoClaudeGPT", "BracoLLM", "BracoNaoOperar",
+    "MODOS", "BracoAleatorio", "BracoBase", "BracoClaude", "BracoClaudeGPT", "BracoDebate", "BracoLLM",
+    "BracoNaoOperar", "ConfigDebate", "EnvelopeAgente", "EtapaDebate", "ServicoPropostaDebate",
     "BracoProponente", "BracoProponenteRevisor", "BracoQuant", "ConfigBracoExtra", "ContextoDecisao",
     "ErroConfigBraco", "FabricaBracos", "Geometria", "Modo", "PropostaObtida", "RegistroChamada",
     "ResultadoDecisao", "RevisaoObtida", "ServicoProposta", "ServicoRevisao", "executar_sync",

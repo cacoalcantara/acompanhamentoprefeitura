@@ -254,10 +254,13 @@ def montar_dossie(
             "stop_pontos": posicao.get("stop_pontos"), "alvo_pontos": posicao.get("alvo_pontos"),
         }
     for m in memoria:
-        d["memoria"].append({
+        item = {
             "acao": str(m.get("acao", "")), "resultado_pontos": _r(m.get("resultado_pontos", 0.0)),
             "duracao_s": int(m.get("duracao_s", 0)), "motivo_saida": str(m.get("motivo_saida", "")),
-        })
+        }
+        if m.get("reflexao"):  # licao escrita DEPOIS do resultado liquidado (ia.reflexao); ja sanitizada e anonimizada
+            item["reflexao"] = str(m["reflexao"])
+        d["memoria"].append(item)
     niveis = [p for _, p in ticks] + list(niveis_extras_absolutos)
     if posicao and posicao.get("preco_medio"):
         niveis.append(float(posicao["preco_medio"]))

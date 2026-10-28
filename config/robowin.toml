@@ -17,6 +17,18 @@ modelo = "openai:gpt-6.1-sol"
 effort = "low"
 [ia.papeis.classificador_nlp]
 modelo = "anthropic:claude-haiku-5-5"
+# Papeis do braco EXPERIMENTAL de debate (decisao/bracos/debate.py). So sao usados se houver um [[bracos]] com
+# tipo = "debate" (desligado por padrao). Todos veem SO o dossie anonimizado: sem ferramentas e sem internet.
+[ia.papeis.pesquisador]            # pesquisadores altista e baixista
+modelo = "anthropic:claude-sonnet-5-5"
+effort = "low"
+[ia.papeis.debatedor_risco]        # debatedores de risco agressivo, neutro e conservador
+modelo = "anthropic:claude-haiku-5-5"
+[ia.papeis.sintetizador]           # decide depois do debate; cumpre o papel de proponente
+modelo = "anthropic:claude-opus-5-5"
+effort = "low"
+[ia.papeis.reflexao]               # licao escrita DEPOIS do resultado liquidado (memoria reflexiva; [reflexao])
+modelo = "anthropic:claude-haiku-5-5"
 
 [prazos]
 imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_ticks = 4 }
@@ -41,3 +53,25 @@ demo_mm = false   # ponte do market making para a conta demo (mm/ponte_demo.py);
 # proponente = "anthropic:claude-sonnet-5-5"
 # revisor = "openai:gpt-6.1-sol"
 # modo = "condicional"
+
+# Braco EXPERIMENTAL de debate (pesquisadores altista/baixista + debate de risco + sintetizador). Desligado por
+# padrao; so existe no modo condicional (latencia). A saida e uma proposta comum: mesmos validadores, revisor
+# (se houver) e o MESMO veto final do motor de risco. Entra no manifesto e na correcao de Holm como qualquer braco.
+# [[bracos]]
+# id = "debate_cond"
+# tipo = "debate"
+# proponente = "sintetizador"        # papel (ou provedor:modelo) do sintetizador
+# pesquisador = "pesquisador"        # padrao: o proponente
+# debatedor_risco = "debatedor_risco"  # padrao: o proponente
+# revisor = "revisor"                # opcional: debate + revisor (analogo do C)
+# modo = "condicional"
+# rodadas = 1                        # 1 ou 2
+# veto_unanime_risco = true
+
+# Memoria reflexiva (ia/reflexao.py): reflexoes escritas SO depois do resultado liquidado e injetadas no dossie
+# apenas apos o instante em que ficam disponiveis (t_disponivel). Desligada por padrao.
+[reflexao]
+ativo = false
+papel = "reflexao"        # papel de [ia.papeis]
+atraso_liquidacao_s = 300 # a reflexao so e pedida depois deste atraso apos a saida da operacao
+max_reflexoes = 3         # quantas reflexoes entram no dossie (as mais recentes disponiveis)

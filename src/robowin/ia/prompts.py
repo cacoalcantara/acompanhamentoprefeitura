@@ -10,7 +10,11 @@ from robowin.ia.dossie import canonico
 from robowin.ia.provedores.base import hash_texto
 
 DIR_PROMPTS_PADRAO = Path(__file__).resolve().parents[3] / "config" / "prompts"
-NOMES = {"proponente": "proponente_v1", "revisor": "revisor_v1", "classificador_nlp": "nlp_v1"}
+NOMES = {"proponente": "proponente_v1", "revisor": "revisor_v1", "classificador_nlp": "nlp_v1",
+         "debate_altista": "debate_altista_v1", "debate_baixista": "debate_baixista_v1",
+         "risco_agressivo": "risco_agressivo_v1", "risco_neutro": "risco_neutro_v1",
+         "risco_conservador": "risco_conservador_v1", "sintetizador": "sintetizador_v1",
+         "reflexao": "reflexao_v1"}
 
 __all__ = ["DIR_PROMPTS_PADRAO", "NOMES", "Prompt", "carregar_prompt", "hash_texto", "hashes_prompts",
            "mensagem_nlp", "mensagem_proponente", "mensagem_revisor"]
