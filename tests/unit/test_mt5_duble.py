@@ -213,9 +213,11 @@ def test_symbols_get_e_symbol_info():
     d = criar_duble_padrao()
     d.initialize()
     nomes = {s.name for s in d.symbols_get()}
-    assert nomes == {"WINZ26", "WING27", "INDZ26", "WDOX26", "DOLX26", "PETR4", "BOVA11"}
+    b3 = {"WINZ26", "WING27", "INDZ26", "WDOX26", "DOLX26", "PETR4", "BOVA11"}
+    corretora = {"EURUSD", "USDJPY", "USDBRL", "XAUUSD", "BTCUSD", "US500"}
+    assert nomes == b3 | corretora
     assert {s.name for s in d.symbols_get("WIN*")} == {"WINZ26", "WING27"}
-    assert {s.name for s in d.symbols_get("*,!WIN*")} == {"INDZ26", "WDOX26", "DOLX26", "PETR4", "BOVA11"}
+    assert {s.name for s in d.symbols_get("*,!WIN*")} == (b3 | corretora) - {"WINZ26", "WING27"}
     si = d.symbol_info("WINZ26")
     assert si.trade_tick_size == 5.0 and si.trade_tick_value / si.trade_tick_size == pytest.approx(0.20)
     assert si.volume_min == 1.0 and si.trade_exemode == C.EXEC_EXCHANGE and si.ticks_bookdepth > 0

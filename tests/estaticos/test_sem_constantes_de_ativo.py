@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2] / "src" / "robowin"
@@ -14,7 +15,13 @@ MODULOS_DE_PERFIL = {"core/instrumentos.py", "core/bolsas.py"}
 # O duble e uma CORRETORA SINTETICA: lista simbolos de varios ativos como a corretora real o faria (os numeros
 # vem dos perfis; os nomes dos contratos sao o "cardapio" da corretora simulada e o default da grade sintetica).
 EXCECOES_DE_ARQUIVO = {"mt5/duble.py"}
-RE_ATIVO = re.compile(r"^(?:SINT_)?(?:WIN|IND|WDO|DOL)(?:[FGHJKMNQUVXZ]\d{2})?$")
+# Todos os ativos de config/instrumentos.toml (B3, forex, metais, CFD, cripto) e QUALQUER par de moedas/metal/cripto
+# no formato da corretora (EURUSD, USDJPY, XAUUSD, BTCUSD, com sufixo .m/pro...), mesmo sem perfil.
+_PERFIS = sorted(k for k, v in tomllib.loads((RAIZ.parents[1] / "config" / "instrumentos.toml").read_text(
+    encoding="utf-8")).items() if isinstance(v, dict) and k != "sessao_padrao")
+_MOEDAS = "USD|EUR|GBP|JPY|CHF|AUD|NZD|CAD|BRL|MXN|ZAR|TRY|SEK|NOK|HKD|SGD|CNH|XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP"
+RE_ATIVO = re.compile(rf"^(?:SINT_)?(?:(?:{'|'.join(map(re.escape, _PERFIS))})(?:[FGHJKMNQUVXZ]\d{{2}})?"
+                      rf"|(?:{_MOEDAS})(?:{_MOEDAS})(?:[._]?[a-z0-9]{{0,4}})?)$")
 
 # (arquivo, valor, funcao/escopo) -> justificativa. Valores que NAO sao do ativo.
 ALLOWLIST: dict[tuple[str, float, str], str] = {
@@ -100,6 +107,14 @@ def _varrer() -> list[str]:
 
 def test_nenhuma_constante_de_ativo_fora_do_perfil():
     assert _varrer() == []
+
+
+def test_regex_cobre_todos_os_mercados():
+    for nome in ("WIN", "WDOX26", "SINT_WIN", "PETR4", "EURUSD", "USDJPY", "XAUUSD", "BTCUSD", "US500", "EURUSD.m",
+                 "GBPUSDpro"):
+        assert RE_ATIVO.match(nome), nome
+    for nome in ("USD", "BRL", "FOREX", "forex", "cfd_indice"):
+        assert not RE_ATIVO.match(nome), nome
 
 
 def test_allowlist_curta_e_justificada():
