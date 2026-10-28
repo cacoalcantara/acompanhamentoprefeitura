@@ -359,7 +359,10 @@ def test_trava_de_espelho_reentrante_orfa_e_viva(tmp_path):
     assert t2.atual()["dono"] == "nucleo:a"
     t2.liberar()
     (tmp_path / "z.lock").write_text("lixo")
-    TravaEspelho(tmp_path / "z.lock").adquirir("mm")  # ilegivel: retomada
+    with pytest.raises(EspelhamentoNaoExclusivo):  # ilegivel mas RECENTE: outro pode estar criando => ocupada
+        TravaEspelho(tmp_path / "z.lock").adquirir("mm")
+    os.utime(tmp_path / "z.lock", (0, 0))
+    TravaEspelho(tmp_path / "z.lock").adquirir("mm")  # ilegivel e antiga: retomada
 
 
 def test_validacao_de_config_do_espelhamento():

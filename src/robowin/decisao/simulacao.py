@@ -53,7 +53,7 @@ from robowin.modelos.demo_sintetico import montar_amostras
 from robowin.modelos.microestrutura import CriterioOOS, ModeloMicroestrutura
 from robowin.modelos.rotulagem import ConfigBarreiras
 from robowin.modelos.rotulagem import Custos as CustosRotulagem
-from robowin.risco.politica import risco_do_ativo, stop_maximo_efetivo_pontos
+from robowin.risco.politica import ERRO_APROVACAO_PENDENTE, risco_do_ativo, stop_maximo_efetivo_pontos
 from robowin.risco.tempo import dia_sp
 from robowin.statarb.sinais import SinalStatArbPadrao
 
@@ -383,8 +383,10 @@ def construir_orquestrador(
         suf = "" if modo == "imediato" else "_cond"
         bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
     hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "perfil": perfil.hash()}
-    if erro_risco is None:
-        hashes["risco"] = _hash_arquivo(p.risco)
+    if erro_risco is None or erro_risco == ERRO_APROVACAO_PENDENTE:
+        hashes["risco"] = _hash_arquivo(p.risco)  # o arquivo foi o aplicado (aprovacao pendente fica registrada)
+        if erro_risco is not None:
+            hashes["risco_aprovacao"] = "pendente"
     else:  # o hash do arquivo NAO foi o aplicado (valeu o padrao): nao gravar como se fosse
         hashes["risco"] = ""
         hashes["risco_aplicado"] = "padrao_nao_aprovado"

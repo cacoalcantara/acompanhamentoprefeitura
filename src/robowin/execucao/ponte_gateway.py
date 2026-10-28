@@ -107,7 +107,7 @@ def _pid_vivo(pid: int) -> bool:
     return True
 
 
-IDADE_ILEGIVEL_S = 5.0  # trava vazia/ilegivel mais nova que isto e tratada como OCUPADA (criacao em andamento)
+IDADE_ILEGIVEL_S = 5  # trava vazia/ilegivel mais nova que isto e tratada como OCUPADA (criacao em andamento)
 
 
 class TravaEspelho:
