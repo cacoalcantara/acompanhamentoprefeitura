@@ -290,6 +290,29 @@ def _cmd_diagnostico(args: argparse.Namespace) -> int:
     return 0 if rel["ok"] else 1
 
 
+def limites_do_gateway(args: argparse.Namespace, perfil: PerfilInstrumento, plataforma: str, login: int,
+                       servidor: str) -> tuple[Any, str]:
+    """Limites do GUARDIAO (contratos, janela, perda diaria, stop) = os do usuario+conta ativos ou, sem usuario, os do
+    arquivo unico. Terminal real: exige aprovacao valida (ErroConfig se nao houver). Com usuario, a conta do gateway
+    (plataforma, servidor, login) TEM de ser a conta aprovada. No DUBLE (sintetico) sem aprovacao, segue rotulado."""
+    from robowin.risco.usuarios import ContaDivergente, risco_para, selecao_de
+    sel = selecao_de(args.config, getattr(args, "usuario", None), getattr(args, "conta", None),
+                     getattr(args, "usuarios", None))
+    if sel.ativa:
+        motivo = sel.chave.confere(plataforma, servidor, login)
+        if motivo:
+            raise ContaDivergente(f"a conta do gateway ({plataforma}:{servidor}:{login}) difere da conta aprovada "
+                                  f"{sel.chave.texto} do usuario {sel.usuario}: {motivo}")
+    try:
+        cfg, _, arq = risco_para(sel, perfil, args.risco, args.aprovacao, ao_vivo=True)
+        return cfg, f"{sel.descricao()} ({arq}, aprovado)"
+    except ErroConfig as e:
+        if not args.duble:
+            raise
+        cfg, erro, arq = risco_para(sel, perfil, args.risco, args.aprovacao, ao_vivo=False)
+        return cfg, f"{sel.descricao()} ({arq}) risco_nao_aprovado - DUBLE SINTETICO: {erro or e}"
+
+
 def _cmd_gateway(args: argparse.Namespace) -> int:
     from .gateway import ConfigGateway, rodar_gateway_zmq
     from .guardiao import ConfigGuardiao
@@ -313,11 +336,17 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
     if (cfg.get("modo_config") or "demo_mt5") != "demo_mt5":
         print(f"[geral].conta = '{cfg.get('modo_config')}': o gateway so inicia com 'demo_mt5'.")
         return 2
+    try:
+        risco, origem_risco = limites_do_gateway(args, perfil, plat, int(login), str(servidor))
+    except ErroConfig as e:
+        print(f"ERRO (operacao bloqueada): {e}")
+        return 2
+    print(f"Limites do guardiao: {origem_risco}")
     gcfg = ConfigGateway(
         login=int(login), servidor=str(servidor), modo_config="demo_mt5", dir_log=Path(args.dir_log), perfil=perfil,
         offset_fixo_s=args.offset_fixo_s, plataforma=plat,
-        guardiao=ConfigGuardiao(arquivo_emergencia=caminho_flag_emergencia(args.config, args.arquivo_emergencia),
-                                exigir_dia_util=not args.duble))
+        guardiao=ConfigGuardiao.de_risco(risco, arquivo_emergencia=caminho_flag_emergencia(args.config, args.arquivo_emergencia),
+                                         exigir_dia_util=not args.duble))
     caminho_cfg = Path(getattr(args, "config", "") or "")
     gcfg.modo_mm = bool(args.modo_mm or (carregar_toml(caminho_cfg).get("mm", {}).get("demo_mm") if caminho_cfg.is_file() else False))
     if args.duble:
@@ -424,6 +453,10 @@ def registrar(sub: Any) -> None:
     g.add_argument("--duracao-s", type=float, default=None)
     g.add_argument("--modo-mm", action="store_true",
                    help="aceita as cotacoes do MM na demo (uma limitada por lado); tambem ligado por [mm].demo_mm = true")
+    g.add_argument("--risco", default="config/risco.toml", help="modo arquivo unico (sem --usuario/--conta)")
+    g.add_argument("--aprovacao", default="config/aprovacoes/risco-v1.toml", help="modo arquivo unico")
+    from robowin.risco.usuarios import adicionar_args
+    adicionar_args(g)
     g.set_defaults(func=_cmd_gateway)
 
     c = sub.add_parser("coletar", help="coleta ticks e livro (sem ordens) gravando o log bruto")

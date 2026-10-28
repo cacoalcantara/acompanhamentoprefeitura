@@ -73,6 +73,24 @@ def _risco(raiz: Path | None) -> tuple[ConfigRisco, str]:
     return ConfigRisco(), "padrao embutido (config/risco.toml ausente)"
 
 
+def _risco_selecionado(args: argparse.Namespace, raiz: Path | None, perfil: PerfilInstrumento, plat: str,
+                       login: int | None, servidor: str | None) -> tuple[ConfigRisco, str]:
+    """Sem usuario: o arquivo unico (como sempre). Com `--usuario/--conta` (ou [geral]): os limites DESSE par; a conta
+    da aceitacao tem de ser a aprovada e, com `--confirmo-conta-demo` (ordens de teste) fora do duble, a aprovacao
+    tem de ser valida. Conta real: sempre recusada."""
+    from robowin.risco.usuarios import ContaDivergente, risco_para, selecao_de
+    sel = selecao_de(args.config, getattr(args, "usuario", None), getattr(args, "conta", None),
+                     getattr(args, "usuarios", None))
+    if not sel.ativa:
+        return _risco(raiz)
+    motivo = sel.chave.confere(plat, servidor, login)
+    if motivo:
+        raise ContaDivergente(f"conta da aceitacao difere da conta aprovada {sel.chave.texto}: {motivo}")
+    ao_vivo = bool(args.confirmo_conta_demo) and not args.duble
+    cfg, erro, arq = risco_para(sel, perfil, Path("config/risco.toml"), None, ao_vivo=ao_vivo)
+    return cfg, f"{sel.descricao()} ({arq.name}{'; ' + erro if erro else ''})"
+
+
 def _config(args: argparse.Namespace, raiz: Path | None) -> tuple[str, dict[str, Any]]:
     caminho = Path(args.config)
     if not caminho.is_file() and raiz is not None and (raiz / "config" / "robowin.toml").is_file():
@@ -113,10 +131,14 @@ def rodar(args: argparse.Namespace, *, terminal: Any = None, relogio: Relogio | 
     except ValueError as e:
         print(f"ERRO: {e}")
         return 2
-    risco, origem_risco = _risco(raiz)
     login = args.login or cfg_mt5.get("login") or (LOGIN_DUBLE if args.duble else None)
     servidor = args.servidor or cfg_mt5.get("servidor") or (_servidor_duble(plat) if args.duble else None)
     login = int(login) if login else None
+    try:
+        risco, origem_risco = _risco_selecionado(args, raiz, perfil, plat, login, servidor)
+    except ErroConfig as e:
+        print(f"ERRO (aceitacao recusada): {e}")
+        return 2
 
     if args.duble:
         relogio = relogio or RelogioSimulado(int(INICIO_DUBLE.timestamp() * 1e9))
@@ -187,4 +209,6 @@ def registrar(sub: Any) -> None:
     p.add_argument("--json", action="store_true", help="imprime o relatorio em JSON em vez da matriz em texto")
     p.add_argument("--pular-ia", action="store_true", help="marca a A10 (IA ao vivo) como nao aplicavel")
     p.add_argument("--raiz", default=None, help="raiz do repositorio (padrao: pasta atual ou a de origem do pacote)")
+    from robowin.risco.usuarios import adicionar_args
+    adicionar_args(p)
     p.set_defaults(func=_cmd_aceitacao)

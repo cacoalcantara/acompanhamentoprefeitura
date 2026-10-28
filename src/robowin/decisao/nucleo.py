@@ -189,8 +189,15 @@ class FonteLista:
 class Nucleo:
     def __init__(self, orq: Orquestrador, fonte: FonteEventos, *, heartbeat: Callable[[], None] | None = None,
                  intervalo_hb_s: float = 1.0, hb_gateway_max_s: float = 15.0, cooperar_s: float = 0.005,
-                 espelho: EspelhoDemo | None = None, monitor: MonitorGateway | None = None) -> None:
+                 espelho: EspelhoDemo | None = None, monitor: MonitorGateway | None = None,
+                 conta_esperada: Any = None) -> None:
         self.orq, self.fonte, self.heartbeat = orq, fonte, heartbeat
+        # conta (risco.usuarios.ChaveConta) cujos limites foram aprovados: enquanto o gateway nao CONFIRMAR que a conta
+        # conectada e esta (plataforma, servidor, login; e demo), novas entradas ficam bloqueadas
+        self.conta_esperada = conta_esperada
+        self.conta_divergente: str | None = "conta do gateway ainda nao confirmada" if conta_esperada is not None else None
+        self._avisou_conta: str | None = None
+        self._prox_marca_conta = 0
         self.espelho, self.monitor = espelho, monitor
         self.intervalo_hb_s, self.hb_gateway_max_s, self.cooperar_s = intervalo_hb_s, hb_gateway_max_s, cooperar_s
         self._lacunas_vistas = 0
@@ -216,6 +223,8 @@ class Nucleo:
             self._ult_hb_gw = time.monotonic()
         elif topico == "estado":
             self.estado_gateway = d
+            if self.conta_esperada is not None:
+                self._conferir_conta(d)
             if self.monitor is not None:
                 self.monitor.ao_estado(d, o._agora())
             if self.espelho is not None:
@@ -240,9 +249,29 @@ class Nucleo:
             o.registro.incidente(t_ns=o._agora(), origem="gateway", severidade="alerta",
                                  detalhe=str(d.get("tipo", ""))[:200])
 
+    def _conferir_conta(self, d: dict[str, Any]) -> None:
+        """Conta conectada (estado do gateway) x conta aprovada: divergencia bloqueia entradas com motivo claro."""
+        conta = d.get("conta") or {}
+        if not conta:
+            motivo = "gateway nao informou a conta conectada"
+        else:
+            motivo = self.conta_esperada.confere(d.get("plataforma"), conta.get("servidor"), conta.get("login"))
+            if not motivo and str(conta.get("trade_mode", "")).lower() != "demo":
+                motivo = f"conta conectada nao e DEMO (trade_mode {conta.get('trade_mode')}): conta real exige autorizacao_real"
+        self.conta_divergente = (f"conta conectada difere da conta aprovada {self.conta_esperada.texto}: {motivo}"
+                                 if motivo else None)
+        if self.conta_divergente and self.conta_divergente != self._avisou_conta:
+            self._avisou_conta = self.conta_divergente
+            self._prox_marca_conta = 0  # bloqueia ja no proximo ciclo
+            self.orq.registro.incidente(t_ns=self.orq._agora(), origem="nucleo", severidade="critico",
+                                        detalhe=f"{self.conta_divergente}; novas entradas BLOQUEADAS"[:300])
+
     def _verificar_integridade(self) -> None:
         o = self.orq
         agora = o._agora()
+        if self.conta_divergente and agora >= self._prox_marca_conta:  # re-marca antes de a retencao expirar
+            o.bloqueio.marcar("conta_divergente", agora, self.conta_divergente)
+            self._prox_marca_conta = agora + max(1, int(getattr(o.bloqueio, "retencao_ns", 0)) // 2)
         if self.fonte.lacunas > self._lacunas_vistas:
             n = self.fonte.lacunas - self._lacunas_vistas
             self._lacunas_vistas = self.fonte.lacunas

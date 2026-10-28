@@ -94,10 +94,13 @@ def _toml_str(v: str) -> str:
 
 def aprovar_politica(risco: str | Path, dir_aprovacoes: str | Path, responsavel: str, motivo: str, *,
                      confirmar: Callable[[list[str]], str], auditoria: Any | None = None,
-                     hoje: dt.date | None = None, agora_utc: dt.datetime | None = None) -> ResultadoAprovacao:
+                     hoje: dt.date | None = None, agora_utc: dt.datetime | None = None,
+                     extra_registro: dict[str, str] | None = None) -> ResultadoAprovacao:
     """Aprova a politica de `risco`: valida, mostra o resumo a `confirmar` (que devolve o texto digitado) e, so com
     'APROVO', grava o novo registro e o evento de auditoria. Qualquer recusa levanta `AprovacaoRecusada` sem
-    criar nem alterar arquivo algum."""
+    criar nem alterar arquivo algum. `extra_registro` (ex.: usuario e conta de `risco.usuarios`) vai para o registro
+    e para o evento de auditoria."""
+    extra = {k: str(v) for k, v in (extra_registro or {}).items()}
     responsavel = validar_responsavel(responsavel)
     motivo = (motivo or "").strip() or "aprovacao pelo responsavel via robowin risco aprovar"
     risco = Path(risco)
@@ -113,8 +116,9 @@ def aprovar_politica(risco: str | Path, dir_aprovacoes: str | Path, responsavel:
     d = Path(dir_aprovacoes)
     anterior = resolver_aprovacao(d / f"{PREFIXO_REGISTRO}-v1.toml", risco)
     destino = proximo_registro(d)
-    resumo = [f"Arquivo: {risco}", f"sha256:  {sha}", "", *descrever_limites(cfg), "",
-              f"Responsavel: {responsavel}", f"Motivo: {motivo}", f"Registro a gravar: {destino}"]
+    resumo = [f"Arquivo: {risco}", f"sha256:  {sha}", *(f"{k}: {v}" for k, v in extra.items()), "",
+              *descrever_limites(cfg), "", f"Responsavel: {responsavel}", f"Motivo: {motivo}",
+              f"Registro a gravar: {destino}"]
     digitado = confirmar(resumo)
     if (digitado or "").strip() != PALAVRA_APROVACAO:
         raise AprovacaoRecusada(f"confirmacao nao recebida (era preciso digitar {PALAVRA_APROVACAO}): nada foi alterado")
@@ -124,13 +128,14 @@ def aprovar_politica(risco: str | Path, dir_aprovacoes: str | Path, responsavel:
     agora_utc = agora_utc or dt.datetime.now(dt.UTC)
     texto = (
         "# Registro de aprovacao da politica de risco gerado por `robowin risco aprovar`. NAO edite: para mudar,\n"
-        "# altere config/risco.toml e aprove de novo (gera a proxima versao; as anteriores ficam como historico).\n"
+        "# altere o arquivo de risco e aprove de novo (gera a proxima versao; as anteriores ficam como historico).\n"
         f"sha256 = {_toml_str(sha)}\n"
         f"data = {_toml_str(hoje.isoformat())}\n"
         f"responsavel = {_toml_str(responsavel)}\n"
         f"motivo = {_toml_str(motivo)}\n"
         f"arquivo = {_toml_str(risco.name)}\n"
         f"aprovado_em_utc = {_toml_str(agora_utc.replace(microsecond=0).isoformat())}\n"
+        + "".join(f"{k} = {_toml_str(v)}\n" for k, v in extra.items())
     )
     d.mkdir(parents=True, exist_ok=True)
     try:
@@ -142,7 +147,7 @@ def aprovar_politica(risco: str | Path, dir_aprovacoes: str | Path, responsavel:
         auditoria.registrar("risco_aprovado", {
             "arquivo_risco": str(risco), "sha256": sha, "registro": destino.name, "responsavel": responsavel,
             "motivo": motivo, "data": hoje.isoformat(),
-            "registro_anterior": anterior.name if anterior is not None and anterior.is_file() else None})
+            "registro_anterior": anterior.name if anterior is not None and anterior.is_file() else None, **extra})
     return ResultadoAprovacao(destino, sha, anterior if anterior is not None and anterior.is_file() else None)
 
 

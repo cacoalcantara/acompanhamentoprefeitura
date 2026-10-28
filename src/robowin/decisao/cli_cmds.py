@@ -22,7 +22,12 @@ def _params(a: argparse.Namespace) -> Any:
         theta_brl=a.theta, com_condicional=not a.sem_condicional, p_timeout=a.p_timeout, p_http=a.p_http,
         passo_s=a.passo_s, checagem_s=a.checagem_s, ativo=a.ativo, odds_sessoes=getattr(a, "odds_sessoes", 0),
         registro_modelos=Path(a.registro_modelos) if a.registro_modelos else None, tipo_modelo=a.tipo_modelo,
-        idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 60.0)
+        idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 60.0, **_usuario_conta(a))
+
+
+def _usuario_conta(a: argparse.Namespace) -> dict[str, Any]:
+    return {"usuario": a.usuario, "conta_negociacao": a.conta,
+            "dir_usuarios": Path(a.usuarios) if a.usuarios else None}
 
 
 def _cmd_simular(a: argparse.Namespace) -> int:
@@ -71,13 +76,20 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
     from robowin.dados.ticks import data_sp
 
     from .nucleo import FonteZMQ, Nucleo, piscina_odds_nucleo
-    from .simulacao import ParamsSimulacao, abrir_banco, construir_orquestrador, formatar_resumo
+    from .simulacao import (
+        ParamsSimulacao,
+        abrir_banco,
+        construir_orquestrador,
+        formatar_resumo,
+        selecao_risco,
+    )
 
     p = ParamsSimulacao(
         saida=Path(a.saida), provedor=a.provedor, config=Path(a.config), catalogo=Path(a.catalogo),
         risco=Path(a.risco), aprovacao=Path(a.aprovacao), passo_s=a.passo_s, checagem_s=a.checagem_s, ativo=a.ativo,
         idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 15.0,
-        com_condicional=not a.sem_condicional, arquivo_emergencia=caminho_flag_emergencia(a.config, a.arquivo_emergencia))
+        com_condicional=not a.sem_condicional, arquivo_emergencia=caminho_flag_emergencia(a.config, a.arquivo_emergencia),
+        **_usuario_conta(a))
     rel = RelogioReal()
     sessao_id = f"nucleo-{int(time.time())}"
     try:
@@ -93,6 +105,9 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
             modo_tempo="real", sessao_id=sessao_id, t_ref_ns=rel.agora_ns(), piscina_odds=odds.piscina)
         odds.registrar(registro, rel.agora_ns())
         print(odds.detalhe())
+        sel = selecao_risco(p)
+        conta_esperada = sel.chave if sel.ativa else None
+        print(f"Limites de risco: {sel.descricao()} (aprovacao valida exigida ao vivo).")
     except ErroConfig as e:
         print(f"ERRO: {e}")
         return 2
@@ -124,7 +139,7 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
             banco.fechar()
             return 2
     nucleo = Nucleo(m.orq, fonte, heartbeat=(lambda: cliente.enviar_sem_resposta({"tipo": "heartbeat"}))
-                    if cliente else None, espelho=espelho, monitor=monitor)
+                    if cliente else None, espelho=espelho, monitor=monitor, conta_esperada=conta_esperada)
     print(f"SIMULACAO: nucleo ao vivo em {a.pub} (comandos {a.cmd or '-'}); braco(s): "
           f"{', '.join(m.orq.contas)}. Nenhuma ordem real; Ctrl+C encerra.")
     if espelho is not None:
@@ -168,6 +183,8 @@ def _comuns(p: argparse.ArgumentParser) -> None:
     p.add_argument("--risco", default="config/risco.toml")
     p.add_argument("--aprovacao", default="config/aprovacoes/risco-v1.toml")
     p.add_argument("--sem-condicional", action="store_true", help="so as variantes de modo imediato")
+    from robowin.risco.usuarios import adicionar_args
+    adicionar_args(p)
     p.add_argument("--passo-s", type=float, default=15.0, help="periodo dos bracos sem IA")
     p.add_argument("--checagem-s", type=float, default=15.0, help="a cada quanto os gatilhos sao avaliados")
     p.add_argument("--idade-max-dado-s", type=float, default=None,

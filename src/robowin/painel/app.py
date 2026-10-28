@@ -56,8 +56,10 @@ def criar_app(
     token: str | None = None,
     config: dict[str, Any] | None = None,
     metricas_provider=None,
+    dir_usuarios: str | Path | None = None,
 ) -> FastAPI:
-    """`metricas_provider(banco) -> {braco: metricas}` e o ponto de extensao para robowin.avaliacao."""
+    """`metricas_provider(banco) -> {braco: metricas}` e o ponto de extensao para robowin.avaliacao.
+    `dir_usuarios`: armazem de usuarios/contas da pagina Risco (padrao ROBOWIN_USUARIOS ou config/usuarios)."""
     config = config or {}
     geral = config.get("geral", {})
     dir_d = Path(dir_dados or os.environ.get("ROBOWIN_DADOS") or geral.get("dados", "dados_locais")).resolve()
@@ -163,6 +165,12 @@ def criar_app(
             ok, msgs = None, []
         return tpl.TemplateResponse(request, "auditoria.html", ctx(
             request, "auditoria", ok=ok, msgs=msgs, pasta=str(pasta)))
+
+    # ---------------- risco por usuario e conta ----------------
+    from .risco_usuarios import registrar_rotas
+    dir_u = Path(dir_usuarios or os.environ.get("ROBOWIN_USUARIOS") or geral.get("usuarios") or "config/usuarios").resolve()
+    registrar_rotas(app, tpl=tpl, ctx=ctx, tok=tok, dir_usuarios=dir_u, dir_auditoria=dir_d / "auditoria",
+                    perfil=perfil, limitado=limitado, falhou=falhou, ler_form=ler_form)
 
     # ---------------- API JSON ----------------
     @app.get("/api/resumo")

@@ -12,3 +12,5 @@ dados_locais/
 .claude/worktrees/
 relatorios/
 robowin-aceitacao-*.zip
+# limites/aprovacoes por usuario e conta (dados pessoais: login da conta, hash do token): ficam so na maquina
+config/usuarios/

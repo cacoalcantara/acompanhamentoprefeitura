@@ -232,6 +232,39 @@ def politica_risco(ctx: Contexto) -> Resultado:
                     f"{reg.get('data', '?')})")
 
 
+def risco_por_usuario(ctx: Contexto) -> Resultado:
+    """Limites por usuario+conta (risco.usuarios): estado de cada conta; IA sem limites; conta real sempre bloqueada."""
+    nome = "Risco por usuario/conta (isolamento, IA sem limites, conta real bloqueada)"
+    if ctx.raiz is None:
+        return nao_verificavel(nome, "raiz do repositorio nao encontrada")
+    from robowin.core.config import ErroConfig, carregar_toml
+    from robowin.risco.usuarios import APROVADO, ArmazemUsuarios, dir_usuarios, validar_ia_sem_limites
+    cfg_path = ctx.arq("config/robowin.toml")
+    try:
+        validar_ia_sem_limites(carregar_toml(cfg_path) if cfg_path.is_file() else {})
+        raiz = dir_usuarios(cfg_path) if cfg_path.is_file() else ctx.arq("config/usuarios")
+    except (ErroConfig, OSError, ValueError) as e:
+        return reprovado(nome, str(e))
+    arm = ArmazemUsuarios(raiz)
+    nomes = arm.usuarios()
+    if not nomes:
+        return aprovado(nome, "nenhum usuario configurado: vale o modo arquivo unico (config/risco.toml; a aprovacao "
+                        "do titular e PROVISORIA, somente DEMO, e nao e padrao de outros usuarios). Para limites "
+                        "proprios: robowin usuario criar --usuario <nome>")
+    linhas, pend = [], []
+    for u in nomes:
+        for c in arm.contas(u):
+            st = arm.estado(u, c.chave)
+            linhas.append(f"{u}/{c.chave.texto}[{c.tipo}]={st.estado}{'(provisoria)' if st.provisoria else ''}")
+            if st.estado != APROVADO or c.tipo != "demo":
+                pend.append(f"{u}/{c.chave.texto}")
+    det = "; ".join(linhas) or "usuarios sem contas"
+    if pend:
+        return nao_verificavel(nome, f"{det}. Bloqueadas para operar (aprovacao do usuario pendente ou conta real): "
+                               f"{', '.join(pend)}")
+    return aprovado(nome, f"{det}; autorizacao_real bloqueada em todas")
+
+
 def _chamadas_order_send(arvore: ast.AST) -> list[int]:
     out = []
     for n in ast.walk(arvore):
@@ -437,7 +470,8 @@ def checagens() -> list[tuple[str, Callable[[Contexto], Resultado | list[Resulta
         ("importabilidade", importabilidade), ("ruff", ruff), ("lint_mql4", lint_mql4),
         ("auditoria", cadeia_auditoria), ("catalogo", catalogo_modelos), ("provedores", registro_provedores),
         ("perfis", perfis_ativo_bolsa),
-        ("risco", politica_risco), ("envio_unico", order_send_unico), ("constantes", constantes_de_ativo),
+        ("risco", politica_risco), ("risco_usuarios", risco_por_usuario), ("envio_unico", order_send_unico),
+        ("constantes", constantes_de_ativo),
         ("diagnostico", diagnostico_duble), ("painel", painel), ("gateway", gateway_cliente_local),
         ("metatrader5", pacote_metatrader5), ("chaves", chaves_api), ("conectividade", conectividade),
     ]

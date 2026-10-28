@@ -10,7 +10,9 @@ def _painel(a):
     except OSError:
         pass
     from robowin.core.config import dir_dados
-    app = criar_app(banco=a.banco, dir_dados=dir_dados(a.config, a.dados), config=cfg)
+    from robowin.risco.usuarios import dir_usuarios
+    app = criar_app(banco=a.banco, dir_dados=dir_dados(a.config, a.dados), config=cfg,
+                    dir_usuarios=dir_usuarios(a.config, a.usuarios))
     uvicorn.run(app, host=a.host, port=a.porta, log_level="info")
     return 0
 
@@ -28,6 +30,8 @@ def registrar(sub):
     p.add_argument("--config", default="config/robowin.toml")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--porta", type=int, default=8765)
+    p.add_argument("--usuarios", default=None,
+                   help="armazem de usuarios/contas da pagina Risco (padrao: ROBOWIN_USUARIOS, [geral].usuarios ou config/usuarios)")
     p.set_defaults(func=_painel)
     d = sub.add_parser("painel-demo", help="cria banco com dados SINTÉTICOS de demonstração")
     d.add_argument("--banco", default="dados_locais/demo.sqlite")

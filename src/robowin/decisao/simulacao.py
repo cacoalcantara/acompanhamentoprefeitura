@@ -55,7 +55,7 @@ from robowin.modelos.demo_sintetico import montar_amostras
 from robowin.modelos.microestrutura import CriterioOOS, ModeloMicroestrutura
 from robowin.modelos.rotulagem import ConfigBarreiras
 from robowin.modelos.rotulagem import Custos as CustosRotulagem
-from robowin.risco.politica import ERRO_APROVACAO_PENDENTE, risco_do_ativo, stop_maximo_efetivo_pontos
+from robowin.risco.politica import ERRO_APROVACAO_PENDENTE, stop_maximo_efetivo_pontos
 from robowin.risco.tempo import dia_sp
 from robowin.statarb.sinais import SinalStatArbPadrao
 
@@ -258,6 +258,10 @@ class ParamsSimulacao:
     ativo: str | None = None  # simbolo_base do perfil (config/instrumentos.toml); None => [geral].simbolo_base
     registro_modelos: Path | None = None  # registro de modelos do ativo: carrega o artefato em vez de treinar
     odds_sessoes: int = 0  # > 0: gera N pregoes sinteticos ANTERIORES e liga a Maquina do Tempo (evidencia ao revisor)
+    # limites por USUARIO + CONTA (risco.usuarios); ambos None => modo arquivo unico (risco/aprovacao acima)
+    usuario: str | None = None
+    conta_negociacao: str | None = None  # PLATAFORMA:SERVIDOR:LOGIN
+    dir_usuarios: Path | None = None
 
 
 @dataclass
@@ -311,7 +315,9 @@ def treinar_statarb(treino: DadosSinteticos, perfil: PerfilInstrumento, seed: in
 
 
 def carregar_ambiente(p: ParamsSimulacao) -> tuple[dict[str, Any], Catalogo]:
+    from robowin.risco.usuarios import validar_ia_sem_limites
     cfg = carregar_toml(p.config) if Path(p.config).exists() else {}
+    validar_ia_sem_limites(cfg)  # a configuracao de IA nunca define/altera limites de risco
     return cfg, Catalogo.carregar(p.catalogo)
 
 
@@ -412,13 +418,30 @@ def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo
         modelos=modelos, fixavel=fixavel, hashes=hashes, origem_dados=origem_dados, ativo=ativo)
 
 
+def selecao_risco(p: ParamsSimulacao) -> Any:
+    """Usuario + conta ativos (`--usuario/--conta` ou [geral].usuario/conta_negociacao); inativa = arquivo unico."""
+    from robowin.risco.usuarios import selecao_de
+    return selecao_de(p.config, p.usuario, p.conta_negociacao, p.dir_usuarios)
+
+
 def carregar_risco_simulacao(p: ParamsSimulacao, perfil: PerfilInstrumento, *, ao_vivo: bool = False
                              ) -> tuple[Any, str | None]:
-    """Politica de risco APROVADA do ATIVO (hash conferido). Devolve (config, erro).
+    """Politica de risco APROVADA do ATIVO (hash conferido) do usuario+conta ativos ou, sem usuario, do arquivo
+    unico. Devolve (config, erro).
 
-    Ao vivo o erro se propaga (`ErroConfig`): nunca opera com padrao. Na simulacao cai nos limites padrao/minimos
-    do ativo, mas devolve o erro para que o chamador registre incidente CRITICO e rotule `risco_nao_aprovado`."""
-    return risco_do_ativo(perfil, p.risco, p.aprovacao, ao_vivo=ao_vivo)
+    Ao vivo o erro se propaga (`ErroConfig`): nunca opera com padrao nem com limites de outro usuario/conta. Na
+    simulacao cai nos limites padrao/minimos (no modo usuario: os do proprio usuario ou o modelo conservador), mas
+    devolve o erro para que o chamador registre incidente CRITICO e rotule `risco_nao_aprovado`."""
+    from robowin.risco.usuarios import risco_para
+    cfg, erro, _ = risco_para(selecao_risco(p), perfil, p.risco, p.aprovacao, ao_vivo=ao_vivo)
+    return cfg, erro
+
+
+def arquivo_risco_aplicado(p: ParamsSimulacao) -> Path:
+    sel = selecao_risco(p)
+    if not sel.ativa:
+        return Path(p.risco)
+    return sel.armazem().conta(sel.usuario, sel.chave).risco
 
 
 @dataclass
@@ -475,8 +498,13 @@ def construir_orquestrador(
     memoria_reflexiva, servico_reflexao = montar_reflexao(cfg, fab, provedores, ativo=bool(papeis))
     if memoria_reflexiva is not None and servico_reflexao is not None:
         hashes["reflexao"] = f"ativa:{servico_reflexao.chave}"
-    if erro_risco is None or erro_risco == ERRO_APROVACAO_PENDENTE:
-        hashes["risco"] = _hash_arquivo(p.risco)  # o arquivo foi o aplicado (aprovacao pendente fica registrada)
+    sel = selecao_risco(p)
+    if sel.ativa:  # de quem sao os limites (nunca o token, so usuario e conta)
+        hashes["risco_usuario"] = str(sel.usuario)
+        hashes["risco_conta"] = sel.chave.texto
+    arq_risco = arquivo_risco_aplicado(p)
+    if (erro_risco is None or erro_risco == ERRO_APROVACAO_PENDENTE) and arq_risco.is_file():
+        hashes["risco"] = _hash_arquivo(arq_risco)  # o arquivo foi o aplicado (aprovacao pendente fica registrada)
         if erro_risco is not None:
             hashes["risco_aprovacao"] = "pendente"
     else:  # o hash do arquivo NAO foi o aplicado (valeu o padrao): nao gravar como se fosse
