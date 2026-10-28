@@ -139,9 +139,10 @@ class Guardiao:
             self._bloqueios[chave] = _Bloqueio(motivo, self._dia(), persistente)
             self._alerta(f"bloqueio_{chave}", {"motivo": motivo})
 
-    def bloquear_ate_resolver(self, chave: str, motivo: str) -> None:
-        """Bloqueio de entradas que o proprio chamador levanta com `desbloquear(chave)` (ex.: offset do servidor)."""
-        self._bloquear(chave, motivo, persistente=True)
+    def bloquear_ate_resolver(self, chave: str, motivo: str, persistente: bool = True) -> None:
+        """Bloqueio de entradas que o proprio chamador levanta com `desbloquear(chave)` (ex.: offset do servidor).
+        `persistente=False` expira na virada do dia (ex.: lacuna do feed sem historico de ticks)."""
+        self._bloquear(chave, motivo, persistente=persistente)
 
     def desbloquear(self, chave: str) -> None:
         self._bloqueios.pop(chave, None)
@@ -183,8 +184,26 @@ class Guardiao:
         motivos = self.motivos_bloqueio()
         if motivos:
             return False, "; ".join(motivos)
+        if self.ex.hedging:
+            ok, motivo = self._limite_hedging(cmd)
+            if not ok:
+                return False, motivo
         if self.cfg.exigir_sl:
             return self._validar_stop(cmd)
+        return True, ""
+
+    def _limite_hedging(self, cmd: ComandoOrdem) -> tuple[bool, str]:
+        """Hedging (MT4): ordem oposta abriria OUTRA posicao. Entrada so sem posicao aberta e com
+        |posicoes abertas (por ticket) + pendentes + nova| <= contratos_max."""
+        ps, os_ = self.t.positions_get(), self.t.orders_get()
+        if ps is None or os_ is None:
+            return False, "hedging: positions_get/orders_get sem resposta"
+        if ps:
+            return False, f"hedging: ja ha posicao aberta (tickets {sorted(int(p.ticket) for p in ps)}); entrada recusada"
+        lote = self.ex.cfg.lote
+        pend = sum(float(o.volume_current) for o in os_) / lote
+        if len(ps) + pend + cmd.quantidade > self.cfg.contratos_max + 1e-9:
+            return False, f"hedging: posicoes abertas + pendentes + nova excederiam {self.cfg.contratos_max}"
         return True, ""
 
     def _validar_stop(self, cmd: ComandoOrdem) -> tuple[bool, str]:
@@ -334,4 +353,5 @@ class Guardiao:
     def estado(self) -> dict[str, Any]:
         return {"bloqueios": self.motivos_bloqueio(), "travado_emergencia": self.travado_emergencia,
                 "heartbeat_idade_s": round(self.idade_heartbeat_s(), 3), "pnl_dia_brl": self.pnl_dia_brl,
-                "classificacao_deals": dict(self.classificacao), "mensagens_ultimo_min": self.ex.orcamento.usadas()}
+                "classificacao_deals": dict(self.classificacao), "mensagens_ultimo_min": self.ex.orcamento.usadas(),
+                "modo_conta": self.ex.cfg.conta}

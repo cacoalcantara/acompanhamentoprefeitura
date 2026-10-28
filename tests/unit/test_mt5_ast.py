@@ -76,3 +76,16 @@ def test_import_metatrader5_e_tardio():
         for n in ast.parse(p.read_text(encoding="utf-8")).body:
             if isinstance(n, ast.Import):
                 assert all(a.name != "MetaTrader5" for a in n.names), p
+
+
+def test_conector_mt4_define_order_send_mas_nao_chama_nem_cita():
+    """A ponte do MT4 cumpre o Protocolo com um METODO order_send; o unico CHAMADOR segue sendo execucao_demo.py."""
+    for nome in ("conector_mt4.py", "duble_mt4.py", "protocolo_mt4.py", "capacidades.py"):
+        arv = ast.parse((RAIZ / "mt5" / nome).read_text(encoding="utf-8"))
+        assert _chamadas_order_send(arv) == [], nome
+    arv = ast.parse((RAIZ / "mt5" / "conector_mt4.py").read_text(encoding="utf-8"))
+    defs = [n.name for n in ast.walk(arv) if isinstance(n, ast.FunctionDef)]
+    assert "order_send" in defs
+    # os comandos de ordem do protocolo da ponte nao usam o identificador (nem como string)
+    from robowin.mt5 import protocolo_mt4 as P
+    assert not any(c.startswith("order_send") for c in P.COMANDOS)
