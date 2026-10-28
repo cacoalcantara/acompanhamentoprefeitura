@@ -8,9 +8,9 @@ from pathlib import Path
 from robowin.core.config import ErroConfig, carregar_toml
 from robowin.core.instrumentos import perfil_da_config
 from robowin.core.tipos import Lado, Trade
-from robowin.risco import cauda
 
 from . import metricas, relatorio, robustez, uso_ia
+from . import monitoramento_banco as monit
 
 ORIGEM_SINTETICO = "dados_sinteticos"  # mesma marca de decisao.registro e do painel
 
@@ -93,22 +93,10 @@ def origem_declarada_real(banco: str | Path) -> bool:
     return "historico_real" in _origem_manifestos(banco)
 
 
-def _md_robustez(rel: dict) -> str:
-    ln = ["", "## Monitoramento de cauda e robustez (informativo; nao e veto nem prova de lucro)", ""]
-    pbo = rel.get("pbo_entre_bracos") or {}
-    if pbo.get("pbo") is None:
-        ln.append(f"- PBO entre bracos: indisponivel ({pbo.get('motivo', 'amostra insuficiente')}).")
-    else:
-        ln.append(f"- PBO entre bracos (CSCV, {pbo['n_combinacoes']} combinacoes, {pbo['n_bracos']} bracos, "
-                  f"{pbo['n_periodos']} pregoes): {pbo['pbo']:.2f}. {pbo['aviso']}")
-    for b, c in (rel.get("cauda_perdas") or {}).items():
-        niv = c["niveis"]
-        txt = "; ".join(f"VaR {k} = R$ {v['var_brl']:.2f}, ES = R$ {v['es_brl']:.2f}" for k, v in niv.items())
-        ln.append(f"- {b}: {c['dias']} dias; {txt}; pior dia R$ -{c['pior_dia_brl']:.2f}. " + " ".join(c["avisos"][:1]))
-    return "\n".join(ln) + "\n"
-
-
 def _avaliar(a) -> int:
+    if a.ticks and not a.simbolo:
+        print("ERRO: --ticks exige --simbolo")
+        return 2
     trades = carregar_trades(a.banco)
     # desconhecido (None) recusa o selo: so e "nao sintetico"/"nao contaminado" se AFIRMADO
     if a.sintetico or banco_sintetico(a.banco):
@@ -137,12 +125,22 @@ def _avaliar(a) -> int:
     md.parent.mkdir(parents=True, exist_ok=True)
     uso = uso_ia.resumir_uso(uso_ia.carregar_chamadas(a.banco))  # custo/latencia por braco e papel (debate: varias etapas)
     rel["uso_ia"] = uso
-    # monitoramento (NUNCA veto): cauda historica de perdas por braco e probabilidade de overfitting da escolha do melhor
-    rel["cauda_perdas"] = {b: cauda.relatorio_cauda(list(metricas.pnl_por_dia(ts).values())).como_dict()
-                           for b, ts in trades.items() if ts}
+    # monitoramento (informativo; NUNCA veto): PSI de features, custo de execucao real x modelo, MinTRL, VaR/ES e
+    # probabilidade de overfitting da escolha do melhor braco. PSI alto so grava incidente de aviso.
+    extra = monit.series_de_ticks(a.ticks, a.simbolo) if a.ticks and a.simbolo else None
+    mon = monit.montar_monitoramento(
+        a.banco, tick_pontos=perfil.tick_pontos,
+        liquidos_por_braco={b: [t.liquido_brl for t in metricas.ordenar(ts)] for b, ts in trades.items()},
+        pnl_diario_por_braco={b: list(metricas.pnl_por_dia(ts).values()) for b, ts in trades.items()},
+        series_extra=extra)
+    rel["monitoramento"] = mon
+    rel["cauda_perdas"] = mon["cauda"]
     rel["pbo_entre_bracos"] = robustez.pbo_entre_bracos(trades)
-    md.write_text(relatorio.renderizar_markdown(rel) + uso_ia.renderizar_markdown(uso) + _md_robustez(rel),
-                  encoding="utf-8")
+    if not a.sem_incidente and monit.registrar_incidente_deriva(a.banco, mon["psi"]):
+        print(f"AVISO (informativo): PSI >= {monit.mon.PSI_ALERTA:.2f}; incidente "
+              f"'{monit.ORIGEM_INCIDENTE_DERIVA}' gravado no banco (nada foi bloqueado)")
+    md.write_text(relatorio.renderizar_markdown(rel) + uso_ia.renderizar_markdown(uso)
+                  + monit.renderizar_markdown(mon, rel["pbo_entre_bracos"], moeda=perfil.moeda), encoding="utf-8")
     js.write_text(json.dumps(relatorio.para_json_seguro(rel), ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"relatorio escrito em {md} e {js}")
     return 0
@@ -168,6 +166,11 @@ def registrar(sub):
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--ativo", default=None, help="simbolo_base do perfil (padrao: o ativo do manifesto do banco)")
     p.add_argument("--config", default="config/robowin.toml")
+    p.add_argument("--ticks", default=None,
+                   help="armazem de ticks: acrescenta ao PSI o vetor de features recalculado (exige --simbolo)")
+    p.add_argument("--simbolo", default=None, help="simbolo do armazem de ticks (com --ticks)")
+    p.add_argument("--sem-incidente", action="store_true",
+                   help="nao grava o incidente 'deriva_features' no banco (o relatorio continua mostrando o PSI)")
     p.set_defaults(func=_avaliar)
     from .cli_maquina import registrar_comando
     registrar_comando(sub)

@@ -122,8 +122,10 @@ def test_avaliar_anexa_uso_de_ia_cauda_e_pbo_ao_relatorio(tmp_path):
     assert rc == 0
     md = (tmp_path / "rel" / "relatorio.md").read_text(encoding="utf-8")
     js = json.loads((tmp_path / "rel" / "relatorio.json").read_text(encoding="utf-8"))
-    assert "Uso de IA por braco e papel" in md and "Monitoramento de cauda" in md
+    assert "Uso de IA por braco e papel" in md and "Monitoramento (informativo; nao altera o veto de risco)" in md
+    assert "VaR/ES diario historico" in md and "PBO" in md
     assert js["uso_ia"]["total"]["chamadas"] > 0 and "claude" in js["uso_ia"]["por_braco"]
     assert "pbo_entre_bracos" in js and js["cauda_perdas"]
-    assert "nao e veto" in md
+    assert js["monitoramento"]["cauda"] == js["cauda_perdas"]
+    assert "nao sao veto" in md
     assert Path(saida / "robowin.db").exists()

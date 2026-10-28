@@ -41,11 +41,11 @@ Legenda de decisão: **adotar** (ideia aplicada quase como está), **adaptar** (
 | A4 | `aurum/agents/journal.py` (JSONL por ciclo, truncamento, degrada para memória) | Auditoria de cada evento do ciclo do desk | **Já existe** e é mais forte: `auditoria/cadeia.py` (cadeia de hash), `chamadas_llm.resposta_bruta`, `decisoes` | Sim | já existe | Acrescentado: resumo do debate no `proposta_json` da decisão e evento `reflexao_pos_trade` na auditoria. |
 | A5 | `aurum/agents/client.py`, `loop.py`, `providers.py` (laço de tool use, retries, cache de prompt) | Cliente Anthropic com ferramentas | Já existe: `ia/provedores/*`, `ia/orcamento.py`, `ia/cache.py` | n/a | já existe | Sem laço de ferramentas por desenho. |
 | A6 | `aurum/research/splits.py` (purga, embargo, walk-forward, K-fold purgado, CPCV) | Validação cruzada temporal sem vazamento | Já existe: `modelos/walkforward.py` (`mascara_treino` com purga e `embargo_ns`, `dividir_walkforward`, `verificar_sem_vazamento`) e `backtest/vazamento.py` (perturbação do futuro) | Sim | já existe; **CPCV rejeitado** | CPCV não foi implementado: as dobras walk-forward com purga/embargo cobrem o uso atual (um ativo, poucos modelos); o custo de manter CPCV supera o ganho. Reavaliar se houver muitos modelos candidatos. |
-| A7 | `aurum/research/stats.py` (PSR, DSR, Holm, bootstrap estacionário, MinTRL, PBO/CSCV, haircut) | Estatística anti-sorte de seleção | Já existe: `avaliacao/estatistica.py` (DSR, PSR, bootstrap por pregão, SPRT, CUSUM), `comparacao.py` (Holm). **Faltavam MinTRL e PBO** | Sim | **adotar** (MinTRL, PBO) / já existe (resto) / rejeitar `haircut_sharpe` | `avaliacao/robustez.py`: `pbo_cscv`, `pbo_entre_bracos`, `min_track_record_length`; PBO entra no `robowin avaliar`. `haircut_sharpe` é redundante com DSR + bootstrap. Testes em `test_aval_robustez_uso.py`. |
+| A7 | `aurum/research/stats.py` (PSR, DSR, Holm, bootstrap estacionário, MinTRL, PBO/CSCV, haircut) | Estatística anti-sorte de seleção | Já existe: `avaliacao/estatistica.py` (DSR, PSR, bootstrap por pregão, SPRT, CUSUM), `comparacao.py` (Holm). **Faltavam MinTRL e PBO** | Sim | **adotar** (MinTRL, PBO) / já existe (resto) / rejeitar `haircut_sharpe` | `avaliacao/robustez.py`: `pbo_cscv`, `pbo_entre_bracos`, `min_track_record_length`; PBO e MinTRL por braço ("faltam N operações") entram no `robowin avaliar` (MinTRL também no painel). `haircut_sharpe` é redundante com DSR + bootstrap. Testes em `test_aval_robustez_uso.py`. |
 | A8 | `aurum/risk/var.py` (VaR/ES histórico, gaussiano, Cornish-Fisher, Kupiec, `stress_test`) | Medidas de cauda | Parcial: `risco/estresse.py` (gap e circuit breaker). **Não havia VaR/ES nem Kupiec** | Sim (P&L diário em R$) | **adaptar** (histórico + Kupiec) / rejeitar o resto | `risco/cauda.py`: `var_es_historico`, `kupiec_pof`, `backtest_var_deslizante`, `relatorio_cauda`. **Só monitoramento, nunca veto**: teste estático garante que nenhum módulo de risco, execução, decisão ou mt5 importa `cauda`. Gaussiano e Cornish-Fisher rejeitados (subestimam cauda com amostras curtas). |
 | A9 | `aurum/risk/manager.py` (halt persistente, blackout de eventos, `no_new_risk`, `reset_halt("RESET")`) | Risco que só reduz | Já existe: `risco/kill_switch.py` (rearme só manual), `risco/motor.py`, `risco/invariantes.py` | Sim | já existe | — |
 | A10 | `aurum/live/oms.py`, `broker.py` (client id idempotente, reconciliação) | OMS idempotente | Já existe: `execucao/oms.py`, `reconciliacao.py` | Sim | já existe | — |
-| A11 | `aurum/live/monitor.py` (PSI, `SlippageTracker`, `PnLBand`, sinks de alerta/webhook) | Monitoramento ao vivo | Parcial: CUSUM em `avaliacao/estatistica.py`; **sem PSI nem rastreio de custo real × modelo** | Sim | **adaptar** (PSI, slippage) / já existe (PnLBand ≈ CUSUM) / rejeitar (webhook) | `avaliacao/monitoramento.py`: `psi`, `psi_amostras`, `deriva_de_features`, `RastreadorSlippage` (em ticks). **Ainda não ligado ao fluxo ao vivo**: biblioteca para relatórios e aceitação. Webhooks externos ampliam superfície; o painel e a auditoria cobrem. |
+| A11 | `aurum/live/monitor.py` (PSI, `SlippageTracker`, `PnLBand`, sinks de alerta/webhook) | Monitoramento ao vivo | Parcial: CUSUM em `avaliacao/estatistica.py`; **sem PSI nem rastreio de custo real × modelo** | Sim | **adaptar** (PSI, slippage) / já existe (PnLBand ≈ CUSUM) / rejeitar (webhook) | `avaliacao/monitoramento.py`: `psi`, `psi_amostras`, `deriva_de_features`, `RastreadorSlippage` (em ticks). Ligado à seção "Monitoramento" do `robowin avaliar` e do painel (PSI ≥ 0,25 grava incidente `deriva_features`, aviso); não roda a cada decisão do núcleo nem altera o veto. Webhooks externos ampliam superfície; o painel e a auditoria cobrem. |
 | A12 | `aurum/live/state.py` (escrita atômica, heartbeat) | Estado durável | Já existe (heartbeat no kill switch, auditoria append-only, SQLite) | Sim | já existe | — |
 | A13 | `aurum/strategies/*`, `features/technical.py`, `volatility.py` (TSMOM, EWMAC, Donchian, RSI(2), Bollinger, ATR, médias) | Estratégias e indicadores | n/a | **Não** | **rejeitar** | Indicadores técnicos tradicionais proibidos. |
 | A14 | `aurum/data/dukascopy.py`, `macro.py`, `calendar.py` | Dados de ouro e macro | n/a | Não (XAUUSD) | **rejeitar** | Dados e calendário do robowin vêm do MT5/B3. |
@@ -95,7 +95,7 @@ Legenda de decisão: **adotar** (ideia aplicada quase como está), **adaptar** (
 
 | Repositório | Licença | Adaptado no código (arquivos novos ou alterados) | Só inspiração / rejeitado |
 |---|---|---|---|
-| **Aurum** | MIT | `avaliacao/uso_ia.py` (contabilidade de uso de IA); `avaliacao/robustez.py` (PBO por CSCV, MinTRL); `risco/cauda.py` (VaR/ES histórico e Kupiec, só monitoramento); `avaliacao/monitoramento.py` (PSI e custo de execução real × modelo, ainda não ligado ao vivo); `EnvelopeAgente` em `decisao/bracos/debate.py` (governança dos agentes) | Estratégias, indicadores, dados de ouro, CPCV, `DecisionPolicy` overlay, agentes criados em runtime, webhooks |
+| **Aurum** | MIT | `avaliacao/uso_ia.py` (contabilidade de uso de IA); `avaliacao/robustez.py` (PBO por CSCV, MinTRL); `risco/cauda.py` (VaR/ES histórico e Kupiec, só monitoramento); `avaliacao/monitoramento.py` (PSI e custo de execução real × modelo, ligados ao `robowin avaliar` e ao painel por `avaliacao/monitoramento_banco.py`); `EnvelopeAgente` em `decisao/bracos/debate.py` (governança dos agentes) | Estratégias, indicadores, dados de ouro, CPCV, `DecisionPolicy` overlay, agentes criados em runtime, webhooks |
 | **TradingAgents** | Apache-2.0 | `decisao/bracos/debate.py` (+ `fabrica.py`, `llm.py`, `bracos/__init__.py`, `simulacao.py`): braço de debate; `ia/reflexao.py` (+ `orquestrador.py`, `dossie.py`, `simulacao.py`): memória reflexiva com liquidação tardia; esquemas e 7 prompts novos (`config/prompts/*_v1.md`) | Analistas com indicadores/internet/sentimento, LangGraph, rating de 5 níveis, fallback para texto livre |
 | **claude-trader** | MIT | **Nada em código.** | Tracker (já existe pelo OMS), monitor com IA executando direto, `order_send` direto, FX, Telegram, sem testes |
 | **trader-skill** | MIT | `execucao/aprovacao.py` + `execucao/roteador.py`: impressão da ordem aprovada pelo risco, exigida nas entradas | News/8-K, alertas, orçamento, lotes e IR dos EUA, copycat, Congresso |
@@ -104,8 +104,26 @@ Legenda de decisão: **adotar** (ideia aplicada quase como está), **adaptar** (
 ## O que ficou pronto para ligar, e o que ainda não está ligado
 
 * **Ligado ao fluxo**: debate (via `[[bracos]]`, desligado por padrão), reflexão (via `[reflexao]`, desligada por
-  padrão), uso de IA, cauda de perdas e PBO no `robowin avaliar`, impressão da ordem aprovada em todos os roteadores.
-* **Biblioteca sem ligação ao vivo**: `avaliacao/monitoramento.py` (PSI e slippage) e `min_track_record_length`.
+  padrão), uso de IA, PBO e a seção **"Monitoramento"** no `robowin avaliar`, impressão da ordem aprovada em todos
+  os roteadores.
+* **Seção "Monitoramento"** (`avaliacao/monitoramento_banco.py`; **informativo, não altera o veto de risco**), no
+  relatório do `robowin avaliar` e na página *Desempenho e latência* do painel (também `/api/monitoramento`):
+  * **PSI por feature**: referência = janela de treino do modelo ativo (`modelos.treinado_ate_ns`) quando há dado
+    dos dois lados do corte; senão, primeiras sessões × últimas (metade/metade). Limiares: < 0,10 estável;
+    0,10–0,25 aviso; ≥ 0,25 alerta. Features lidas do banco: variação do preço de referência entre decisões (em
+    pontos) e as saídas numéricas da proposta de cada braço (ex.: E[R$] e P(stop) do quant); com
+    `--ticks DIR --simbolo S` entra também o vetor do `PipelineFeatures` recalculado do armazém. PSI ≥ 0,25 grava
+    incidente `deriva_features` (severidade `aviso`, idempotente; `--sem-incidente` desliga); nada é bloqueado e o
+    painel nunca grava.
+  * **Custo de execução real × modelo** (ticks por execução): entradas a mercado, lado × (preço executado − preço de
+    referência da intenção), contra metade do slippage-base do modelo de custos (1 tick por operação ida e volta).
+    Entradas de plano condicional ficam fora (referência do armar, não do disparo); < 10 execuções = amostra
+    insuficiente.
+  * **MinTRL por braço**, por operação: "faltam N operações" para o Sharpe observado ser significativo (95%);
+    < 30 operações = amostra insuficiente; Sharpe ≤ 0 = nenhum n basta.
+  * **VaR/ES diário histórico** (`risco/cauda.py`): < 60 dias = amostra insuficiente (valores exibidos como instáveis).
+* **Ainda não ligado ao ciclo ao vivo**: o PSI/custo são calculados sobre o banco (relatório e painel), não a cada
+  decisão do núcleo; o `RastreadorSlippage` não alimenta nenhuma decisão.
 * **`MotorBacktest` (`backtest/motor.py`)**: segue com a memória só de resultados numéricos; a reflexão está ligada ao
   `Orquestrador` (o fluxo de `robowin simular`/`nucleo`).
 
