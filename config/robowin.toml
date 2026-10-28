@@ -20,6 +20,8 @@ imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_ticks = 4 }
 condicional = { expira_min_max = 10 }
 
 [mt5]
+plataforma = "mt5"      # "mt5" (B3, conta netting, livro L2, ticks em ms) | "mt4" (ponte EA: hedging, sem livro, tempo em s)
+# mt4_endereco = "tcp://127.0.0.1:5560"   # endpoint ZeroMQ do EA mql4/RobowinBridge.mq4 (plataforma = "mt4")
 # login e servidor da conta DEMO (a senha vem so da variavel de ambiente ROBOWIN_MT5_SENHA)
 # login = 0
 # servidor = ""

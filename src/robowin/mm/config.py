@@ -9,6 +9,10 @@ levanta NotImplementedError se a flag vier ligada.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from robowin.mt5.capacidades import CapacidadesTerminal
 
 
 @dataclass(frozen=True)
@@ -18,6 +22,13 @@ class ConfigMM:
     mensagens_sessao_max: int = 300
 
 
-def exigir_simulador_apenas(cfg: ConfigMM) -> None:
+def exigir_livro(caps: CapacidadesTerminal) -> None:
+    """MM precisa do livro de ofertas: em plataforma sem livro (MT4) o MM fica BLOQUEADO (CapacidadeAusente)."""
+    caps.exigir("livro", "market making")
+
+
+def exigir_simulador_apenas(cfg: ConfigMM, caps: CapacidadesTerminal | None = None) -> None:
+    if caps is not None:  # terminal informado: sem livro (MT4) o MM fica bloqueado
+        exigir_livro(caps)
     if cfg.demo_mm:
         raise NotImplementedError("demo_mm: espelhamento na conta demo nao implementado neste modulo; use o simulador")

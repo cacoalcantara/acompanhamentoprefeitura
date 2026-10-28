@@ -26,6 +26,7 @@ from robowin.core.relogio import Relogio, RelogioReal
 from robowin.core.tipos import AckOrdem, ComandoOrdem
 
 from . import constantes as C
+from .capacidades import capacidades_do_terminal, features_desligadas, normalizar_plataforma
 from .coleta import ColetorLivro, ColetorTicks, LogBruto
 from .conta import ler_estado_conta
 from .contrato import ContratoRecusado, ResolucaoContrato, resolver_contrato
@@ -81,6 +82,7 @@ class ConfigGateway:
     guardiao: ConfigGuardiao = field(default_factory=ConfigGuardiao)
     tentativas_emergencia: int = 5
     espera_emergencia_s: float = 0.1
+    plataforma: str = "mt5"  # "mt5" | "mt4": deve coincidir com o terminal (ConectorMT4 => "mt4")
 
 
 class Gateway:
@@ -106,9 +108,13 @@ class Gateway:
         self.auditoria: Any = None
         self.erros_mensagem = 0
         self.erros_ciclo = 0
+        self.caps = capacidades_do_terminal(terminal)  # do proprio terminal (MT4 declara; MT5/duble => MT5)
+        self._lacunas_vistas = 0
 
     # --- inicializacao -------------------------------------------------------------------------
     def iniciar(self) -> None:
+        if self.caps.plataforma != normalizar_plataforma(self.cfg.plataforma):
+            raise GuardaDemoViolada(f"plataforma configurada '{self.cfg.plataforma}' difere do terminal '{self.caps.plataforma}'")
         if not self.t.initialize():
             raise GuardaDemoViolada(f"initialize do MT5 falhou: {self.t.last_error()}")
         est = ler_estado_conta(self.t)
@@ -140,7 +146,8 @@ class Gateway:
         self.executor = ExecucaoDemo(
             self.t, ConfigDemo(login=self.cfg.login, servidor=self.cfg.servidor, simbolo=simbolo,
                                modo_config=self.cfg.modo_config, msgs_por_min=self.cfg.msgs_por_min,
-                               espera_incerta_s=self.cfg.espera_incerta_s, lote=perfil.lote),
+                               espera_incerta_s=self.cfg.espera_incerta_s, lote=perfil.lote,
+                               conta=self.caps.conta),
             self.relogio, alerta=self._alerta, registrar=registrar, relogio_srv=self.rs)
         self.executor.restaurar_enviadas(ja_enviadas)
         self.executor.verificar_guarda()  # falha cedo: conta real/login/servidor errados
@@ -154,13 +161,30 @@ class Gateway:
         self.ticks = ColetorTicks(self.t, simbolo, self.relogio, self.rs, self.pub, self.log,
                                   inicio_ns=self.cfg.inicio_coleta_ns)
         self.livro = ColetorLivro(self.t, simbolo, self.relogio, self.pub, self.log)
-        if perfil.aceita_book:
+        if perfil.aceita_book and self.caps.livro:
             self.livro.assinar()
+        elif perfil.aceita_book:  # capacidade ausente => livro/MM/features de livro DESLIGADOS, com mensagem clara
+            self._alerta("capacidade_ausente", {"motivos": self.caps.bloqueios(usa_livro=True, usa_mm=True),
+                                                "features_desligadas": list(features_desligadas(self.caps))})
         self._publicar_estado()
 
     def _alerta(self, tipo: str, dados: dict[str, Any]) -> None:
         self.incidentes.append((tipo, str(dados)))
         self.pub.publicar("alerta", {"tipo": tipo, "dados": dados, "t_ns": self.relogio.agora_ns()})
+
+    def _lacuna_sem_backfill_ativa(self) -> bool:
+        return any(m.startswith("feed_lacuna") for m in self.guardiao.motivos_bloqueio())
+
+    def _lacuna_sem_backfill(self) -> None:
+        """Terminal sem historico de ticks (MT4): lacuna do feed NAO se recupera; so BLOQUEIA entradas (ate a virada
+        do dia ou rearme manual). Perdas reais vem do EA (`lacunas_ticks`); falhas de leitura, do coletor."""
+        n = self.ticks.lacunas_sem_backfill + int(getattr(self.t, "lacunas_ticks", 0))
+        if n > self._lacunas_vistas:
+            self._lacunas_vistas = n
+            self.guardiao.bloquear_ate_resolver(
+                "feed_lacuna", "lacuna no feed de ticks e a plataforma nao tem historico de ticks: sem backfill",
+                persistente=False)
+            self._alerta("lacuna_sem_backfill", {"lacunas": n, "plataforma": self.caps.plataforma})
 
     def _recalibrar(self) -> None:
         """Enquanto o offset nao for confiavel, tenta de novo (feed vivo); detecta mudanca de offset."""
@@ -229,13 +253,16 @@ class Gateway:
             p = ps[0]
             pos = {"ticket": int(p.ticket), "simbolo": str(p.symbol), "lado": "compra" if p.type == C.POS_COMPRA else "venda",
                    "volume": float(p.volume), "sl": float(p.sl), "tp": float(p.tp)}
+        tickets = sorted(int(p.ticket) for p in ps) if ps else []
         return {
             "t_ns": self.relogio.agora_ns(),
             "conta": conta.model_dump() if conta else None,
             "duble": bool(getattr(self.t, "eh_duble", False)),
             "simbolo": self.resolucao.simbolo_corretora if self.resolucao else None,
             "offset_s": self.rs.offset_s, "offset_confiavel": self.rs.confiavel,
-            "feed_parado": self.ticks.feed_parado, "lacuna_pendente": self.ticks.lacuna_pendente,
+            "feed_parado": self.ticks.feed_parado,
+            "lacuna_pendente": self.ticks.lacuna_pendente or self._lacuna_sem_backfill_ativa(),
+            "plataforma": self.caps.plataforma, "capacidades": self.caps.como_dict(), "tickets_abertos": tickets,
             "ticks_total": self.ticks.total, "livro_total": self.livro.total,
             "livro_profundidade": {"declarada": self.livro.profundidade_declarada,
                                    "observada": self.livro.profundidade_observada},
@@ -286,6 +313,7 @@ class Gateway:
             if self._vencido("ticks", self.cfg.intervalo_ticks_s):
                 try:
                     self.ticks.sondar()
+                    self._lacuna_sem_backfill()
                 except Exception as e:  # noqa: BLE001 - coleta nunca derruba o guardiao
                     self.erros_coleta += 1
                     self.incidentes.append(("coleta", repr(e)))

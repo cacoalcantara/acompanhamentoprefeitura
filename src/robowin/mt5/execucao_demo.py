@@ -65,6 +65,7 @@ class ConfigDemo:
     recuo_max_s: float = 30.0
     espera_incerta_s: float = 5.0
     lote: int = 1  # unidades de volume do MT5 por "contrato" do robo (do perfil: 1 em futuros, 100 em acoes)
+    conta: str = "netting"  # "netting" (MT5/B3) | "hedging" (MT4: posicoes por TICKET; saida SEMPRE por ticket)
 
 
 class OrcamentoMensagens:
@@ -131,6 +132,11 @@ class ExecucaoDemo:
         self.travado: str | None = None  # motivo do travamento por violacao de netting/limite
         self.envios = 0  # numero de order_send efetivamente chamados
         self._override_simbolo: str | None = None
+        self._vols_vistos: dict[int, float] = {}  # hedging: ticket -> volume com sinal (ultima leitura de _posicao)
+
+    @property
+    def hedging(self) -> bool:
+        return self.cfg.conta == "hedging"
 
     @property
     def _sym(self) -> str:
@@ -156,7 +162,10 @@ class ExecucaoDemo:
             raise GuardaDemoViolada("trade_allowed falso (negociacao desabilitada)")
         if not est.trade_expert:
             raise GuardaDemoViolada("trade_expert falso (algotrading desligado na conta)")
-        if est.margin_mode == C.NOMES_MARGEM[C.MARGEM_HEDGING]:
+        if self.hedging:
+            if est.margin_mode != C.NOMES_MARGEM[C.MARGEM_HEDGING]:
+                raise GuardaDemoViolada(f"configurado para conta hedging (MT4), mas a conta e {est.margin_mode}")
+        elif est.margin_mode == C.NOMES_MARGEM[C.MARGEM_HEDGING]:
             raise GuardaDemoViolada("conta em modo hedging; o projeto exige netting")
         return est
 
@@ -176,10 +185,16 @@ class ExecucaoDemo:
     def _recusa(self, motivo: str, retcode: int = C.RET_LOCAL_RECUSADO) -> _Recusa:
         return _Recusa(AckOrdem(retcode=retcode, comentario=f"recusado localmente: {motivo}"))
 
-    def _posicao(self) -> tuple[int | None, float, Any]:
+    def _posicao(self, ticket_alvo: int | None = None) -> tuple[int | None, float, Any]:
         ps = self.t.positions_get(symbol=self._sym)
         if ps is None:
             raise self._recusa("positions_get sem resposta")
+        if self.hedging:  # varias posicoes por simbolo: identifica-se por TICKET
+            self._vols_vistos = {int(x.ticket): _sinal(int(x.type)) * float(x.volume) / self.cfg.lote for x in ps}
+            p = next((x for x in ps if int(x.ticket) == ticket_alvo), None) if ticket_alvo is not None else (ps[0] if ps else None)
+            if p is None:
+                return None, 0.0, None
+            return int(p.ticket), _sinal(int(p.type)) * float(p.volume) / self.cfg.lote, p
         if len(ps) > 1:
             raise self._recusa("mais de uma posicao no simbolo (conta nao e netting?)")
         if not ps:
@@ -261,7 +276,7 @@ class ExecucaoDemo:
         self.verificar_guarda()
         iid = f"sltp-{ticket}-{self._agora_ms()}-{len(self._enviadas)}"
         try:
-            tk, signed, p = self._posicao()
+            tk, signed, p = self._posicao(ticket)
             if p is None or tk != ticket:
                 raise self._recusa("ticket inexistente para modificar SL/TP")
             info = self._info()
@@ -337,7 +352,8 @@ class ExecucaoDemo:
 
         info = self._info()
         tick = float(info.trade_tick_size)
-        ticket, antes, pos = self._posicao()
+        ticket, antes, pos = self._posicao(cmd.position_ticket if saida else None)
+        vols_antes = dict(self._vols_vistos)
         fill = preenchimento_do_simbolo(info)
         tk = self.t.symbol_info_tick(self._sym)
         if tk is None:
@@ -358,7 +374,7 @@ class ExecucaoDemo:
             if any(i["ticket"] == ticket for i in self._incertas.values()):
                 raise self._recusa("saida INCERTA pendente para este ticket: aguardar reconciliacao")
             tipos_oposto = (C.ORDEM_SELL, C.ORDEM_SELL_LIMIT) if antes > 0 else (C.ORDEM_BUY, C.ORDEM_BUY_LIMIT)
-            if not corretivo and any(int(o.type) in tipos_oposto for o in self._pendentes()):
+            if not corretivo and not self.hedging and any(int(o.type) in tipos_oposto for o in self._pendentes()):
                 raise self._recusa("saida em voo: ordem aberta de sentido oposto a posicao no simbolo (nao duplicar saida)")
             dono_atual = self._donos.get(ticket)
             if dono_atual is not None and dono_atual != dono and not forcar_dono:
@@ -375,7 +391,7 @@ class ExecucaoDemo:
                 raise self._recusa("ja ha posicao aberta: sem piramidacao e sem inversao por entrada")
             pend = self._pendentes()
             total_pend = sum(float(o.volume_current) for o in pend) / self.cfg.lote
-            if total_pend + qtd > self.cfg.contratos_max:
+            if len(vols_antes) + total_pend + qtd > self.cfg.contratos_max:
                 raise self._recusa("posicao + pendentes excederiam o maximo de contratos")
             sl = self._alinhar(cmd.sl, tick) if cmd.sl else None
             tp = self._alinhar(cmd.tp, tick) if cmd.tp else None
@@ -404,7 +420,7 @@ class ExecucaoDemo:
         ack = self._ack(res, t0, t1)
         self.estados[cmd.intencao_id] = estado_do_retcode(ack.retcode)
         if ack.retcode in (C.RET_EXECUTADA, C.RET_PARCIAL) and req["action"] == C.ACAO_DEAL:  # mesmo com deal==0
-            self._conferir_apos_deal(cmd, antes, ack, corretivo)
+            self._conferir_apos_deal(cmd, antes, ack, corretivo, vols_antes)
         return ack
 
     def _transmitir(self, req: dict[str, Any], intencao_id: str, checar: bool, prioritaria: bool,
@@ -470,7 +486,49 @@ class ExecucaoDemo:
     # ------------------------------------------------------------------------------------------
     # conferencia pos-deal (netting)
     # ------------------------------------------------------------------------------------------
-    def _conferir_apos_deal(self, cmd: ComandoOrdem, antes: float, ack: AckOrdem, corretivo: bool) -> None:
+    def _conferir_hedging(self, cmd: ComandoOrdem, vols_antes: dict[int, float], corretivo: bool) -> None:
+        """Hedging: apos um deal, confere por TICKET que a saida nao abriu posicao oposta/maior e que o limite vale."""
+        try:
+            self._posicao()
+        except _Recusa:
+            self._alerta("sinal_nao_conferido", {"intencao_id": cmd.intencao_id})
+            self.travado = "posicao nao pode ser conferida apos deal"
+            return
+        depois = dict(self._vols_vistos)
+        novos = sorted(set(depois) - set(vols_antes))
+        violou, excesso = "", []
+        if cmd.tipo == "saida":
+            sinal_saida = 1 if vols_antes.get(cmd.position_ticket or -1, 0.0) >= 0 else -1
+            opostos = [t for t in novos if depois[t] * sinal_saida < 0]
+            if opostos or sum(abs(v) for v in depois.values()) > sum(abs(v) for v in vols_antes.values()) + 1e-9:
+                violou, excesso = "saida_abriu_posicao_hedging", novos
+        else:
+            esperado = 1 if cmd.lado == Lado.COMPRA else -1
+            if any(depois[t] * esperado < 0 for t in novos):
+                violou, excesso = "posicao_inesperada_apos_entrada", novos
+            elif len(depois) > self.cfg.contratos_max:
+                violou, excesso = "posicoes_acima_do_maximo", sorted(depois)[self.cfg.contratos_max:]
+        if not violou:
+            return
+        self.travado = f"{violou} (antes={sorted(vols_antes)}, depois={sorted(depois)})"
+        self._alerta(violou, {"intencao_id": cmd.intencao_id, "antes": sorted(vols_antes), "depois": sorted(depois)})
+        if corretivo:
+            return
+        for tk in excesso:  # corrige SEMPRE por ticket (nunca por ordem oposta)
+            lado = Lado.VENDA if depois[tk] > 0 else Lado.COMPRA
+            corr = ComandoOrdem(intencao_id=f"corretiva-{cmd.intencao_id}-{tk}", magic=self.cfg.magic_guardiao, lado=lado,
+                                tipo="saida", quantidade=max(1, int(abs(depois[tk]))), position_ticket=tk)
+            try:
+                self.verificar_guarda()
+                self._enviar(corr, "guardiao", True, True, corretivo=True)
+            except _Recusa as r:
+                self._alerta("saida_corretiva_recusada", {"motivo": r.ack.comentario})
+
+    def _conferir_apos_deal(self, cmd: ComandoOrdem, antes: float, ack: AckOrdem, corretivo: bool,
+                            vols_antes: dict[int, float] | None = None) -> None:
+        if self.hedging:
+            self._conferir_hedging(cmd, vols_antes or {}, corretivo)
+            return
         try:
             ticket, depois, _ = self._posicao()
         except _Recusa:

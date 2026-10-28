@@ -23,6 +23,7 @@ from robowin.core.instrumentos import (
 from robowin.core.relogio import Relogio, RelogioReal
 
 from . import constantes as C
+from .capacidades import PLATAFORMAS, capacidades_do_terminal, normalizar_plataforma
 from .coleta import ColetorLivro, ColetorTicks, LogBruto
 from .conta import ler_estado_conta
 from .contrato import ContratoRecusado, resolver_contrato
@@ -37,14 +38,15 @@ from .tempo_servidor import calibrar
 def executar_diagnostico(
     terminal: Any, perfil: PerfilInstrumento, *, login_esperado: int | None = None, servidor_esperado: str | None = None,
     hoje: dt.date | None = None, relogio: Relogio | None = None, modo_config: str = "demo_mt5",
+    plataforma: str | None = None,
 ) -> dict[str, Any]:
     """Coleta o diagnostico do ambiente MT5. NUNCA envia ordens (somente order_check)."""
     relogio = relogio or RelogioReal()
     hoje = hoje or dt.datetime.fromtimestamp(relogio.agora_ns() / 1e9, dt.UTC).date()
+    caps = capacidades_do_terminal(terminal, plataforma)
     rel: dict[str, Any] = {
         "gerado_em_utc": dt.datetime.fromtimestamp(relogio.agora_ns() / 1e9, dt.UTC).isoformat(),
-        "origem": "DUBLE (dados sinteticos; NAO e o terminal real)" if getattr(terminal, "eh_duble", False)
-        else "terminal MT5 real",
+        "origem": _origem(terminal, caps.rotulo), "plataforma": caps.plataforma, "capacidades": caps.como_dict(),
         "recusas": [], "avisos": [],
     }
     rec, avi = rel["recusas"], rel["avisos"]
@@ -52,6 +54,7 @@ def executar_diagnostico(
         rec.append(f"initialize falhou: {terminal.last_error()}")
         rel["ok"] = False
         return rel
+    rel["origem"] = _origem(terminal, caps.rotulo)  # o MT4 so sabe se e duble depois do handshake
     conta = ler_estado_conta(terminal)
     if conta is None:
         rec.append("account_info indisponivel")
@@ -73,8 +76,11 @@ def executar_diagnostico(
         rec.append("trade_expert falso (algotrading desligado na conta)")
     if not conta.trade_allowed:
         rec.append("trade_allowed falso (negociacao desabilitada)")
-    if conta.margin_mode != C.NOMES_MARGEM[C.MARGEM_EXCHANGE]:
-        avi.append(f"margin_mode {conta.margin_mode}: a B3 usa EXCHANGE (netting); confirme o comportamento")
+    esperada = C.NOMES_MARGEM[C.MARGEM_HEDGING if caps.conta == "hedging" else C.MARGEM_EXCHANGE]
+    if conta.margin_mode != esperada:
+        avi.append(f"margin_mode {conta.margin_mode}: {caps.rotulo} espera {esperada}; confirme o comportamento")
+    avi += [f"capacidade ausente: {m}" for m in caps.bloqueios(usa_livro=True, usa_mm=True, usa_backfill=True,
+                                                               usa_fluxo_agressor=True)]
 
     # contrato e especificacoes
     res = None
@@ -115,17 +121,17 @@ def executar_diagnostico(
         if not rs.confiavel:
             avi.append("offset do servidor nao calibrado com confianca (mercado fechado?): use offset_fixo_s")
         lv = ColetorLivro(terminal, simbolo, relogio, BarramentoLocal())
-        assinou = lv.assinar()
+        assinou = lv.assinar() if caps.livro else False
         lv.sondar()
         rel["livro"] = {"assinado": assinou, "profundidade_declarada": lv.profundidade_declarada,
                         "profundidade_observada": lv.profundidade_observada}
         lv.liberar()
-        if not assinou:
+        if caps.livro and not assinou:
             avi.append("market_book_add falhou: sem livro L2")
         # order_check SEM envio
         if conta.trade_mode == "demo" and login_esperado is not None and servidor_esperado is not None:
             ex = ExecucaoDemo(terminal, ConfigDemo(login=login_esperado, servidor=servidor_esperado, simbolo=simbolo,
-                                                   modo_config=modo_config), relogio, relogio_srv=rs)
+                                                   modo_config=modo_config, conta=caps.conta), relogio, relogio_srv=rs)
             try:
                 rel["order_check"] = ex.checar_sem_enviar()
                 if not rel["order_check"].get("ok"):
@@ -139,8 +145,14 @@ def executar_diagnostico(
     return rel
 
 
+def _origem(terminal: Any, rotulo: str) -> str:
+    if getattr(terminal, "eh_duble", False):
+        return f"DUBLE {rotulo} (dados sinteticos; NAO e o terminal real)"
+    return f"terminal {rotulo} real" + (" (ponte EA)" if rotulo == "MT4" else "")
+
+
 def texto_relatorio(rel: dict[str, Any]) -> str:
-    L = ["=== DIAGNOSTICO MT5 (robowin) ===", f"Origem: {rel['origem']}", f"Gerado em (UTC): {rel['gerado_em_utc']}"]
+    L = [f"=== DIAGNOSTICO {rel.get('plataforma', 'mt5').upper()} (robowin) ===", f"Origem: {rel['origem']}", f"Gerado em (UTC): {rel['gerado_em_utc']}"]
     c = rel.get("conta")
     if c:
         L += ["", "[Conta]", f"  login: {c['login']}   servidor: {c['servidor']}",
@@ -200,7 +212,19 @@ def _config_mt5(args: argparse.Namespace) -> dict[str, Any]:
     return cfg
 
 
+def _plataforma(args: argparse.Namespace, cfg: dict[str, Any]) -> str:
+    """`--plataforma` > `[mt5].plataforma` > 'mt5'. Valor invalido levanta ValueError."""
+    return normalizar_plataforma(getattr(args, "plataforma", None) or cfg.get("plataforma"))
+
+
 def _terminal(args: argparse.Namespace, cfg: dict[str, Any], relogio: Relogio) -> Any:
+    if _plataforma(args, cfg) == "mt4":
+        from .conector_mt4 import ConectorMT4
+        if args.duble:  # servidor ZeroMQ falso (thread) falando o MESMO protocolo do EA
+            from .duble_mt4 import ServidorDubleMT4, criar_duble_mt4_padrao
+            srv = ServidorDubleMT4(criar_duble_mt4_padrao(relogio, n_ticks=int(getattr(args, "ticks_duble", 6000))))
+            return ConectorMT4(srv.iniciar())
+        return ConectorMT4(getattr(args, "mt4_endereco", None) or cfg.get("mt4_endereco") or "tcp://127.0.0.1:5560")
     if args.duble:
         from .duble import criar_duble_padrao
         return criar_duble_padrao(relogio, n_ticks=int(getattr(args, "ticks_duble", 6000)))
@@ -216,12 +240,20 @@ def _comuns(p: argparse.ArgumentParser) -> None:
     p.add_argument("--login", type=int, default=None)
     p.add_argument("--servidor", default=None)
     p.add_argument("--terminal", default=None, help="caminho do terminal portatil (terminal64.exe)")
+    p.add_argument("--plataforma", choices=PLATAFORMAS, default=None,
+                   help="mt5 (padrao) ou mt4 (ponte EA mql4/RobowinBridge.mq4); padrao: [mt5].plataforma do TOML")
+    p.add_argument("--mt4-endereco", default=None,
+                   help="endpoint ZeroMQ do EA (padrao [mt5].mt4_endereco ou tcp://127.0.0.1:5560)")
 
 
 def _perfil(args: argparse.Namespace, *, estrito: bool) -> PerfilInstrumento:
     """Perfil do ativo (`--ativo` > [geral].simbolo_base). Estrito: perfil a_confirmar BLOQUEIA (PerfilNaoConfirmado)."""
     bruto = carregar_toml(args.config) if Path(args.config).is_file() else {}
     return perfil_da_config(bruto, args.ativo, permitir_a_confirmar=not estrito)
+
+
+def _servidor_duble(plataforma: str) -> str:
+    return "BROKERMT4-Demo" if plataforma == "mt4" else "XPMT5-DEMO"
 
 
 def _cmd_diagnostico(args: argparse.Namespace) -> int:
@@ -231,16 +263,21 @@ def _cmd_diagnostico(args: argparse.Namespace) -> int:
         print(f"ERRO: {e}")
         return 2
     cfg = _config_mt5(args)
+    try:
+        plat = _plataforma(args, cfg)
+    except ValueError as e:
+        print(f"ERRO: {e}")
+        return 2
     relogio = RelogioReal()
     try:
         term = _terminal(args, cfg, relogio)
     except Exception as e:  # noqa: BLE001 - MT5IndisponivelErro etc.
-        print(f"Nao foi possivel abrir o terminal MT5: {e}")
+        print(f"Nao foi possivel abrir o terminal {plat.upper()}: {e}")
         return 3
     login = args.login or cfg.get("login") or (900001 if args.duble else None)
-    servidor = args.servidor or cfg.get("servidor") or ("XPMT5-DEMO" if args.duble else None)
+    servidor = args.servidor or cfg.get("servidor") or (_servidor_duble(plat) if args.duble else None)
     rel = executar_diagnostico(term, perfil, login_esperado=login, servidor_esperado=servidor, relogio=relogio,
-                               modo_config=cfg.get("modo_config") or "demo_mt5")
+                               modo_config=cfg.get("modo_config") or "demo_mt5", plataforma=plat)
     arq = _gravar_relatorio(rel, Path(args.saida))
     print(texto_relatorio(rel))
     print(f"\nRelatorio gravado em {arq} (+ .txt)")
@@ -257,9 +294,14 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         print(f"ERRO (operacao bloqueada): {e}")
         return 2
     cfg = _config_mt5(args)
+    try:
+        plat = _plataforma(args, cfg)
+    except ValueError as e:
+        print(f"ERRO (operacao bloqueada): {e}")
+        return 2
     relogio = RelogioReal()
     login = args.login or cfg.get("login") or (900001 if args.duble else None)
-    servidor = args.servidor or cfg.get("servidor") or ("XPMT5-DEMO" if args.duble else None)
+    servidor = args.servidor or cfg.get("servidor") or (_servidor_duble(plat) if args.duble else None)
     if login is None or servidor is None:
         print("Informe --login e --servidor (ou [mt5] no TOML): a guarda demo exige ambos exatos.")
         return 2
@@ -268,7 +310,7 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         return 2
     gcfg = ConfigGateway(
         login=int(login), servidor=str(servidor), modo_config="demo_mt5", dir_log=Path(args.dir_log), perfil=perfil,
-        offset_fixo_s=args.offset_fixo_s,
+        offset_fixo_s=args.offset_fixo_s, plataforma=plat,
         guardiao=ConfigGuardiao(arquivo_emergencia=caminho_flag_emergencia(args.config, args.arquivo_emergencia),
                                 exigir_dia_util=not args.duble))
     if args.duble:
@@ -278,7 +320,7 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
     def fabrica() -> Any:
         return _terminal(args, cfg, relogio)
 
-    print(f"Gateway {'(DUBLE sintetico) ' if args.duble else ''}publicando em {args.pub}, comandos em {args.cmd}")
+    print(f"Gateway {plat.upper()} {'(DUBLE sintetico) ' if args.duble else ''}publicando em {args.pub}, comandos em {args.cmd}")
     rodar_gateway_zmq(fabrica, gcfg, args.pub, args.cmd, duracao_s=args.duracao_s, relogio=relogio)
     return 0
 
@@ -290,6 +332,11 @@ def _cmd_coletar(args: argparse.Namespace) -> int:
         print(f"ERRO (operacao bloqueada): {e}")
         return 2
     cfg = _config_mt5(args)
+    try:
+        _plataforma(args, cfg)
+    except ValueError as e:
+        print(f"ERRO (operacao bloqueada): {e}")
+        return 2
     relogio = RelogioReal()
     term = _terminal(args, cfg, relogio)
     if not term.initialize():
@@ -309,7 +356,8 @@ def _cmd_coletar(args: argparse.Namespace) -> int:
     log = LogBruto(args.dir_log, relogio)
     tk = ColetorTicks(term, simbolo, relogio, rs, bus, log, inicio_ns=relogio.agora_ns() - int(args.recuo_s * 1e9))
     lv = ColetorLivro(term, simbolo, relogio, bus, log)
-    lv.assinar()
+    if capacidades_do_terminal(term).livro:  # MT4: sem livro; so ticks
+        lv.assinar()
     fim = time.monotonic() + args.duracao_s
     while time.monotonic() < fim:
         tk.sondar()
@@ -318,12 +366,20 @@ def _cmd_coletar(args: argparse.Namespace) -> int:
     lv.liberar()
     log.fechar()
     print(f"{simbolo}: {contagem['tick']} ticks, {contagem['livro']} livros; log em {args.dir_log}; "
-          f"backfills: {len(tk.backfills)}; duplicados ignorados: {tk.duplicados}")
+          f"backfills: {len(tk.backfills)}; lacunas sem backfill: {tk.lacunas_sem_backfill}; "
+          f"duplicados ignorados: {tk.duplicados}")
     return 0
 
 
 def _cmd_emergencia(args: argparse.Namespace) -> int:
     rc = 0
+    try:
+        plat = normalizar_plataforma(getattr(args, "plataforma", None) or _config_mt5(args).get("plataforma"))
+    except ValueError as e:
+        print(f"ERRO: {e}")
+        return 2
+    if plat == "mt4":
+        print("MT4 (hedging): o gateway fecha CADA posicao pelo seu ticket e cancela as pendentes; nunca por ordem oposta.")
     if not args.sem_arquivo:
         arq = caminho_flag_emergencia(args.config, args.arquivo)
         arq.parent.mkdir(parents=True, exist_ok=True)
@@ -333,10 +389,10 @@ def _cmd_emergencia(args: argparse.Namespace) -> int:
     if args.comando:
         from .canais import ClienteComandosZMQ
         cli = ClienteComandosZMQ(args.comando)
-        r = cli.enviar({"tipo": "emergencia", "origem": f"cli: {args.motivo}"}, timeout_s=args.timeout_s)
+        r = cli.enviar({"tipo": "emergencia", "origem": f"cli: {args.motivo} [{plat}]"}, timeout_s=args.timeout_s)
         cli.fechar()
         if r is None:
-            print("SEM CONFIRMACAO do gateway no prazo. Use o 'fechar tudo' manual do MT5.")
+            print(f"SEM CONFIRMACAO do gateway no prazo. Use o 'fechar tudo' manual do {plat.upper()}.")
             return 1
         print(f"Confirmacao: zerado={r.get('zerado')} travado={r.get('travado')} posicoes={r.get('posicoes')} "
               f"ordens={r.get('ordens')}")
@@ -374,6 +430,7 @@ def registrar(sub: Any) -> None:
                    help="padrao: <[geral].dados do robowin.toml>/EMERGENCIA (mesmo caminho do painel e do gateway)")
     e.add_argument("--config", default="config/robowin.toml")
     e.add_argument("--sem-arquivo", action="store_true")
+    e.add_argument("--plataforma", choices=PLATAFORMAS, default=None, help="mt5 (padrao) ou mt4; padrao: [mt5].plataforma do TOML")
     e.add_argument("--comando", default=None, help="endereco ROUTER do gateway (ex.: tcp://127.0.0.1:5556)")
     e.add_argument("--motivo", default="acionada pelo operador")
     e.add_argument("--timeout-s", type=float, default=10.0)

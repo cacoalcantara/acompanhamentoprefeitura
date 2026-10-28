@@ -82,6 +82,7 @@ class ColetorTicks:
         self.duplicados = 0
         self.falhas_consecutivas = 0
         self.backfills: list[dict[str, int]] = []
+        self.lacunas_sem_backfill = 0  # terminal sem historico de ticks (MT4): a lacuna nao se recupera
 
     # ------------------------------------------------------------------------------------------
     @property
@@ -95,7 +96,7 @@ class ColetorTicks:
     def _aceitar(self, linha: dict[str, Any]) -> bool:
         msc = int(linha["time_msc"])
         chave = (msc, linha["bid"], linha["ask"], linha["last"], linha.get("volume_real", linha.get("volume")),
-                 linha.get("flags"))
+                 linha.get("flags"), linha.get("seq"))  # `seq` (MT4): ticks do mesmo segundo nao sao duplicatas
         if self.ultimo_msc is not None:
             if msc < self.ultimo_msc:
                 self.duplicados += 1
@@ -138,6 +139,10 @@ class ColetorTicks:
         """Cobre a lacuna com copy_ticks_range. None se o terminal ainda nao responde."""
         if self.ultimo_msc is None:
             self._precisa_backfill = False
+            return 0
+        if not getattr(self.terminal, "suporta_backfill", True):
+            self._precisa_backfill = False
+            self.lacunas_sem_backfill += 1  # o gateway BLOQUEIA entradas; nao ha como recuperar os ticks
             return 0
         agora_srv = self.rs.utc_ns_para_servidor_ms(self.relogio.agora_ns())
         arr = self.terminal.copy_ticks_range(

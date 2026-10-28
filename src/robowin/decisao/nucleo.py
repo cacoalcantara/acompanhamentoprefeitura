@@ -84,6 +84,7 @@ class Nucleo:
         self.mensagens = 0
         self.estado_gateway: dict[str, Any] = {}
         self._marcou_duble = False
+        self._avisou_sem_livro = False
         self.parar = asyncio.Event()
 
     async def tratar(self, topico: str, d: dict[str, Any]) -> None:
@@ -104,6 +105,11 @@ class Nucleo:
                 self._marcou_duble = True
                 o.registro.incidente(t_ns=o._agora(), origem=ORIGEM_SINTETICO, severidade="info",
                                      detalhe="gateway em modo DUBLE: dados SINTETICOS (nao e mercado)")
+            caps = d.get("capacidades") or {}
+            if caps.get("livro") is False and not self._avisou_sem_livro:  # plataforma sem livro (MT4)
+                self._avisou_sem_livro = True
+                o.registro.incidente(t_ns=o._agora(), origem="gateway", severidade="info",
+                                     detalhe=f"plataforma {caps.get('plataforma')} sem livro: features de livro e MM desligados")
             if d.get("feed_parado") or d.get("lacuna_pendente"):
                 o.bloqueio.marcar("feed_gateway", o._agora(), "gateway reporta feed parado/lacuna")
         elif topico == "alerta":

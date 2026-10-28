@@ -90,12 +90,12 @@ def calibrar(
     if offset_fixo_s is not None:
         return RelogioServidor(int(offset_fixo_s) * 1000, relogio.agora_ns(), True, 0, 0.0, "fixo")
     ests: list[float] = []
-    distintos: set[int] = set()
+    distintos: set[tuple[int, int]] = set()
     for i in range(max(1, amostras)):
         tk = terminal.symbol_info_tick(simbolo)
         if tk is not None and int(getattr(tk, "time_msc", 0)) > 0:
             ests.append(tk.time_msc / 1000.0 - relogio.agora_ns() / 1e9)
-            distintos.add(int(tk.time_msc))
+            distintos.add((int(tk.time_msc), int(getattr(tk, "seq", 0))))  # `seq` (MT4, tempo em s): tick novo no mesmo s
         if i + 1 < amostras and intervalo_s > 0:
             dormir(intervalo_s)
     if not ests:
