@@ -25,6 +25,7 @@ RESERVADAS = frozenset({"sessao_padrao"})
 LETRAS_MES = "FGHJKMNQUVXZ"
 ROTULO_A_CONFIRMAR = "ativo_a_confirmar"
 ROTULO_BOLSA_A_CONFIRMAR = "bolsa_a_confirmar"
+CAMPOS_PROVENIENCIA = frozenset({"fonte", "fonte_data", "confirmado_por", "confirmado_em"})
 
 
 class PerfilNaoConfirmado(ErroConfig):
@@ -61,6 +62,11 @@ class PerfilInstrumento(Base):
     preco_sintetico_ref: float = Field(gt=0)
     a_confirmar: bool = True
     a_confirmar_itens: tuple[str, ...] = ()
+    # proveniencia (opcional): de onde vieram os valores e quem os confirmou (`robowin perfil confirmar`)
+    fonte: str = ""
+    fonte_data: str = ""  # AAAA-MM-DD da fonte consultada
+    confirmado_por: str = ""
+    confirmado_em: str = ""  # AAAA-MM-DD da confirmacao
 
     # --- conversoes ticks <-> pontos (o unico lugar onde isso acontece)
     def pontos(self, ticks: float) -> float:
@@ -103,7 +109,7 @@ class PerfilInstrumento(Base):
             itens = "; ".join(self.a_confirmar_itens) or "valores sem fonte confirmada"
             raise PerfilNaoConfirmado(
                 f"perfil {self.simbolo_base} esta a_confirmar (operacao bloqueada): {itens}. Confira na B3/corretora e "
-                "ponha a_confirmar = false em config/instrumentos.toml; a simulacao sintetica segue permitida.")
+                f"confirme com `robowin perfil confirmar {self.simbolo_base}`; a simulacao sintetica segue permitida.")
         return self
 
     def rotulos(self) -> frozenset[str]:
@@ -115,7 +121,9 @@ class PerfilInstrumento(Base):
 
     # --- derivados
     def hash(self) -> str:
-        return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
+        """Identidade dos VALORES do perfil (a proveniencia - fonte, quem/quando confirmou - nao entra)."""
+        return hashlib.sha256(json.dumps(self.model_dump(mode="json", exclude=set(CAMPOS_PROVENIENCIA)),
+                                         sort_keys=True).encode()).hexdigest()
 
     def sessao_em(self, d: dt.date) -> SessaoPregao:
         grade = self.sessoes or sessoes_padrao()  # `carregar_perfil` preenche com a grade da bolsa

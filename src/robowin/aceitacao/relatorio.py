@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from robowin.core.config import sha256_arquivo
+from robowin.core.config import resolver_aprovacao, sha256_arquivo
 
 from .etapas import Contexto
 from .matriz import (
@@ -57,6 +57,9 @@ def versoes_e_hashes(ctx: Contexto, raiz: Path | None) -> tuple[dict[str, str], 
             p = raiz / rel
             if p.is_file():
                 hashes[rel] = sha256_arquivo(p)
+        efetiva = resolver_aprovacao(raiz / "config/aprovacoes/risco-v1.toml", raiz / "config/risco.toml")
+        if efetiva is not None and efetiva.is_file():  # versao mais recente valida (robowin risco aprovar)
+            hashes[f"aprovacao efetiva ({efetiva.name})"] = sha256_arquivo(efetiva)
     hashes[f"perfil {ctx.perfil.simbolo_base}"] = ctx.perfil.hash()
     return versoes, hashes
 

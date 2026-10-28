@@ -28,7 +28,8 @@ automático e me devolver o relatório, que eu audito. Por isso:
    `-Servidor`). A **senha** vai só pela variável de ambiente `ROBOWIN_MT5_SENHA` (ou deixe o terminal já logado).
 6. Perfil do ativo **confirmado** (`a_confirmar = false` em `config/instrumentos.toml`). Hoje só o **WIN** está
    confirmado; com perfil `a_confirmar` as etapas de ordem **não rodam** (A3 lista as especificações observadas para
-   você conferir).
+   você conferir). Para confirmar outro ativo use `robowin perfil confirmar` (abaixo), nunca a edição à mão.
+   A política de risco também precisa estar **aprovada por você** (`robowin risco aprovar`, abaixo).
 7. Opcional, para A10: `ANTHROPIC_API_KEY` e/ou `OPENAI_API_KEY` no ambiente (gastam alguns centavos de dólar).
 8. **MT4:** biblioteca `mql-zmq` instalada na pasta de dados do terminal (`MQL4\Include\Zmq`, `MQL4\Libraries\libzmq.dll`),
    EA compilado (passo 6 do script) e anexado a **um** gráfico da conta demo.
@@ -37,7 +38,8 @@ automático e me devolver o relatório, que eu audito. Por isso:
 ## Passo a passo
 
 ```powershell
-# 1) só leitura + testes (nenhuma ordem): confere ambiente, instala, roda pytest, constantes do MT5, lint do EA, verificar
+# 1) só leitura + testes (nenhuma ordem): confere ambiente, instala, roda pytest, constantes do MT5, lint do EA, verificar;
+#    no fim imprime O QUE FALTA (aprovação de risco, perfis a confirmar, chaves de API) com o comando exato de cada item
 powershell -ExecutionPolicy Bypass -File scripts\windows\validar_tudo.ps1
 
 # 2) aceitação completa na DEMO (ordens de teste de 1 contrato); a senha NÃO vai por parâmetro
@@ -57,6 +59,45 @@ como aceitação**).
 > **Aviso honesto:** `compilar_ea.ps1` e `validar_tudo.ps1` foram escritos **sem poder ser executados** no ambiente de
 > desenvolvimento (Linux). Se um deles falhar por motivo do próprio script (caminho do MetaEditor, codificação do log),
 > compile pelo MetaEditor (F7) e me mande a mensagem.
+
+## Decisões que só você toma
+
+Duas decisões não podem ser tomadas por nenhum agente nem script: **aprovar a política de risco** e **confirmar os
+valores de um perfil de ativo/bolsa**. Ambas viraram comandos guiados, que mostram o que você está assumindo, exigem
+uma confirmação digitada e gravam o evento na cadeia de auditoria (`<[geral].dados>/auditoria`; confira com
+`uv run robowin auditoria --dir dados_locais/auditoria`). O `validar_tudo.ps1` termina imprimindo **o que falta**
+(`uv run robowin pendencias`), com o comando exato de cada item.
+
+```powershell
+# o que falta (risco, perfis, chaves de API), com o comando de cada item
+uv run robowin pendencias
+
+# 1) política de risco: mostra os limites e o sha256; digite APROVO (qualquer outra coisa cancela)
+uv run robowin risco status
+uv run robowin risco aprovar --responsavel "Seu Nome" --motivo "limites conferidos para a demo"
+
+# 2) perfis: estado de todos (CONFIRMADO / A CONFIRMAR / BLOQUEADO pela bolsa)
+uv run robowin perfil listar
+#    confirmar um ativo: mostra tick, valor do ponto, lote, tarifas, margem, sessão, vencimento e a fonte; compara com
+#    o terminal (divergência => recusa); digite o símbolo do ativo para confirmar
+uv run robowin perfil confirmar WDO --responsavel "Seu Nome" --fonte "contrato B3 + especificação da corretora" `
+    --fonte-data 2026-10-28 --comparar-terminal
+#    confirmar uma bolsa (sem comparação com terminal)
+uv run robowin perfil confirmar bolsa:NYSE --responsavel "Seu Nome" --fonte "site da bolsa, horários e tarifas"
+```
+
+- **Risco:** grava `config/aprovacoes/risco-vN.toml` novo (nunca sobrescreve) e passa a valer a versão mais recente
+  válida; `robowin verificar` mostra **APROVADO**. Se você editar `config/risco.toml` depois, o hash deixa de conferir
+  e é preciso aprovar de novo. Detalhes em `docs/07-risco-e-operacao.md`.
+- **Perfil:** troca `a_confirmar = false`, esvazia `a_confirmar_itens` e grava `fonte`, `fonte_data`,
+  `confirmado_por` e `confirmado_em` **só naquela seção**; o resto do arquivo (comentários, ordem, tarifas, outros
+  perfis) fica idêntico, e a edição é conferida relendo o TOML antes de gravar. `--comparar-terminal` lê (sem ordem)
+  tick, valor do ponto, lote, moeda e vencimento do contrato vigente no terminal (`--plataforma`, `--login`,
+  `--servidor`, `--terminal` como no `diagnostico`; `--duble` só para ensaio) e recusa qualquer divergência. Margem,
+  tarifas e sessão o terminal não confirma: confira-os na fonte. Ativo cuja bolsa ainda está `a_confirmar` continua
+  BLOQUEADO (o comando avisa e mostra como confirmar a bolsa).
+- **Uso não interativo** (script seu, já revisado): `--sim-eu-aprovo` no risco e `--confirmo <SIMBOLO>` no perfil
+  equivalem à confirmação digitada. Confirmação errada => nada muda e o código de saída é `1`.
 
 ## O que cada etapa faz e mede
 
@@ -121,4 +162,5 @@ Arquivos `aceitacao-<AAAA-MM-DD-HHMMSS>.md` (leitura) e `.json` (máquina) em `r
 | A4/A5/A6/A8/A9 "pregão não está aberto" | Fora de 09:15–17:30, feriado, ou sem ticks novos (assinatura de dados) |
 | A4.3 REPROVADO | Livro de ofertas (DOM) sem permissão para o ativo |
 | A5/A8 "conta ja tem posicao/ordem" | Zere a conta demo manualmente antes |
-| A3.2 NÃO VERIFICÁVEL | Perfil `a_confirmar`: confira as especificações observadas e edite `config/instrumentos.toml` |
+| A3.2 NÃO VERIFICÁVEL | Perfil `a_confirmar`: confira as especificações observadas e rode `uv run robowin perfil confirmar <ATIVO> --responsavel "<seu nome>" --fonte "<fonte>" --comparar-terminal` |
+| Núcleo ao vivo / espelho / MM recusam com "responsavel pendente" | Política de risco não aprovada: `uv run robowin risco aprovar --responsavel "<seu nome>"` |

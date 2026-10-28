@@ -6,10 +6,36 @@ R$ 200/dia; R$ 500/semana; drawdown R$ 1.000 alerta / R$ 1.500 máximo; entradas
 
 > **Aprovação pendente (ação do usuário):** `config/aprovacoes/risco-v1.toml` traz `responsavel = "pendente: ..."`.
 > Enquanto estiver assim, a simulação roda mas é rotulada `risco_nao_aprovado` (incidente crítico), e **tudo que
-> opera ao vivo recusa iniciar** (núcleo ao vivo, espelhamento e market making na demo: `ErroConfig`). Para liberar:
-> 1. confira `config/risco.toml` e preencha `responsavel` (seu nome/identificação) e `motivo` no registro de aprovação;
-> 2. regenere o hash do arquivo de risco: `sha256sum config/risco.toml` e grave em `sha256` do mesmo registro
->    (o hash cobre o `risco.toml`, não o registro; reaprove sempre que alterar `risco.toml`).
+> opera ao vivo recusa iniciar** (núcleo ao vivo, espelhamento e market making na demo: `ErroConfig`). Nenhum agente
+> aprova por você: a decisão é sua, pelo comando guiado abaixo.
+
+### Aprovar a política de risco (`robowin risco aprovar`)
+
+```bash
+uv run robowin risco status                      # estado da aprovação efetiva (APROVADO / PENDENTE / INVALIDO)
+uv run robowin risco aprovar --responsavel "Seu Nome" --motivo "limites conferidos para a demo"
+```
+
+1. O comando mostra os limites de `config/risco.toml` em português (perda por operação, dia e semana, drawdown de
+   alerta e máximo, contratos, operações/dia, perdas seguidas e pausa, stop/folga, janela de entradas, zeragem,
+   bloqueio de evento, ordens/min) e o `sha256` do arquivo, calculado **exatamente** como a verificação calcula
+   (bytes do arquivo).
+2. Recusa política incoerente (ex.: `contratos_max` acima do teto da v1) e responsável vazio ou começando com
+   `pendente`.
+3. Exige que você **digite `APROVO`**. Qualquer outra resposta (ou stdin fechado) cancela: nada é gravado e o código de
+   saída é `1`. Para uso não interativo (script seu, já revisado), `--sim-eu-aprovo` equivale a digitar `APROVO` (o
+   resumo é impresso do mesmo jeito).
+4. Grava um **novo** registro `config/aprovacoes/risco-vN.toml` (N = maior existente + 1; nunca sobrescreve: os
+   anteriores ficam como histórico) com `sha256`, `data`, `responsavel`, `motivo`, `arquivo` e `aprovado_em_utc`, e
+   registra o evento `risco_aprovado` na cadeia de auditoria (`<[geral].dados>/auditoria`, ou `--auditoria DIR`).
+
+Quem carrega a política (núcleo, backtest, espelho, MM, `robowin verificar`) continua apontando para
+`config/aprovacoes/risco-v1.toml`, mas usa a **versão mais recente válida** (`core.config.resolver_aprovacao`): o
+registro `risco-vN.toml` de maior N que seja legível e cujo `sha256` confira com o `risco.toml` atual. Se nenhum
+conferir (você editou o `risco.toml` depois de aprovar), o carregamento recusa por hash divergente e `robowin
+verificar` mostra REPROVADO com o comando para reaprovar. Com responsável preenchido, `robowin verificar` mostra
+**APROVADO** na linha da política de risco. O que ainda falta (risco, perfis, chaves) aparece em
+`uv run robowin pendencias`.
 
 - **Emergência:** botão do painel (token), `robowin emergencia` ou arquivo `EMERGENCIA`; cancela, zera,
   bloqueia. No modo dividido, use também o "fechar tudo" manual do MT5.
@@ -27,7 +53,8 @@ Limites em pontos são derivados do perfil (`stop_max_ticks` x tick). O `config/
 ativo com `risco_aprovado_padrao = true` (WIN). Outro ativo usa limites mínimos (limites em moeda do `risco.toml`,
 menos operações/dia, stop/folga do perfil) e o rótulo `risco_nao_aprovado`, até existir `config/risco-<ativo>.toml`
 com registro de aprovação por hash; ao vivo, sem aprovação, a sessão é recusada. Perfil `a_confirmar` bloqueia
-qualquer operação (`PerfilNaoConfirmado`). Trocar o ativo exige posição zerada e abre novo experimento; modelo,
+qualquer operação (`PerfilNaoConfirmado`) até você confirmá-lo com `robowin perfil confirmar <ATIVO>` (ver
+`docs/12-aceitacao-no-windows.md`, "Decisões que só você toma"). Trocar o ativo exige posição zerada e abre novo experimento; modelo,
 orçamento e limites de um ativo nunca são reutilizados em outro.
 
 ## MT4 (hedging): risco e operação

@@ -38,6 +38,10 @@ class PerfilBolsa(Base):
     limite_oscilacao: LimiteOscilacao | None = None
     a_confirmar: bool = True
     a_confirmar_itens: tuple[str, ...] = ()
+    fonte: str = ""  # proveniencia opcional (`robowin perfil confirmar bolsa:<codigo>`)
+    fonte_data: str = ""
+    confirmado_por: str = ""
+    confirmado_em: str = ""
 
     def tz(self) -> ZoneInfo:
         return ZoneInfo(self.fuso)

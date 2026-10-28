@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -29,12 +30,58 @@ def responsavel_pendente(reg: dict[str, Any]) -> bool:
     return not resp or resp.startswith("pendente")
 
 
-def aprovacao_pendente(aprovacao: str | Path | None) -> bool:
-    """True se o arquivo de aprovacao existe mas o responsavel e 'pendente'/vazio (ilegivel conta como pendente)."""
+RE_VERSAO_APROVACAO = re.compile(r"^(?P<prefixo>.+)-v(?P<n>\d+)\.toml$")
+
+
+def versoes_aprovacao(aprovacao: str | Path) -> list[tuple[int, Path]]:
+    """Registros versionados irmaos de `aprovacao` (`<prefixo>-vN.toml` na mesma pasta), do MAIS NOVO ao mais antigo.
+    Arquivo fora do padrao `-vN` nao tem versoes: devolve lista vazia."""
+    p = Path(aprovacao)
+    m = RE_VERSAO_APROVACAO.match(p.name)
+    if not m or not p.parent.is_dir():
+        return []
+    out = []
+    for irmao in p.parent.iterdir():
+        mi = RE_VERSAO_APROVACAO.match(irmao.name)
+        if mi and mi.group("prefixo") == m.group("prefixo") and irmao.is_file():
+            out.append((int(mi.group("n")), irmao))
+    return sorted(out, key=lambda x: x[0], reverse=True)
+
+
+def resolver_aprovacao(aprovacao: str | Path | None, risco: str | Path | None = None) -> Path | None:
+    """Registro de aprovacao EFETIVO: entre os irmaos versionados (`risco-v1.toml`, `risco-v2.toml`...), o de MAIOR
+    versao que seja legivel e cujo `sha256` confira com o arquivo de risco atual; se nenhum conferir, o de maior versao
+    legivel (o hash divergente e entao recusado por `carregar_risco`). Fora do padrao `-vN`, devolve o proprio arquivo.
+
+    Assim um `robowin risco aprovar` (que grava `risco-v<N+1>.toml`, nunca sobrescreve) passa a valer para todos os
+    chamadores que apontam para `config/aprovacoes/risco-v1.toml`, sem editar o registro antigo."""
+    if aprovacao is None:
+        return None
+    versoes = versoes_aprovacao(aprovacao)
+    if not versoes:
+        return Path(aprovacao)
+    atual = sha256_arquivo(risco) if risco is not None and Path(risco).is_file() else None
+    legiveis: list[Path] = []
+    for _, arq in versoes:
+        try:
+            reg = carregar_toml(arq)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(reg.get("sha256"), str):
+            continue
+        legiveis.append(arq)
+        if atual is not None and reg["sha256"] == atual:
+            return arq
+    return legiveis[0] if legiveis else Path(aprovacao)
+
+
+def aprovacao_pendente(aprovacao: str | Path | None, risco: str | Path | None = None) -> bool:
+    """True se o arquivo de aprovacao existe mas o responsavel e 'pendente'/vazio (ilegivel conta como pendente).
+    Com `risco`, considera o registro efetivo (`resolver_aprovacao`), isto e, a versao mais recente valida."""
     if aprovacao is None:
         return False
     try:
-        return responsavel_pendente(carregar_toml(aprovacao))
+        return responsavel_pendente(carregar_toml(resolver_aprovacao(aprovacao, risco) or aprovacao))
     except (OSError, ValueError):
         return True
 
@@ -43,8 +90,10 @@ def carregar_risco(caminho: str | Path, aprovacao: str | Path | None, *, ao_vivo
     """Recusa iniciar se o hash do arquivo de risco diferir do ultimo registro de aprovacao.
 
     Ao vivo (`ao_vivo=True`) recusa tambem aprovacao cujo `responsavel` esteja 'pendente' (ninguem assumiu o risco);
-    na simulacao isso e permitido, mas o chamador deve rotular `risco_nao_aprovado` (ver `risco.politica`)."""
+    na simulacao isso e permitido, mas o chamador deve rotular `risco_nao_aprovado` (ver `risco.politica`).
+    O registro usado e a versao mais recente valida (`resolver_aprovacao`): `risco-v1.toml` -> `risco-vN.toml`."""
     cfg = ConfigRisco(**carregar_toml(caminho))
+    aprovacao = resolver_aprovacao(aprovacao, caminho)  # versao mais recente valida (risco-vN.toml)
     if aprovacao is None:
         raise ErroConfig("sem registro de aprovacao da politica de risco")
     reg = carregar_toml(aprovacao)
@@ -52,7 +101,7 @@ def carregar_risco(caminho: str | Path, aprovacao: str | Path | None, *, ao_vivo
         raise ErroConfig("hash da politica de risco difere do registro de aprovacao")
     if ao_vivo and responsavel_pendente(reg):
         raise ErroConfig(f"aprovacao da politica de risco com responsavel pendente ('{reg.get('responsavel', '')}'): "
-                         "preencha o responsavel em config/aprovacoes/ e regenere o hash (docs/07-risco-e-operacao.md)")
+                         "aprove com `robowin risco aprovar --responsavel \"<seu nome>\"` (docs/07-risco-e-operacao.md)")
     return cfg
 
 
