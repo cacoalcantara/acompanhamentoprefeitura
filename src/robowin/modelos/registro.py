@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from robowin.core.instrumentos import exigir_mesmo_ativo
 from robowin.core.protocolos import Banco
 from robowin.core.tipos import EntradaRegistroModelo
 
@@ -64,6 +65,19 @@ class RegistroModelos:
     def entrada(self, nome: str, versao: str) -> EntradaRegistroModelo:
         return EntradaRegistroModelo(**self._versao(nome, versao)["entrada"])
 
+    def exigir_ativo(self, nome: str, versao: str, ativo: str) -> EntradaRegistroModelo:
+        """Recusa (AtivoDivergente) usar um modelo treinado em OUTRO ativo (ou sem ativo declarado)."""
+        e = self.entrada(nome, versao)
+        exigir_mesmo_ativo(ativo, e.ativo, f"modelo {nome}@{versao}")
+        return e
+
+    def campeao_para(self, nome: str, ativo: str) -> str | None:
+        """Campeao do modelo SO se treinado neste ativo; de outro ativo => AtivoDivergente."""
+        v = self.campeao(nome)
+        if v is not None:
+            self.exigir_ativo(nome, v, ativo)
+        return v
+
     def campeao(self, nome: str) -> str | None:
         return self._d["modelos"].get(nome, {}).get("campeao")
 
@@ -100,7 +114,7 @@ class RegistroModelos:
         if modelo.status == "nao_treinado":
             raise ErroRegistro("modelo nao treinado")
         e = EntradaRegistroModelo(
-            nome=modelo.nome, versao=versao, hash_dados=modelo.hash_dados, hash_codigo=hash_codigo(),
+            nome=modelo.nome, versao=versao, ativo=getattr(modelo, "ativo", ""), hash_dados=modelo.hash_dados, hash_codigo=hash_codigo(),
             status="em_validacao", treinado_ate_ns=modelo.treinado_ate_ns)
         self.registrar(e, origem=modelo.origem_dados, criterio_hash=modelo.hash_criterio_pre_registrado)
         return e

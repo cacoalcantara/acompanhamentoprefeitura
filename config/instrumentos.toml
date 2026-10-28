@@ -1,0 +1,183 @@
+# Perfis de instrumento: TROCAR O ATIVO = editar [geral].simbolo_base em config/robowin.toml (ou usar --ativo).
+# Nenhum numero de ativo vive no codigo: tick, valor do ponto, lote, tarifas, vencimento, limites em TICKS e sessao
+# saem daqui. Para um ativo novo, copie o perfil mais parecido, mude o nome da secao e confirme cada valor.
+#
+# a_confirmar = true  -> valor SEM fonte confirmada (suposicao ou placeholder). FALHA SEGURA: o perfil BLOQUEIA
+#   gateway, nucleo ao vivo, conexao ao MT5 e qualquer ordem. So a SIMULACAO sobre dados SINTETICOS roda, e o
+#   resultado e rotulado `ativo_a_confirmar`. Depois de conferir TODOS os itens de `a_confirmar_itens` na
+#   especificacao da B3 e da corretora, troque para a_confirmar = false (e esvazie a lista).
+#
+# Campos:
+#   classe: futuro_indice | futuro_cambio | acao | etf
+#   vencimento: quarta_dia15_meses_pares | primeiro_dia_util_mes | nenhum
+#   ponto_valor_brl: R$ por ponto de cotacao por lote (1 lote = `lote` unidades; o volume enviado = quantidade*lote)
+#   tick_pontos: variacao minima de preco em pontos de cotacao
+#   stop_max_ticks / slippage_folga_ticks / stop_padrao_ticks / alvo_padrao_ticks: limites em TICKS (nunca em pontos)
+#   risco_aprovado_padrao: true so quando config/risco.toml (travado por hash) foi aprovado PARA este ativo
+#   preco_sintetico_ref: nivel de preco dos dados sinteticos (nao e dado de mercado)
+
+# Grade de sessao padrao (usada quando o perfil nao declara a sua).
+[[sessao_padrao]]
+vigente_desde = "2026-03-09"
+abertura = "09:00"
+fechamento = "18:25"
+entradas_ate = "17:30"
+zeragem = "17:45"
+[[sessao_padrao]]
+vigente_desde = "2026-11-03"
+abertura = "09:00"
+fechamento = "18:25"
+entradas_ate = "17:30"
+zeragem = "17:45"
+
+[WIN]
+classe = "futuro_indice"
+descricao = "Mini indice Bovespa"
+vencimento = "quarta_dia15_meses_pares"
+ponto_valor_brl = 0.20
+tick_pontos = 5.0
+lote = 1
+stop_max_ticks = 60
+slippage_folga_ticks = 10
+stop_padrao_ticks = 6
+alvo_padrao_ticks = 6
+aceita_book = true
+rlp = false
+risco_aprovado_padrao = true
+preco_sintetico_ref = 130000.0
+a_confirmar = false
+a_confirmar_itens = []
+[[WIN.tarifas]]
+vigente_desde = "2025-01-01"
+tarifa_lado_brl = 0.25
+taxa_zeragem_brl = 0.0
+fonte = "premissa do plano v1 (secao 8) - V4.8 a confirmar"
+[[WIN.tarifas]]
+vigente_desde = "2026-11-03"
+tarifa_lado_brl = 0.25
+taxa_zeragem_brl = 0.0
+fonte = "premissa do plano v1 (nova grade); confirmar com o oficio da B3"
+
+[IND]
+classe = "futuro_indice"
+descricao = "Indice Bovespa cheio"
+vencimento = "quarta_dia15_meses_pares"
+ponto_valor_brl = 1.0
+tick_pontos = 5.0
+lote = 1
+stop_max_ticks = 10
+slippage_folga_ticks = 2
+stop_padrao_ticks = 2
+alvo_padrao_ticks = 2
+aceita_book = true
+rlp = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 130000.0
+a_confirmar = true
+a_confirmar_itens = ["tarifas (placeholder copiado do WIN)", "margem de day trade", "limites em ticks", "sessao"]
+[[IND.tarifas]]
+vigente_desde = "2025-01-01"
+tarifa_lado_brl = 0.25
+taxa_zeragem_brl = 0.0
+fonte = "PLACEHOLDER copiado do WIN - a confirmar"
+
+[WDO]
+classe = "futuro_cambio"
+descricao = "Mini dolar comercial"
+vencimento = "primeiro_dia_util_mes"
+ponto_valor_brl = 10.0
+tick_pontos = 0.5
+lote = 1
+stop_max_ticks = 10
+slippage_folga_ticks = 2
+stop_padrao_ticks = 2
+alvo_padrao_ticks = 2
+aceita_book = true
+rlp = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 5400.0
+a_confirmar = true
+a_confirmar_itens = ["ponto_valor_brl (R$10 por ponto de cotacao: SUPOSICAO)", "tick_pontos (0,5: SUPOSICAO)",
+                     "regra de vencimento (1o dia util do mes)", "tarifas (placeholder copiado do WIN)",
+                     "margem de day trade", "limites em ticks", "sessao"]
+[[WDO.tarifas]]
+vigente_desde = "2025-01-01"
+tarifa_lado_brl = 0.25
+taxa_zeragem_brl = 0.0
+fonte = "PLACEHOLDER copiado do WIN - a confirmar"
+
+[DOL]
+classe = "futuro_cambio"
+descricao = "Dolar comercial cheio"
+vencimento = "primeiro_dia_util_mes"
+ponto_valor_brl = 50.0
+tick_pontos = 0.5
+lote = 1
+stop_max_ticks = 1
+slippage_folga_ticks = 1
+stop_padrao_ticks = 1
+alvo_padrao_ticks = 1
+aceita_book = true
+rlp = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 5400.0
+a_confirmar = true
+a_confirmar_itens = ["ponto_valor_brl (R$50 por ponto de cotacao: SUPOSICAO)", "tick_pontos (0,5: SUPOSICAO)",
+                     "regra de vencimento (1o dia util do mes)", "tarifas (placeholder copiado do WIN)",
+                     "margem de day trade", "limites em ticks", "sessao"]
+[[DOL.tarifas]]
+vigente_desde = "2025-01-01"
+tarifa_lado_brl = 0.25
+taxa_zeragem_brl = 0.0
+fonte = "PLACEHOLDER copiado do WIN - a confirmar"
+
+# MODELO de acao (copie para o seu ticker: troque o nome da secao e confirme os valores).
+[PETR4]
+classe = "acao"
+descricao = "MODELO de acao no mercado a vista (lote padrao 100)"
+vencimento = "nenhum"
+ponto_valor_brl = 100.0   # R$ por R$1,00 de variacao do preco por lote (100 acoes)
+tick_pontos = 0.01
+lote = 100
+stop_max_ticks = 50
+slippage_folga_ticks = 5
+stop_padrao_ticks = 20
+alvo_padrao_ticks = 20
+aceita_book = true
+rlp = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 35.0
+a_confirmar = true
+a_confirmar_itens = ["tarifas (placeholder copiado do WIN; acoes pagam emolumentos percentuais)",
+                     "lote e tick do ticker escolhido", "limites em ticks", "sessao do mercado a vista",
+                     "day trade em acoes exige regra fiscal propria"]
+[[PETR4.tarifas]]
+vigente_desde = "2025-01-01"
+tarifa_lado_brl = 0.25
+taxa_zeragem_brl = 0.0
+fonte = "PLACEHOLDER copiado do WIN - a confirmar"
+
+# MODELO de ETF (lote 1, tick R$ 0,01).
+[BOVA11]
+classe = "etf"
+descricao = "MODELO de ETF (lote 1)"
+vencimento = "nenhum"
+ponto_valor_brl = 1.0
+tick_pontos = 0.01
+lote = 1
+stop_max_ticks = 50
+slippage_folga_ticks = 5
+stop_padrao_ticks = 20
+alvo_padrao_ticks = 20
+aceita_book = true
+rlp = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 130.0
+a_confirmar = true
+a_confirmar_itens = ["tarifas (placeholder copiado do WIN)", "lote e tick do ETF escolhido", "limites em ticks",
+                     "sessao do mercado a vista"]
+[[BOVA11.tarifas]]
+vigente_desde = "2025-01-01"
+tarifa_lado_brl = 0.25
+taxa_zeragem_brl = 0.0
+fonte = "PLACEHOLDER copiado do WIN - a confirmar"

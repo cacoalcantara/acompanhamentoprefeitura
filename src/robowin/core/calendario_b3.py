@@ -1,4 +1,4 @@
-"""Calendario B3: feriados via exchange-calendars (BVMF) + grade propria do WIN versionada."""
+"""Calendario B3: feriados via exchange-calendars (BVMF), grade de sessao e vencimentos por perfil de instrumento."""
 from __future__ import annotations
 
 import datetime as dt
@@ -6,16 +6,10 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .instrumentos import LETRAS_MES, PerfilInstrumento, sessoes_padrao
 from .tipos import SessaoPregao
 
 SP = ZoneInfo("America/Sao_Paulo")
-LETRAS = {2: "G", 4: "J", 6: "M", 8: "Q", 10: "V", 12: "Z"}  # meses pares (convencao B3)
-
-# Grade do WIN por data de vigencia (fonte: noticias de out/2026; confirmar com o oficio da B3).
-GRADE_WIN = [
-    SessaoPregao(vigente_desde="2026-03-09", abertura="09:00", fechamento="18:25", entradas_ate="17:30", zeragem="17:45"),
-    SessaoPregao(vigente_desde="2026-11-03", abertura="09:00", fechamento="18:25", entradas_ate="17:30", zeragem="17:45"),
-]
 
 _cal = None
 
@@ -43,14 +37,16 @@ def proximo_pregao(d: dt.date) -> dt.date:
     return d
 
 
-def sessao_em(d: dt.date) -> SessaoPregao:
-    vig = [s for s in GRADE_WIN if s.vigente_desde <= d.isoformat()]
+def sessao_em(d: dt.date, perfil: PerfilInstrumento | None = None) -> SessaoPregao:
+    """Grade vigente em `d`: a do perfil (se declarar) ou a grade padrao de instrumentos.toml."""
+    grade = (perfil.sessoes if perfil is not None else ()) or sessoes_padrao()
+    vig = [s for s in grade if s.vigente_desde <= d.isoformat()]
     if not vig:
         raise ValueError(f"sem grade de sessao para {d}")
     return max(vig, key=lambda s: s.vigente_desde)
 
 
-def vencimento_win(ano: int, mes: int) -> dt.date:
+def _quarta_proxima_dia15(ano: int, mes: int) -> dt.date:
     """Quarta-feira mais proxima do dia 15; se nao for pregao, a sessao seguinte."""
     ref = dt.date(ano, mes, 15)
     quartas = [ref + dt.timedelta(days=k) for k in range(-3, 4) if (ref + dt.timedelta(days=k)).weekday() == 2]
@@ -58,16 +54,44 @@ def vencimento_win(ano: int, mes: int) -> dt.date:
     return q if eh_pregao(q) else proximo_pregao(q)
 
 
-def contrato_vigente(hoje: dt.date, ajustar_dias: int = 0) -> str:
-    """Codigo WIN+letra+AA do vencimento mais proximo ainda nao vencido (vence na propria data = ainda vigente)."""
+def _primeiro_dia_util(ano: int, mes: int) -> dt.date:
+    d = dt.date(ano, mes, 1)
+    return d if eh_pregao(d) else proximo_pregao(d)
+
+
+def vencimento_contrato(perfil: PerfilInstrumento, ano: int, mes: int) -> dt.date | None:
+    """Vencimento do contrato do mes (`None` se o ativo nao vence ou nao ha contrato neste mes)."""
+    if perfil.vencimento == "quarta_dia15_meses_pares":
+        return _quarta_proxima_dia15(ano, mes) if mes % 2 == 0 else None
+    if perfil.vencimento == "primeiro_dia_util_mes":  # [a confirmar] regra do WDO/DOL
+        return _primeiro_dia_util(ano, mes)
+    return None
+
+
+def codigo_contrato(perfil: PerfilInstrumento, ano: int, mes: int) -> str:
+    return f"{perfil.simbolo_base}{LETRAS_MES[mes - 1]}{ano % 100:02d}"
+
+
+def contrato_vigente(perfil: PerfilInstrumento, hoje: dt.date) -> str:
+    """Codigo do contrato vigente em `hoje` (vence na propria data = ainda vigente). Acao/ETF: o proprio ticker."""
+    if not perfil.tem_vencimento:
+        return perfil.simbolo_base
     ano, mes = hoje.year, hoje.month
     for _ in range(14):
-        if mes % 2 == 0 and vencimento_win(ano, mes) >= hoje:
-            return f"WIN{LETRAS[mes]}{ano % 100:02d}"
+        v = vencimento_contrato(perfil, ano, mes)
+        if v is not None and v >= hoje:
+            return codigo_contrato(perfil, ano, mes)
         mes += 1
         if mes > 12:
             mes, ano = 1, ano + 1
     raise RuntimeError("nao encontrou contrato vigente")
+
+
+def vencimento_do_codigo(perfil: PerfilInstrumento, codigo: str) -> dt.date | None:
+    if not perfil.tem_vencimento:
+        return None
+    n = len(perfil.simbolo_base)
+    return vencimento_contrato(perfil, 2000 + int(codigo[n + 1:]), LETRAS_MES.index(codigo[n]) + 1)
 
 
 def dt_utc_ns(d: dt.datetime) -> int:

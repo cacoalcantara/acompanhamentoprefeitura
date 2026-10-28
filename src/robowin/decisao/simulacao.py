@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from robowin.avaliacao.estatistica import n_expectativa
 from robowin.core.config import ErroConfig, carregar_toml
+from robowin.core.instrumentos import PerfilInstrumento, perfil_da_config, perfil_de_instrumento
 from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
 from robowin.core.relogio import RelogioSimulado
 from robowin.core.tipos import (
@@ -50,7 +51,9 @@ from robowin.ia.provedores.base import Medidor, RespostaBruta
 from robowin.ia.provedores.falso import ProvedorFalso
 from robowin.modelos.demo_sintetico import montar_amostras
 from robowin.modelos.microestrutura import CriterioOOS, ModeloMicroestrutura
-from robowin.risco.politica import carregar_politica
+from robowin.modelos.rotulagem import ConfigBarreiras
+from robowin.modelos.rotulagem import Custos as CustosRotulagem
+from robowin.risco.politica import risco_do_ativo, stop_maximo_efetivo_pontos
 from robowin.risco.tempo import dia_sp
 from robowin.statarb.sinais import SinalStatArbPadrao
 
@@ -162,27 +165,37 @@ def _dossie_da_mensagem(mensagem: str) -> dict[str, Any]:
 # ==================================================================================================
 # dados, modelo e statarb (sinteticos)
 # ==================================================================================================
-def vista_sintetica(precos: np.ndarray, seed: int, phi: float = 0.98, sigma: float = 0.02) -> np.ndarray:
-    """Ativo a vista SINTETICO cointegrado com o WIN (preco/1000 + ruido AR(1)) para exercitar o StatArb."""
+NIVEL_VISTA = 100.0  # nivel de preco do ativo de referencia sintetico (independe do ativo operado)
+
+
+def fator_vista(preco_ref: float) -> float:
+    """Escala que leva o preco do ativo (nivel `preco_ref` do perfil) ao nivel do ativo de referencia sintetico."""
+    return preco_ref / NIVEL_VISTA
+
+
+def vista_sintetica(precos: np.ndarray, seed: int, phi: float = 0.98, sigma: float = 0.02,
+                    fator: float = 1000.0) -> np.ndarray:
+    """Ativo de referencia SINTETICO cointegrado com o ativo operado (preco/fator + ruido AR(1)) p/ exercitar o StatArb."""
     rng = np.random.default_rng(seed)
     u = np.zeros(len(precos))
     e = rng.normal(0, sigma, len(precos))
     for i in range(1, len(precos)):
         u[i] = phi * u[i - 1] + e[i]
-    return precos / 1000.0 + u
+    return precos / fator + u
 
 
 class VistaSintetica:
     """Fornece o preco do ativo de referencia SINTETICO a cada consulta (estado AR(1) com seed)."""
 
-    def __init__(self, seed: int, phi: float = 0.98, sigma: float = 0.02) -> None:
+    def __init__(self, seed: int, nome: str, fator: float, phi: float = 0.98, sigma: float = 0.02) -> None:
         self._rng = np.random.default_rng(seed)
+        self.nome, self.fator = nome, fator
         self.phi, self.sigma, self._u = phi, sigma, 0.0
 
     def __call__(self, tick: Tick) -> dict[str, float]:
         self._u = self.phi * self._u + float(self._rng.normal(0, self.sigma))
         m = tick.meio if tick.meio > 0 else tick.last
-        return {"BOVA11": m / 1000.0 + self._u}
+        return {self.nome: m / self.fator + self._u}
 
 
 @dataclass
@@ -208,6 +221,7 @@ class ParamsSimulacao:
     arquivo_emergencia: Path | None = None
     sigma_brl: float = 35.0  # desvio-padrao conservador do liquido por operacao (R$) p/ dimensionar n_alvo
     mde_brl: float = 5.0  # menor efeito de interesse na expectativa por operacao (R$)
+    ativo: str | None = None  # simbolo_base do perfil (config/instrumentos.toml); None => [geral].simbolo_base
 
 
 @dataclass
@@ -224,18 +238,27 @@ class Sessao:
     rotulo_dados: str
 
 
-def treinar_modelo(treino: DadosSinteticos, tipo: str = "logistica") -> ModeloMicroestrutura:
-    """Treina o modelo de microestrutura em dados SINTETICOS (status final: em_validacao; nunca validado_oos)."""
-    am = montar_amostras(list(treino.ticks), list(treino.livros), passo_s=15)
+def treinar_modelo(treino: DadosSinteticos, perfil: PerfilInstrumento, tipo: str = "logistica") -> ModeloMicroestrutura:
+    """Treina o modelo de microestrutura em dados SINTETICOS (status final: em_validacao; nunca validado_oos).
+
+    O modelo nasce marcado com o ATIVO do perfil e so serve a ele."""
+    am = montar_amostras(list(treino.ticks), list(treino.livros), ConfigBarreiras.do_perfil(perfil),
+                         CustosRotulagem.do_perfil(perfil), passo_s=15)
     m = ModeloMicroestrutura(tipo=tipo, nome=f"microestrutura_{tipo}")
     m.treinar(am, origem="sintetico", criterio=CriterioOOS())
+    m.ativo = perfil.simbolo_base
     return m
 
 
-def treinar_statarb(treino: DadosSinteticos, simbolo: str, seed: int) -> SinalStatArbPadrao:
+def nome_referencia(perfil: PerfilInstrumento) -> str:
+    return f"REF_{perfil.simbolo_base}"
+
+
+def treinar_statarb(treino: DadosSinteticos, perfil: PerfilInstrumento, seed: int) -> SinalStatArbPadrao:
     p = np.array([(t.meio if t.meio > 0 else t.last) for t in treino.ticks][::300], dtype=float)  # ~passo de 5 min
-    sa = SinalStatArbPadrao(alvo=simbolo, referencias=("BOVA11",))
-    sa.treinar({simbolo: p, "BOVA11": vista_sintetica(p, seed)})
+    ref = nome_referencia(perfil)
+    sa = SinalStatArbPadrao(alvo=perfil.simbolo_base, referencias=(ref,))
+    sa.treinar({perfil.simbolo_base: p, ref: vista_sintetica(p, seed, fator=fator_vista(perfil.preco_sintetico_ref))})
     return sa
 
 
@@ -263,7 +286,8 @@ def montar_provedores(p: ParamsSimulacao, cfg: dict[str, Any], catalogo: Catalog
 
 
 def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str],
-                     origem_dados: str = "sinteticos", sigma_brl: float = 35.0, mde_brl: float = 5.0) -> ManifestoExperimento:
+                     origem_dados: str = "sinteticos", sigma_brl: float = 35.0, mde_brl: float = 5.0,
+                     ativo: str = "") -> ManifestoExperimento:
     modelos: dict[str, str] = {}
     fixavel: dict[str, bool] = {}
     for b in bracos:
@@ -286,21 +310,16 @@ def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo
         metrica_primaria="expectativa_liquida_por_operacao_brl", mde_brl=mde_brl,
         n_alvo=n_expectativa(sigma_brl, mde_brl, alfa=0.05),
         regras_parada=("kill switch", "perda diaria", "orcamento de IA esgotado"),
-        modelos=modelos, fixavel=fixavel, hashes=hashes, origem_dados=origem_dados)
+        modelos=modelos, fixavel=fixavel, hashes=hashes, origem_dados=origem_dados, ativo=ativo)
 
 
-def carregar_risco_simulacao(p: ParamsSimulacao, *, ao_vivo: bool = False) -> tuple[Any, str | None]:
-    """Politica de risco APROVADA (hash conferido). Devolve (config, erro).
+def carregar_risco_simulacao(p: ParamsSimulacao, perfil: PerfilInstrumento, *, ao_vivo: bool = False
+                             ) -> tuple[Any, str | None]:
+    """Politica de risco APROVADA do ATIVO (hash conferido). Devolve (config, erro).
 
-    Ao vivo o erro se propaga (`ErroConfig`): nunca opera com padrao. Na simulacao cai em ``ConfigRisco()``
-    padrao, mas devolve o erro para que o chamador registre incidente CRITICO e rotule o resultado."""
-    try:
-        return carregar_politica(p.risco, p.aprovacao), None
-    except Exception as e:
-        if ao_vivo:
-            raise ErroConfig(f"politica de risco nao aprovada: {type(e).__name__}: {e}") from e
-        from robowin.core.tipos import ConfigRisco
-        return ConfigRisco(), f"{type(e).__name__}: {e}"
+    Ao vivo o erro se propaga (`ErroConfig`): nunca opera com padrao. Na simulacao cai nos limites padrao/minimos
+    do ativo, mas devolve o erro para que o chamador registre incidente CRITICO e rotule `risco_nao_aprovado`."""
+    return risco_do_ativo(perfil, p.risco, p.aprovacao, ao_vivo=ao_vivo)
 
 
 @dataclass
@@ -324,16 +343,20 @@ def construir_orquestrador(
     papeis = carregar_papeis(cfg) if cfg.get("ia", {}).get("papeis") else {}
     if papeis:
         validar_papeis(papeis, catalogo)
-    risco, erro_risco = carregar_risco_simulacao(p, ao_vivo=modo_tempo == "real")
-    orc = OrcamentoIA(float(cfg.get("ia", {}).get("orcamento_mensal_usd", 400.0)))
+    perfil = perfil_de_instrumento(ins)
+    if modo_tempo == "real":
+        perfil.exigir_confirmado()  # ao vivo: perfil a_confirmar BLOQUEIA
+    risco, erro_risco = carregar_risco_simulacao(p, perfil, ao_vivo=modo_tempo == "real")
+    orc = OrcamentoIA(float(cfg.get("ia", {}).get("orcamento_mensal_usd", 400.0)), ativo=perfil.simbolo_base)
     orc.iniciar_pregao(dia_sp(t_ref_ns).isoformat(), 21)
     pz = prazos_de_config(cfg)
-    g = geometria_de(risco, ins, 30.0, 30.0, 60)
+    g = geometria_de(risco, ins, perfil.stop_padrao_pontos, perfil.alvo_padrao_pontos, 60)
     modos: tuple[Modo, ...] = ("imediato", "condicional") if p.com_condicional else ("imediato",)
     refs = [pp.modelo for pp in papeis.values()] + [
         r for e in extras_de_config(cfg) for r in ([e.proponente] + ([e.revisor] if e.revisor else [])) if ":" in r]
     provedores, real = montar_provedores(p, cfg, catalogo, orc, refs)
     fab = FabricaBracos(provedores, catalogo=catalogo, papeis=papeis, prazos=pz,
+                        stop_max_pontos=stop_maximo_efetivo_pontos(risco, ins.ponto_valor_brl),
                         geometria=Geometria(g.stop_pontos, g.alvo_pontos, 300), cfg=cfg)
     bracos: list[BracoBase] = []
     for modo in modos:
@@ -346,7 +369,7 @@ def construir_orquestrador(
     for modo in modos:
         suf = "" if modo == "imediato" else "_cond"
         bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
-    hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}}
+    hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "perfil": perfil.hash()}
     if erro_risco is None:
         hashes["risco"] = _hash_arquivo(p.risco)
     else:  # o hash do arquivo NAO foi o aplicado (valeu o padrao): nao gravar como se fosse
@@ -354,7 +377,7 @@ def construir_orquestrador(
         hashes["risco_aplicado"] = "padrao_nao_aprovado"
     manifesto = montar_manifesto(sessao_id, bracos, catalogo, hashes,
                                  origem_dados="sinteticos" if sintetico else "desconhecida",
-                                 sigma_brl=p.sigma_brl, mde_brl=p.mde_brl)
+                                 sigma_brl=p.sigma_brl, mde_brl=p.mde_brl, ativo=perfil.simbolo_base)
     cfg_orq = ConfigOrquestrador(
         instrumento=ins, risco=risco, sessao_id=sessao_id, sintetico=sintetico,
         rotulo=ROTULO_SESSAO if sintetico else "SIMULACAO", seed=p.seed, modo_tempo=modo_tempo,
@@ -386,17 +409,18 @@ def abrir_banco(saida: Path, rel: Any, sessao_id: str) -> tuple[BancoSQLite, Reg
 
 def montar_sessao(p: ParamsSimulacao) -> Sessao:
     cfg, catalogo = carregar_ambiente(p)
-    ins = Instrumento(simbolo="SINT_WIN")
-    dias = gerar_dias(ConfigSintetico(seed=p.seed, n_ticks=p.n_ticks, sinal_forca=p.sinal_forca,
-                                      n_saltos=0, simbolo=ins.simbolo), 2)
+    perfil = perfil_da_config(cfg, p.ativo, permitir_a_confirmar=True)  # sintetico: a_confirmar roda, rotulado
+    cfg_s = ConfigSintetico.do_perfil(perfil, seed=p.seed, n_ticks=p.n_ticks, sinal_forca=p.sinal_forca, n_saltos=0)
+    ins = perfil.instrumento(cfg_s.simbolo)
+    dias = gerar_dias(cfg_s, 2)
     treino, dados = dias[0], dias[1]
-    modelo = treinar_modelo(treino, p.tipo_modelo)
-    statarb = treinar_statarb(treino, ins.simbolo, p.seed)
+    modelo = treinar_modelo(treino, perfil, p.tipo_modelo)
+    statarb = treinar_statarb(treino, perfil, p.seed)
     sessao_id = f"sim-{p.seed}"
     rel = RelogioSimulado(dados.ticks[0].t_utc_ns)
     banco, registro, caminho, dir_aud = abrir_banco(p.saida, rel, sessao_id)
     m = construir_orquestrador(
-        p, rel=rel, registro=registro, ins=ins, modelo=modelo, statarb=statarb, precos_aux=VistaSintetica(p.seed),
+        p, rel=rel, registro=registro, ins=ins, modelo=modelo, statarb=statarb, precos_aux=VistaSintetica(p.seed, nome_referencia(perfil), fator_vista(perfil.preco_sintetico_ref)),
         sintetico=True, modo_tempo="simulado", sessao_id=sessao_id, t_ref_ns=rel.agora_ns(), cfg=cfg,
         catalogo=catalogo)
     return Sessao(m.orq, banco, list(dados.ticks), list(dados.livros), m.manifesto, dados, caminho, dir_aud,

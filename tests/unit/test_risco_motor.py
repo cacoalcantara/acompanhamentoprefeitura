@@ -2,11 +2,12 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
+from perfis_teste import WIN
 
 from robowin.core.calendario_b3 import dt_utc_ns
 from robowin.core.config import ErroConfig, sha256_arquivo
 from robowin.core.ids import novo_id
-from robowin.core.tipos import Acao, ConfigRisco, Instrumento, Intencao, Lado, Posicao, SessaoPregao
+from robowin.core.tipos import Acao, ConfigRisco, Intencao, Lado, Posicao, SessaoPregao
 from robowin.risco.kill_switch import KillSwitch
 from robowin.risco.motor import EstadoMercado, EventoAgenda, MotorRiscoPadrao
 from robowin.risco.politica import carregar_politica, stop_maximo_efetivo_pontos, validar_coerencia
@@ -19,7 +20,7 @@ def T(h, m, s=0, dia=(2026, 11, 10)):
 
 
 def motor(cfg=None, **kw):
-    ins = kw.pop("instrumento", Instrumento(simbolo="WINZ26"))
+    ins = kw.pop("instrumento", WIN.instrumento("WINZ26"))
     return MotorRiscoPadrao(cfg or ConfigRisco(), ins, **kw)
 
 
@@ -134,9 +135,9 @@ def test_regimes(flag, motivo):
 
 
 def test_rolagem_no_dia_do_vencimento():
-    m = motor(instrumento=Instrumento(simbolo="WINZ26", vencimento="2026-11-10"))
+    m = motor(instrumento=WIN.instrumento("WINZ26", vencimento="2026-11-10"))
     assert "rolagem_de_contrato" in avaliar(m, intencao()).motivos
-    m2 = motor(instrumento=Instrumento(simbolo="WINZ26", vencimento="2026-12-16"))
+    m2 = motor(instrumento=WIN.instrumento("WINZ26", vencimento="2026-12-16"))
     assert avaliar(m2, intencao()).aprovada
 
 

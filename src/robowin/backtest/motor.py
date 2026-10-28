@@ -24,6 +24,7 @@ from typing import Any
 
 from robowin.core import calendario_b3
 from robowin.core.ids import hash_json
+from robowin.core.instrumentos import ativo_de, perfil_de_instrumento
 from robowin.core.protocolos import Banco, Braco
 from robowin.core.relogio import RelogioSimulado
 from robowin.core.tipos import (
@@ -56,7 +57,7 @@ NS = 1_000_000_000
 # ============================================================================================ configuracao
 @dataclass(frozen=True)
 class ConfigBacktest:
-    instrumento: Instrumento = field(default_factory=lambda: Instrumento(simbolo="WIN"))
+    instrumento: Instrumento  # obrigatorio: vem do perfil do ativo (core.instrumentos)
     cfg_risco: ConfigRisco = field(default_factory=ConfigRisco)
     seed: int = 0
     intervalo_decisao_s: float = 15.0
@@ -66,7 +67,7 @@ class ConfigBacktest:
     recuperacao_gap_s: float = 30.0       # apos a lacuna, entradas vetadas por `feed_parado` durante este tempo
     janela_dossie_s: float = 1000.0
     memoria_trades: int = 5
-    custos: Custos = field(default_factory=Custos)
+    custos: Custos | None = None             # None => tarifas do perfil do ativo
     slippage: ParamsSlippage = field(default_factory=ParamsSlippage)
     latencia: DistribuicaoLatencia = field(default_factory=lambda: DistribuicaoLatencia.fixa(150.0))
     cenario: str = "base"
@@ -76,9 +77,12 @@ class ConfigBacktest:
     id_experimento: str = "backtest"
     extras_dossie: Callable[[int, dict[str, float]], dict[str, Any]] | None = None
 
+    def custos_efetivos(self) -> Custos:
+        return self.custos or Custos.do_instrumento(self.instrumento)
+
     def estresse(self) -> ConfigBacktest:
         """Cenario de estresse: corretagem de estresse, slippage de stop agravado e fila mais longa."""
-        return replace(self, cenario="estresse", custos=Custos.estresse(), slippage=ParamsSlippage.estresse(),
+        return replace(self, cenario="estresse", custos=self.custos_efetivos().estresse(), slippage=ParamsSlippage.estresse(),
                        fator_fila=max(self.fator_fila, 2.0))
 
 
@@ -175,12 +179,14 @@ class MotorBacktest:
 
     def __init__(self, fonte: FonteEventos, bracos: Sequence[Braco], cfg: ConfigBacktest | None = None,
                  banco: Banco | None = None) -> None:
+        if cfg is None:
+            raise ValueError("backtest exige ConfigBacktest com o instrumento do ativo (perfil)")
         if not bracos:
             raise ValueError("backtest sem bracos")
         ids = [b.id for b in bracos]
         if len(set(ids)) != len(ids):
             raise ValueError("ids de bracos duplicados")
-        self.fonte, self.bracos, self.cfg, self.banco = fonte, list(bracos), cfg or ConfigBacktest(), banco
+        self.fonte, self.bracos, self.cfg, self.banco = fonte, list(bracos), cfg, banco
         self._usado = False
 
     @classmethod
@@ -207,7 +213,7 @@ class MotorBacktest:
         self.grav = _Gravador(self.banco)
         self.lat = cfg.latencia.amostrador(cfg.seed + 7)
         self.exec = ExecucaoBacktest(
-            cfg.instrumento, self.rel, self.ids, cfg.cfg_risco, cfg.custos, cfg.slippage, self.lat, cfg.seed,
+            cfg.instrumento, self.rel, self.ids, cfg.cfg_risco, cfg.custos_efetivos(), cfg.slippage, self.lat, cfg.seed,
             banco=self.banco, eventos_agenda=cfg.eventos_agenda, fator_fila=cfg.fator_fila,
             ao_ordem=self._ao_ordem, ao_kill=self._ao_kill)
         self.r_decisoes: list[dict[str, Any]] = []
@@ -240,10 +246,11 @@ class MotorBacktest:
         self.grav.add("experimentos", {
             "id": cfg.id_experimento, "criado_ns": self.rel.agora_ns(), "status": "backtest_" + cfg.cenario,
             "manifesto_json": {
-                "tipo": "backtest", "cenario": cfg.cenario, "seed": cfg.seed, "bracos": self.ids,
+                "tipo": "backtest", "ativo": ativo_de(cfg.instrumento),
+                "perfil_a_confirmar": perfil_de_instrumento(cfg.instrumento).a_confirmar, "cenario": cfg.cenario, "seed": cfg.seed, "bracos": self.ids,
                 "origem_dados": "sinteticos" if self.fonte.sintetico else "armazenados",
                 "latencia": {"origem": cfg.latencia.origem, "injetada": True, **cfg.latencia.quantis()},
-                "custos": {"corretagem_ida_volta_brl": cfg.custos.corretagem_ida_volta_brl},
+                "custos": {"corretagem_ida_volta_brl": cfg.custos_efetivos().corretagem_ida_volta_brl},
                 "slippage": {"minimo_ticks": cfg.slippage.minimo_ticks, "alpha": cfg.slippage.alpha},
                 "intervalo_decisao_s": cfg.intervalo_decisao_s}})
 
@@ -436,7 +443,7 @@ class MotorBacktest:
         pos = self.exec.posicao(braco)
         est = self.exec.motor.contab.estado(braco, t)
         d = dia_sp(t)
-        g = calendario_b3.sessao_em(d)
+        g = calendario_b3.sessao_em(d, perfil_de_instrumento(ins))
         s = segundos_do_dia(t)
         posicao = None
         if pos.quantidade > 0 and pos.lado is not None:

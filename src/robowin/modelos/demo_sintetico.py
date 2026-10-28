@@ -12,6 +12,7 @@ import math
 
 import numpy as np
 
+from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.tipos import LivroSnapshot, NivelBook, Tick
 from robowin.features.pipeline import calcular_offline
 
@@ -19,26 +20,32 @@ from .microestrutura import Amostras, construir_amostras
 from .rotulagem import ConfigBarreiras, Cotacoes, Custos
 
 ROTULO = "SINTETICO"
+RUIDO_TICKS = 0.3      # ruido do preco por tick, em ticks do ativo
+ESCALA_DERIVA = 1 / 5   # deriva = forca_sinal * tick * ESCALA_DERIVA (legado: 1 pt por unidade de forca no tick de referencia)
 INICIO_NS = 1_773_147_600 * 1_000_000_000  # um instante qualquer dentro de um pregao ficticio (10:00 em SP)
-TICK = 5.0
 
 
-def gerar(n_ticks: int = 100_000, seed: int = 1, forca_sinal: float = 0.05, ruido_pts: float = 1.5,
-          phi: float = 0.995, preco0: float = 130_000.0, n_dias: int = 1
+def gerar(perfil: PerfilInstrumento, n_ticks: int = 100_000, seed: int = 1, forca_sinal: float = 0.05,
+          ruido_pts: float | None = None, phi: float = 0.995, preco0: float | None = None, n_dias: int = 1
           ) -> tuple[list[Tick], list[LivroSnapshot]]:
-    """`n_dias` sessoes ficticias de 10:00 em diante (o contexto intradiario fica estacionario entre dias)."""
+    """`n_dias` sessoes ficticias de 10:00 em diante (o contexto intradiario fica estacionario entre dias).
+
+    Grade de tick e nivel de preco vem do perfil do ativo; ruido e deriva sao proporcionais ao tick."""
+    tick = perfil.tick_pontos
+    ruido_pts = RUIDO_TICKS * tick if ruido_pts is None else ruido_pts
+    forca_sinal = forca_sinal * tick * ESCALA_DERIVA
     rng = np.random.default_rng(seed)
     por_dia = n_ticks // n_dias
     ticks: list[Tick] = []
     livros: list[LivroSnapshot] = []
-    p = preco0
+    p = perfil.preco_sintetico_ref if preco0 is None else preco0
     for d in range(n_dias):
-        p = _sessao(rng, d, por_dia, forca_sinal, ruido_pts, phi, p, ticks, livros)
+        p = _sessao(rng, d, por_dia, forca_sinal, ruido_pts, phi, p, ticks, livros, tick)
     return ticks, livros
 
 
 def _sessao(rng, dia: int, n: int, forca_sinal: float, ruido_pts: float, phi: float, p: float,
-            ticks: list[Tick], livros: list[LivroSnapshot]) -> float:
+            ticks: list[Tick], livros: list[LivroSnapshot], TICK: float) -> float:
     dts = np.maximum(rng.exponential(0.25, n), 0.001)
     ts = INICIO_NS + dia * 86_400 * 1_000_000_000 + np.cumsum((dts * 1e9).astype(np.int64))
     inov = rng.standard_normal(n)
@@ -79,11 +86,9 @@ def _sessao(rng, dia: int, n: int, forca_sinal: float, ruido_pts: float, phi: fl
     return p
 
 
-def montar_amostras(ticks: list[Tick], livros: list[LivroSnapshot], cfg: ConfigBarreiras | None = None,
-                    custos: Custos | None = None, passo_s: int = 5, aquecimento_s: int = 600) -> Amostras:
+def montar_amostras(ticks: list[Tick], livros: list[LivroSnapshot], cfg: ConfigBarreiras,
+                    custos: Custos, passo_s: int = 5, aquecimento_s: int = 600) -> Amostras:
     """Instantes de decisao a cada `passo_s`, apos o aquecimento de cada sessao e com horizonte completo."""
-    cfg = cfg or ConfigBarreiras()
-    custos = custos or Custos()
     ns = 1_000_000_000
     t = np.array([k.t_utc_ns for k in ticks], dtype=np.int64)
     quebras = np.flatnonzero(np.diff(t) > 3600 * ns) + 1  # nova sessao quando ha lacuna > 1h

@@ -21,13 +21,14 @@ from pathlib import Path
 from typing import Any
 
 from robowin.core.barramento import BarramentoLocal
+from robowin.core.instrumentos import PerfilInstrumento, PerfilNaoConfirmado
 from robowin.core.relogio import Relogio, RelogioReal
 from robowin.core.tipos import AckOrdem, ComandoOrdem
 
 from . import constantes as C
 from .coleta import ColetorLivro, ColetorTicks, LogBruto
 from .conta import ler_estado_conta
-from .contrato import ResolucaoContrato, resolver_contrato_win
+from .contrato import ContratoRecusado, ResolucaoContrato, resolver_contrato
 from .execucao_demo import (
     ConfigDemo,
     ExecucaoDemo,
@@ -63,7 +64,8 @@ class ConfigGateway:
     login: int
     servidor: str
     modo_config: str = "demo_mt5"
-    simbolo: str | None = None  # None => contrato WIN vigente resolvido
+    simbolo: str | None = None  # None => contrato vigente do ATIVO do perfil
+    perfil: PerfilInstrumento | None = None  # obrigatorio: define o ativo, o contrato e as especificacoes esperadas
     hoje: dt.date | None = None
     intervalo_ticks_s: float = 0.05
     intervalo_livro_s: float = 0.25
@@ -113,7 +115,13 @@ class Gateway:
         if est is None:
             raise GuardaDemoViolada("account_info indisponivel")
         hoje = self.cfg.hoje or dt.datetime.fromtimestamp(self.relogio.agora_ns() / 1e9, dt.UTC).date()
-        self.resolucao = resolver_contrato_win(self.t, hoje)
+        perfil = self.cfg.perfil
+        if perfil is None:
+            raise GuardaDemoViolada("perfil de instrumento nao informado: o ativo vem de config/instrumentos.toml")
+        try:
+            self.resolucao = resolver_contrato(self.t, hoje, perfil)
+        except (ContratoRecusado, PerfilNaoConfirmado) as e:  # corretora divergente do perfil ou perfil a_confirmar
+            raise GuardaDemoViolada(f"ativo {perfil.simbolo_base} recusado: {e}") from e
         simbolo = self.resolucao.simbolo_corretora
         if self.cfg.simbolo and self.cfg.simbolo != simbolo:
             raise GuardaDemoViolada(f"simbolo configurado {self.cfg.simbolo} difere do vigente {simbolo}")
@@ -132,10 +140,11 @@ class Gateway:
         self.executor = ExecucaoDemo(
             self.t, ConfigDemo(login=self.cfg.login, servidor=self.cfg.servidor, simbolo=simbolo,
                                modo_config=self.cfg.modo_config, msgs_por_min=self.cfg.msgs_por_min,
-                               espera_incerta_s=self.cfg.espera_incerta_s),
+                               espera_incerta_s=self.cfg.espera_incerta_s, lote=perfil.lote),
             self.relogio, alerta=self._alerta, registrar=registrar, relogio_srv=self.rs)
         self.executor.restaurar_enviadas(ja_enviadas)
         self.executor.verificar_guarda()  # falha cedo: conta real/login/servidor errados
+        self.cfg.guardiao.perfil = perfil  # o guardiao valida o simbolo da corretora e o stop contra o perfil
         self.guardiao = Guardiao(self.executor, self.t, self.cfg.guardiao, self.relogio, self.rs, alerta=self._alerta,
                                  registrar=registrar)
         if not self.rs.confiavel:
@@ -145,7 +154,8 @@ class Gateway:
         self.ticks = ColetorTicks(self.t, simbolo, self.relogio, self.rs, self.pub, self.log,
                                   inicio_ns=self.cfg.inicio_coleta_ns)
         self.livro = ColetorLivro(self.t, simbolo, self.relogio, self.pub, self.log)
-        self.livro.assinar()
+        if perfil.aceita_book:
+            self.livro.assinar()
         self._publicar_estado()
 
     def _alerta(self, tipo: str, dados: dict[str, Any]) -> None:

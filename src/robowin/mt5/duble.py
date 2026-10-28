@@ -28,6 +28,7 @@ from typing import Any
 
 import numpy as np
 
+from robowin.core.instrumentos import PerfilInstrumento, carregar_perfil
 from robowin.core.relogio import Relogio, RelogioReal
 
 from . import constantes as C
@@ -99,23 +100,22 @@ def gerar_livros_sinteticos(ticks: Sequence[TickSint], a_cada: int = 10, niveis:
     return out
 
 
-def especificacao_win(nome: str, vencimento_ts: int = 0) -> NS:
-    """symbol_info sintetico de um WIN: tick 5 pts, R$ 0,20/ponto (tick_value 1,00), lote 1."""
+def especificacao(perfil: PerfilInstrumento, nome: str, vencimento_ts: int = 0) -> NS:
+    """symbol_info sintetico de um simbolo do PERFIL (tick, valor do tick por unidade de volume e lote do perfil)."""
     return NS(
-        name=nome, path=f"Futuros\\{nome}", description=f"MINI IBOVESPA {nome} (SINTETICO)", digits=0,
+        name=nome, path=f"{perfil.classe}\\{nome}", description=f"{perfil.descricao} {nome} (SINTETICO)", digits=0,
         point=1.0, visible=True, select=True, spread=5, spread_float=True,
         trade_mode=4, trade_exemode=C.EXEC_EXCHANGE, filling_mode=C.SIMB_FILL_FOK | C.SIMB_FILL_IOC,
-        trade_tick_size=5.0, trade_tick_value=1.0, trade_contract_size=0.2,
-        volume_min=1.0, volume_max=1000.0, volume_step=1.0, ticks_bookdepth=10,
+        trade_tick_size=perfil.tick_pontos, trade_tick_value=perfil.tick_valor_brl / perfil.lote,
+        trade_contract_size=perfil.ponto_valor_brl / perfil.lote,
+        volume_min=float(perfil.lote), volume_max=1000.0 * perfil.lote, volume_step=float(perfil.lote),
+        ticks_bookdepth=10 if perfil.aceita_book else 0,
         expiration_time=vencimento_ts, currency_profit="BRL", currency_base="BRL",
     )
 
 
-def _espec_generica(nome: str, tick: float, valor_tick: float, depth: int = 5) -> NS:
-    e = especificacao_win(nome)
-    e.description = f"{nome} (SINTETICO)"
-    e.trade_tick_size, e.trade_tick_value, e.ticks_bookdepth = tick, valor_tick, depth
-    return e
+def _ts_venc(ano: int, mes: int, dia: int) -> int:
+    return int(dt.datetime(ano, mes, dia, 21, tzinfo=dt.UTC).timestamp())
 
 
 def _para_epoch_s(x: Any) -> float:
@@ -729,12 +729,21 @@ def criar_duble_padrao(
     """
     d = DubleMT5(relogio, **kw)
     ini = inicio_utc_ms if inicio_utc_ms is not None else d._agora_ms() - 1000
-    venc = int(dt.datetime(2026, 12, 16, 21, tzinfo=dt.UTC).timestamp())
-    ticks = gerar_ticks_sinteticos(ini, n_ticks, passo_ms, semente=semente)
-    d.adicionar_simbolo(especificacao_win("WINZ26", venc), ticks, gerar_livros_sinteticos(ticks, 10, 5, semente=semente))
-    venc2 = int(dt.datetime(2027, 2, 17, 21, tzinfo=dt.UTC).timestamp())
-    d.adicionar_simbolo(especificacao_win("WING27", venc2), gerar_ticks_sinteticos(ini, 50, 1000, 100500.0, semente + 1))
-    d.adicionar_simbolo(_espec_generica("INDZ26", 5.0, 1.0), gerar_ticks_sinteticos(ini, 50, 1000, 130000.0, semente + 2))
-    d.adicionar_simbolo(_espec_generica("WDOX26", 0.5, 5.0), gerar_ticks_sinteticos(ini, 50, 1000, 5400.0, semente + 3, tick=0.5))
-    d.adicionar_simbolo(_espec_generica("BOVA11", 0.01, 0.01, 0), gerar_ticks_sinteticos(ini, 50, 1000, 120.0, semente + 4, tick=0.01))
+
+    def perfil(a: str) -> PerfilInstrumento:
+        return carregar_perfil(a, permitir_a_confirmar=True)  # o duble simula a corretora de qualquer perfil
+
+    def serie(p: PerfilInstrumento, n: int, passo: int, sem: int) -> list[TickSint]:
+        return gerar_ticks_sinteticos(ini, n, passo, p.preco_sintetico_ref, sem, tick=p.tick_pontos)
+
+    win, ind, wdo, dol, acao, etf = (perfil(x) for x in ("WIN", "IND", "WDO", "DOL", "PETR4", "BOVA11"))
+    ticks = serie(win, n_ticks, passo_ms, semente)
+    d.adicionar_simbolo(especificacao(win, "WINZ26", _ts_venc(2026, 12, 16)), ticks,
+                        gerar_livros_sinteticos(ticks, 10, 5, win.tick_pontos, semente=semente))
+    d.adicionar_simbolo(especificacao(win, "WING27", _ts_venc(2027, 2, 17)), serie(win, 50, 1000, semente + 1))
+    d.adicionar_simbolo(especificacao(ind, "INDZ26"), serie(ind, 50, 1000, semente + 2))
+    d.adicionar_simbolo(especificacao(wdo, "WDOX26"), serie(wdo, 50, 1000, semente + 3))
+    d.adicionar_simbolo(especificacao(dol, "DOLX26"), serie(dol, 50, 1000, semente + 5))
+    d.adicionar_simbolo(especificacao(acao, "PETR4"), serie(acao, 50, 1000, semente + 6))
+    d.adicionar_simbolo(especificacao(etf, "BOVA11"), serie(etf, 50, 1000, semente + 4))
     return d

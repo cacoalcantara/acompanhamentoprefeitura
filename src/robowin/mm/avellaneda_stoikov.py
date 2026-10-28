@@ -7,7 +7,7 @@ Cotacoes          bid = r - d/2 ; ask = r + d/2
 onde gamma = aversao ao risco (1/ponto), sigma = volatilidade em pontos/sqrt(s), k = intensidade de chegada
 de ordens (decaimento exponencial da intensidade com a distancia ao meio, 1/ponto).
 
-Restricoes de estoque: com q >= q_max nao ha bid; com q <= -q_max nao ha ask. Discretizacao no tick (5 pts):
+Restricoes de estoque: com q >= q_max nao ha bid; com q <= -q_max nao ha ask. Discretizacao no tick do ativo:
 bid arredondado para BAIXO, ask para CIMA (nunca melhora a cotacao teorica); sem cruzar o book; no maximo
 `afastamento_max_ticks` do topo (cotacao longe do mercado seria isca; nao fazemos isca).
 """
@@ -16,15 +16,21 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from ..core.tipos import Instrumento
+
 
 @dataclass(frozen=True)
 class ParamsAS:
+    tick: float  # tick do ativo (perfil): ParamsAS.do_instrumento(ins)
     gamma: float = 0.05
     k: float = 0.3
     tau_s: float = 60.0
     q_max: int = 1
-    tick: float = 5.0
     afastamento_max_ticks: int = 2
+
+    @classmethod
+    def do_instrumento(cls, ins: Instrumento, **kw: float) -> ParamsAS:
+        return cls(tick=ins.tick_pontos, **kw)
 
     def __post_init__(self) -> None:
         if self.gamma <= 0 or self.k <= 0 or self.tau_s <= 0 or self.q_max < 1 or self.tick <= 0:

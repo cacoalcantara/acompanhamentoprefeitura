@@ -1,4 +1,4 @@
-"""Resolucao do contrato WIN vigente: calendario B3 x symbols_get da corretora x especificacoes."""
+"""Resolucao do contrato vigente do ATIVO configurado: calendario B3 x symbols_get da corretora x perfil."""
 from __future__ import annotations
 
 import datetime as dt
@@ -8,11 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from robowin.core import calendario_b3
+from robowin.core.instrumentos import LETRAS_MES, PerfilInstrumento
 from robowin.core.tipos import Instrumento
 
-from .specs import ESPEC_WIN, EspecEsperada, instrumento_de, validar_especificacoes
-
-LETRAS_MES = "FGHJKMNQUVXZ"
+from .specs import EspecEsperada, instrumento_de, validar_especificacoes
 
 
 class ContratoRecusado(Exception):
@@ -38,16 +37,18 @@ class ResolucaoContrato:
     simbolo_corretora: str
     prefixo: str
     sufixo: str
-    vencimento: dt.date
+    vencimento: dt.date | None
     outros_contratos: list[str] = field(default_factory=list)
 
 
-def _padrao(base: str) -> re.Pattern[str]:
-    return re.compile(rf"^(?P<pre>.*?)(?P<cod>{re.escape(base)}[{LETRAS_MES}]\d{{2}})(?P<suf>.*)$")
+def _padrao(perfil: PerfilInstrumento) -> re.Pattern[str]:
+    base = re.escape(perfil.simbolo_base)
+    cod = rf"{base}[{LETRAS_MES}]\d{{2}}" if perfil.tem_vencimento else base
+    return re.compile(rf"^(?P<pre>.*?)(?P<cod>{cod})(?P<suf>.*)$")
 
 
-def listar_contratos(nomes: list[str], base: str = "WIN") -> list[Candidato]:
-    pad = _padrao(base)
+def listar_contratos(nomes: list[str], perfil: PerfilInstrumento) -> list[Candidato]:
+    pad = _padrao(perfil)
     out = []
     for n in nomes:
         m = pad.match(n)
@@ -56,17 +57,21 @@ def listar_contratos(nomes: list[str], base: str = "WIN") -> list[Candidato]:
     return out
 
 
-def escolher_simbolo(nomes: list[str], codigo: str, base: str = "WIN") -> Candidato:
+def escolher_simbolo(nomes: list[str], codigo: str, perfil: PerfilInstrumento) -> Candidato:
     """Acha o simbolo da corretora para `codigo`, respeitando o mesmo prefixo/sufixo dos demais contratos."""
-    todos = listar_contratos(nomes, base)
+    todos = listar_contratos(nomes, perfil)
+    base = perfil.simbolo_base
     if not todos:
-        raise ContratoRecusado([f"symbols_get nao traz nenhum contrato {base}"])
+        raise ContratoRecusado([f"symbols_get nao traz nenhum simbolo de {base}"])
     alvo = [c for c in todos if c.codigo == codigo]
     if not alvo:
         achados = sorted({c.codigo for c in todos})
         raise ContratoRecusado([f"contrato vigente {codigo} nao oferecido pela corretora (ha: {achados})"])
     if len(alvo) == 1:
         return alvo[0]
+    exato = [c for c in alvo if c.nome == codigo]  # sem vencimento (acao/ETF): o ticker puro vence o fracionario
+    if not perfil.tem_vencimento and len(exato) == 1:
+        return exato[0]
     # varios: prefere a decoracao (prefixo, sufixo) predominante entre todos os contratos da corretora
     freq = Counter((c.prefixo, c.sufixo) for c in todos)
     melhor = max(freq.values())
@@ -77,35 +82,31 @@ def escolher_simbolo(nomes: list[str], codigo: str, base: str = "WIN") -> Candid
     raise ContratoRecusado([f"contrato {codigo} ambiguo na corretora: {[c.nome for c in alvo]}"])
 
 
-def _vencimento_do_codigo(codigo: str, base: str = "WIN") -> dt.date:
-    letra, aa = codigo[len(base)], int(codigo[len(base) + 1:])
-    mes = LETRAS_MES.index(letra) + 1
-    return calendario_b3.vencimento_win(2000 + aa, mes)
-
-
-def resolver_contrato_win(
+def resolver_contrato(
     terminal: Any,
     hoje: dt.date,
-    esperado: EspecEsperada = ESPEC_WIN,
-    base: str = "WIN",
+    perfil: PerfilInstrumento,
     selecionar: bool = True,
 ) -> ResolucaoContrato:
-    """Resolve o WIN vigente em `hoje` e valida as especificacoes. Levanta `ContratoRecusado` se divergir."""
-    codigo = calendario_b3.contrato_vigente(hoje)
-    simbolos = terminal.symbols_get(f"*{base}*")
+    """Resolve o contrato vigente do ATIVO do perfil em `hoje` e valida as especificacoes da corretora CONTRA o perfil.
+
+    Levanta `PerfilNaoConfirmado` se o perfil tem valores a_confirmar e `ContratoRecusado` se a corretora divergir."""
+    perfil.exigir_confirmado()
+    codigo = calendario_b3.contrato_vigente(perfil, hoje)
+    simbolos = terminal.symbols_get(f"*{perfil.simbolo_base}*")
     if not simbolos:
         simbolos = terminal.symbols_get()
     if not simbolos:
         raise ContratoRecusado(["symbols_get vazio ou indisponivel"])
     nomes = [str(s.name) for s in simbolos]
-    cand = escolher_simbolo(nomes, codigo, base)
+    cand = escolher_simbolo(nomes, codigo, perfil)
     if selecionar and not terminal.symbol_select(cand.nome, True):
         raise ContratoRecusado([f"symbol_select falhou para {cand.nome}"])
     info = terminal.symbol_info(cand.nome)
-    venc = _vencimento_do_codigo(codigo, base)
-    erros = validar_especificacoes(info, esperado, venc)
+    venc = calendario_b3.vencimento_do_codigo(perfil, codigo)
+    erros = validar_especificacoes(info, EspecEsperada.do_perfil(perfil), venc)
     if erros:
         raise ContratoRecusado([f"{cand.nome}: {e}" for e in erros])
-    inst = instrumento_de(cand.nome, info, venc)
-    outros = sorted(c.nome for c in listar_contratos(nomes, base) if c.nome != cand.nome)
+    inst = instrumento_de(cand.nome, info, venc, ativo=perfil.simbolo_base)
+    outros = sorted(c.nome for c in listar_contratos(nomes, perfil) if c.nome != cand.nome)
     return ResolucaoContrato(inst, codigo, cand.nome, cand.prefixo, cand.sufixo, venc, outros)

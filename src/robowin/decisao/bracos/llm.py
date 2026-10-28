@@ -104,7 +104,7 @@ class RevisaoObtida:
 
 
 class ServicoProposta(ServicoLLM):
-    def __init__(self, provedor: Any, ref: str, *, dono: str = "", stop_max_pontos: float = 250.0, **kw: Any) -> None:
+    def __init__(self, provedor: Any, ref: str, *, dono: str = "", stop_max_pontos: float, **kw: Any) -> None:
         super().__init__(provedor, ref, "proponente", PropostaIA, **kw)
         self._donos: dict[str, str] = {}
         if dono:
@@ -194,13 +194,13 @@ class BracoLLM(BracoBase):
                         {"modelo": self.revisor.ref, "effort": self.revisor.effort,
                          "prompt_hash": self.revisor.prompt.hash})
         m["prazos"] = {"claude_s": self.prazos.claude_s, "gpt_s": self.prazos.gpt_s,
-                       "validade_s": self.prazos.validade_s, "desvio_max_pts": self.prazos.desvio_max_pts,
+                       "validade_s": self.prazos.validade_s, "desvio_max_ticks": self.prazos.desvio_max_ticks,
                        "margem_s": self.prazos.margem_s}
         return m
 
     async def adecidir(self, ctx: ContextoDecisao) -> ResultadoDecisao:
         pz = self.prazos
-        kw: dict[str, Any] = {"validade_s": pz.validade_s, "desvio_max_pts": pz.desvio_max_pts}
+        kw: dict[str, Any] = {"validade_s": pz.validade_s, "desvio_max_pts": pz.desvio_max_ticks * ctx.tick_pontos}
         obt = await self.proponente.obter(ctx, self.modo, pz)
         lat_prop_ns = int(obt.chamada.total_ms * 1e6)
         chamadas = [RegistroChamada(obt.chamada, obt.dono, "proponente", compartilhada=obt.compartilhada)]

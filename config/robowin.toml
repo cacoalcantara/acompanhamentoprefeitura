@@ -16,7 +16,7 @@ effort = "low"
 modelo = "anthropic:claude-haiku-5-5"
 
 [prazos]
-imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_pts = 20 }
+imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_ticks = 4 }
 condicional = { expira_min_max = 10 }
 
 [mt5]

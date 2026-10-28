@@ -6,10 +6,11 @@ desloca levemente o preco (sinal fraco conhecido); com forca_sinal = 0 nao ha re
 import numpy as np
 import pandas as pd
 import pytest
+from perfis_teste import WIN, amostras
 
 from robowin.core.tipos import VetorFeatures
 from robowin.features.registro import FeatureProibida
-from robowin.modelos.demo_sintetico import gerar, montar_amostras
+from robowin.modelos.demo_sintetico import gerar
 from robowin.modelos.microestrutura import (
     Amostras,
     CriterioAusente,
@@ -30,18 +31,18 @@ CRITERIO = CriterioOOS()
 
 @pytest.fixture(scope="module")
 def com_sinal():
-    return montar_amostras(*gerar(200_000, seed=1, forca_sinal=0.1, n_dias=5))
+    return amostras(WIN, *gerar(WIN, 200_000, seed=1, forca_sinal=0.1, n_dias=5))
 
 
 @pytest.fixture(scope="module")
 def forte():
     """Sinal mais forte (ainda sintetico) para exercitar os caminhos de status com poucos dados."""
-    return montar_amostras(*gerar(140_000, seed=1, forca_sinal=0.2, n_dias=4))
+    return amostras(WIN, *gerar(WIN, 140_000, seed=1, forca_sinal=0.2, n_dias=4))
 
 
 @pytest.fixture(scope="module")
 def sem_sinal():
-    return montar_amostras(*gerar(200_000, seed=1, forca_sinal=0.0, n_dias=5))
+    return amostras(WIN, *gerar(WIN, 200_000, seed=1, forca_sinal=0.0, n_dias=5))
 
 
 def _prior(am):

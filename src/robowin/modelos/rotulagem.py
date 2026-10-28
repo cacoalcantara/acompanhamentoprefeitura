@@ -7,10 +7,13 @@ walk-forward usa esse instante. Amostras cujo horizonte ultrapassa o fim dos dad
 """
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
+from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.tipos import Tick
 
 ALVO, STOP, TEMPO = 0, 1, 2
@@ -20,19 +23,33 @@ NS = 1_000_000_000
 
 @dataclass(frozen=True)
 class ConfigBarreiras:
-    alvo_pontos: float = 30.0
-    stop_pontos: float = 30.0
+    alvo_pontos: float
+    stop_pontos: float
+    ponto_valor_brl: float
     tempo_s: float = 60.0
     atraso_ns: int = 300_000_000  # latencia ate a entrada
     quantidade: int = 1
-    ponto_valor_brl: float = 0.20
     gap_max_s: float = 30.0  # lacuna maxima de cotacoes tolerada na entrada e na saida por tempo
+
+    @classmethod
+    def do_perfil(cls, perfil: PerfilInstrumento, **kw: Any) -> ConfigBarreiras:
+        """Barreiras no tamanho padrao do ativo (em TICKS do perfil, convertidos em pontos)."""
+        kw.setdefault("alvo_pontos", perfil.alvo_padrao_pontos)
+        kw.setdefault("stop_pontos", perfil.stop_padrao_pontos)
+        kw.setdefault("ponto_valor_brl", perfil.ponto_valor_brl)
+        return cls(**kw)
 
 
 @dataclass(frozen=True)
 class Custos:
-    tarifas_corretagem_brl: float = 0.50  # ida e volta, por contrato
-    slippage_stop_pontos: float = 5.0  # saida a mercado no stop paga 1 tick adicional
+    tarifas_corretagem_brl: float  # ida e volta, por contrato
+    slippage_stop_pontos: float  # saida a mercado no stop paga 1 tick adicional
+
+    @classmethod
+    def do_perfil(cls, perfil: PerfilInstrumento, d: dt.date | None = None) -> Custos:
+        """Tarifas B3 do perfil (2 lados, vigentes em `d`; padrao: a mais recente) + 1 tick de slippage no stop."""
+        t = perfil.tarifa_em(d) if d else max(perfil.tarifas, key=lambda x: x.vigente_desde)
+        return cls(tarifas_corretagem_brl=2 * t.tarifa_lado_brl, slippage_stop_pontos=perfil.tick_pontos)
 
 
 @dataclass(frozen=True)

@@ -1,10 +1,11 @@
-"""Validacao das especificacoes do contrato WIN (tick 5 pts, R$ 0,20/ponto, lote 1)."""
+"""Validacao das especificacoes do simbolo da corretora CONTRA O PERFIL do ativo (tick, valor do ponto, lote)."""
 from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
 from typing import Any
 
+from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.tipos import Instrumento
 
 from . import constantes as C
@@ -12,17 +13,18 @@ from . import constantes as C
 
 @dataclass(frozen=True)
 class EspecEsperada:
-    tick_pontos: float = 5.0
-    ponto_valor_brl: float = 0.20
-    lote: int = 1
+    tick_pontos: float
+    ponto_valor_brl: float
+    lote: int
     tolerancia: float = 1e-9
 
-
-ESPEC_WIN = EspecEsperada()
+    @classmethod
+    def do_perfil(cls, perfil: PerfilInstrumento) -> EspecEsperada:
+        return cls(tick_pontos=perfil.tick_pontos, ponto_valor_brl=perfil.ponto_valor_brl, lote=perfil.lote)
 
 
 def valor_ponto_brl(info: Any) -> float | None:
-    """R$ por ponto = trade_tick_value / trade_tick_size."""
+    """R$ por ponto por unidade de volume = trade_tick_value / trade_tick_size."""
     size = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
     valor = float(getattr(info, "trade_tick_value", 0.0) or 0.0)
     if size <= 0 or valor <= 0:
@@ -31,7 +33,7 @@ def valor_ponto_brl(info: Any) -> float | None:
 
 
 def validar_especificacoes(
-    info: Any, esperado: EspecEsperada = ESPEC_WIN, vencimento: dt.date | None = None
+    info: Any, esperado: EspecEsperada, vencimento: dt.date | None = None
 ) -> list[str]:
     """Lista de divergencias (vazia = especificacoes validas). Qualquer divergencia => recusa."""
     erros: list[str] = []
@@ -44,8 +46,8 @@ def validar_especificacoes(
     vp = valor_ponto_brl(info)
     if vp is None:
         erros.append("trade_tick_value/trade_tick_size indisponiveis")
-    elif abs(vp - esperado.ponto_valor_brl) > 1e-6:
-        erros.append(f"valor do ponto R$ {vp:.4f} diverge do esperado R$ {esperado.ponto_valor_brl:.2f}")
+    elif abs(vp * esperado.lote - esperado.ponto_valor_brl) > 1e-6:  # valor do ponto POR LOTE (lote 100 em acoes)
+        erros.append(f"valor do ponto R$ {vp * esperado.lote:.4f} por lote diverge do esperado R$ {esperado.ponto_valor_brl:.4f}")
     vmin = float(getattr(info, "volume_min", 0.0) or 0.0)
     vstep = float(getattr(info, "volume_step", 0.0) or 0.0)
     if abs(vmin - esperado.lote) > tol:
@@ -60,11 +62,11 @@ def validar_especificacoes(
     return erros
 
 
-def instrumento_de(simbolo: str, info: Any, vencimento: dt.date | None) -> Instrumento:
+def instrumento_de(simbolo: str, info: Any, vencimento: dt.date | None, ativo: str = "") -> Instrumento:
     """Monta o `Instrumento` a partir de um symbol_info JA validado."""
     return Instrumento(
-        simbolo=simbolo,
-        ponto_valor_brl=float(valor_ponto_brl(info) or 0.0),
+        simbolo=simbolo, ativo=ativo,
+        ponto_valor_brl=float(valor_ponto_brl(info) or 0.0) * int(info.volume_min),
         tick_pontos=float(info.trade_tick_size),
         lote=int(info.volume_min),
         vencimento=vencimento.isoformat() if vencimento else None,

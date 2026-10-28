@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.tipos import Acao, PropostaIA
 from robowin.ia.dossie import montar_dossie
 from robowin.ia.prompts import carregar_prompt, mensagem_proponente
@@ -62,45 +63,48 @@ class ResultadoRegressao:
         return not self.violacoes
 
 
-def _ticks_sinteticos(drift_pts_por_s: float, ruido: float, n: int = 1000, base: float = 130000.0) -> list[tuple[int, float]]:
-    """Serie deterministica (sem aleatoriedade) para a bateria fixa."""
+def _ticks_sinteticos(perfil: PerfilInstrumento, drift_ticks_por_s: float, ruido_ticks: float, n: int = 1000
+                      ) -> list[tuple[int, float]]:
+    """Serie deterministica (sem aleatoriedade) para a bateria fixa, na escala (tick e preco) do ativo."""
+    tk = perfil.tick_pontos
     out = []
     for i in range(n):
-        osc = ((i * 37) % 11 - 5) * ruido
-        out.append((i * 1_000_000_000, base + drift_pts_por_s * i + osc))
+        osc = ((i * 37) % 11 - 5) * ruido_ticks * tk
+        out.append((i * 1_000_000_000, perfil.preco_sintetico_ref + drift_ticks_por_s * tk * i + osc))
     return out
 
 
-def bateria_padrao() -> list[Caso]:
+def bateria_padrao(perfil: PerfilInstrumento) -> list[Caso]:
     t0 = 999 * 1_000_000_000
+    tk, base = perfil.tick_pontos, perfil.preco_sintetico_ref
     lim = {"contratos_restantes": 1, "perda_restante_dia_brl": 200.0}
     sem = frozenset({Acao.NAO_OPERAR, Acao.COMPRAR, Acao.VENDER})
     casos = [
-        Caso("lateral_calmo", montar_dossie(t0_ns=t0, ticks=_ticks_sinteticos(0.0, 1.0), spread_pontos=5.0,
+        Caso("lateral_calmo", montar_dossie(t0_ns=t0, ticks=_ticks_sinteticos(perfil, 0.0, 0.2), spread_pontos=tk, tick_pontos=tk,
                                             regime="lateral", limites=lim, minutos_desde_abertura=120,
                                             minutos_para_zeragem=300),
              frozenset({Acao.NAO_OPERAR})),
-        Caso("tendencia_alta_sem_posicao", montar_dossie(t0_ns=t0, ticks=_ticks_sinteticos(0.8, 1.0), spread_pontos=5.0,
+        Caso("tendencia_alta_sem_posicao", montar_dossie(t0_ns=t0, ticks=_ticks_sinteticos(perfil, 0.16, 0.2), spread_pontos=tk, tick_pontos=tk,
                                                          regime="tendencia", limites=lim, minutos_desde_abertura=90,
                                                          minutos_para_zeragem=330), sem),
-        Caso("dados_ausentes", montar_dossie(t0_ns=t0, ticks=[(t0 - 1_000_000_000, 130000.0), (t0, 130005.0)],
+        Caso("dados_ausentes", montar_dossie(t0_ns=t0, ticks=[(t0 - 1_000_000_000, base), (t0, base + tk)], tick_pontos=tk,
                                               regime="indefinido", limites=lim),
              frozenset({Acao.NAO_OPERAR})),
         Caso("posicao_comprada_perdendo", montar_dossie(
-            t0_ns=t0, ticks=_ticks_sinteticos(-0.6, 1.0), spread_pontos=5.0, regime="tendencia", limites=lim,
-            posicao={"lado": "compra", "quantidade": 1, "preco_medio": 130000.0, "aberta_ns": t0 - 300_000_000_000,
-                     "stop_pontos": 120.0, "alvo_pontos": 200.0}),
+            t0_ns=t0, ticks=_ticks_sinteticos(perfil, -0.12, 0.2), spread_pontos=tk, tick_pontos=tk, regime="tendencia", limites=lim,
+            posicao={"lado": "compra", "quantidade": 1, "preco_medio": base, "aberta_ns": t0 - 300_000_000_000,
+                     "stop_pontos": 24 * tk, "alvo_pontos": 40 * tk}),
              frozenset({Acao.ENCERRAR, Acao.MANTER})),
     ]
     return casos
 
 
 async def rodar_regressao(
-    provedor: Any, modelo_ref: str, *, casos: list[Caso] | None = None, k: int = 5, faixas: Faixas | None = None,
+    provedor: Any, modelo_ref: str, *, perfil: PerfilInstrumento, casos: list[Caso] | None = None, k: int = 5, faixas: Faixas | None = None,
     fixavel: bool = True, servido_anterior: str | None = None, prazo_s: float = 40.0, effort: str | None = None,
     max_tokens: int = 4096, sistema: str | None = None,
 ) -> ResultadoRegressao:
-    casos = casos if casos is not None else bateria_padrao()
+    casos = casos if casos is not None else bateria_padrao(perfil)
     faixas = faixas or Faixas()
     sistema = sistema if sistema is not None else carregar_prompt("proponente").texto
     _, modelo = modelo_ref.split(":", 1)
@@ -121,7 +125,7 @@ async def rodar_regressao(
             if not ch.valida or not isinstance(obj, PropostaIA):
                 continue
             rc.validas += 1
-            if validar_proposta(obj, caso.dossie, modo=caso.modo).ok:
+            if validar_proposta(obj, caso.dossie, modo=caso.modo, stop_max_pontos=perfil.stop_max_pontos).ok:
                 rc.regras_ok += 1
             rc.acoes[obj.acao.value] = rc.acoes.get(obj.acao.value, 0) + 1
             rc.aceitas += obj.acao in caso.acoes_aceitas

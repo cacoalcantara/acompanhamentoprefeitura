@@ -13,7 +13,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from robowin.core.tipos import Instrumento
+from robowin.core.config import ErroConfig
+from robowin.core.instrumentos import perfil_da_config
 
 from . import dados as D
 from .metricas import CONTROLE, N_MIN_AMOSTRA
@@ -57,7 +58,12 @@ def criar_app(
     dir_d = Path(dir_dados or os.environ.get("ROBOWIN_DADOS") or geral.get("dados", "dados_locais")).resolve()
     tok = token if token is not None else os.environ.get("ROBOWIN_TOKEN", "")
     b = D.Banco(banco)
-    instr = Instrumento(simbolo=geral.get("simbolo_base", "WIN"), **config.get("instrumento", {}))
+    # o painel apenas MOSTRA o instrumento: perfil a_confirmar e exibido (com o aviso), nunca bloqueia a leitura
+    try:
+        perfil = perfil_da_config(config, permitir_a_confirmar=True)
+        instr = perfil.instrumento()
+    except ErroConfig:  # sem [geral].simbolo_base valido: o painel segue de pe e diz que o ativo nao esta configurado
+        perfil, instr = None, None
 
     app = FastAPI(title="robowin — painel", docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=AQUI / "static"), name="static")
@@ -116,7 +122,7 @@ def criar_app(
         flag = arq.exists()
         confirmacao = D.confirmacao_emergencia(b, arq.stat().st_mtime_ns) if flag else None
         return tpl.TemplateResponse(request, "visao_geral.html", ctx(
-            request, "visao", v=v, instr=instr, flag=flag, confirmacao=confirmacao, msg=msg, conta=geral.get("conta", "não informada"),
+            request, "visao", v=v, instr=instr, perfil=perfil, flag=flag, confirmacao=confirmacao, msg=msg, conta=geral.get("conta", "não informada"),
             modo=geral.get("modo", "simulacao"), orcamento_mensal=config.get("ia", {}).get("orcamento_mensal_usd")))
 
     @app.get("/fragmentos/resumo", response_class=HTMLResponse)

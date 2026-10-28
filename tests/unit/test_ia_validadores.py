@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from perfis_teste import WIN
 from pydantic import ValidationError
 
 from robowin.core.tipos import Acao, Condicao, PlanoCondicional, PropostaIA, RevisaoIA
@@ -12,8 +13,16 @@ from robowin.ia.validadores import (
     validar_frescor,
     validar_plano,
     validar_plano_bruto,
-    validar_proposta,
 )
+from robowin.ia.validadores import (
+    validar_proposta as _validar_proposta,
+)
+
+
+def validar_proposta(*a, **k):
+    k.setdefault("stop_max_pontos", WIN.stop_max_pontos)
+    return _validar_proposta(*a, **k)
+
 
 S = 1_000_000_000
 T0 = 5_000 * S
@@ -21,7 +30,7 @@ T0 = 5_000 * S
 
 def _dossie(posicao=None):
     ticks = [(T0 - (999 - i) * S, 131_000.0 + i * 0.2) for i in range(1000)]
-    return montar_dossie(t0_ns=T0, ticks=ticks, spread_pontos=5.0, regime="tendencia", posicao=posicao,
+    return montar_dossie(t0_ns=T0, ticks=ticks, spread_pontos=5.0, tick_pontos=5.0, regime="tendencia", posicao=posicao,
                          limites={"contratos_restantes": 1})
 
 

@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 import pytest
+from perfis_teste import WIN
 from scipy import stats
 from statsmodels.stats.proportion import proportion_confint
 
@@ -49,10 +50,10 @@ def test_n_e_poder_da_expectativa():
 
 def test_acerto_de_equilibrio():
     # custos-base: tarifa 0,50 + slippage/spread 1,50 = R$ 2,00 por ida e volta
-    assert est.acerto_equilibrio(300, 100, 2.0) == pytest.approx(0.775)
-    assert 0.76 <= est.acerto_equilibrio(300, 100, 2.0 + 0.22) <= 0.80
+    assert est.acerto_equilibrio(300, 100, 2.0, WIN.ponto_valor_brl) == pytest.approx(0.775)
+    assert 0.76 <= est.acerto_equilibrio(300, 100, 2.0 + 0.22, WIN.ponto_valor_brl) <= 0.80
     # sem custos e a razao stop/(stop+alvo)
-    assert est.acerto_equilibrio(300, 100, 0.0) == pytest.approx(0.75)
+    assert est.acerto_equilibrio(300, 100, 0.0, WIN.ponto_valor_brl) == pytest.approx(0.75)
 
 
 def test_teste_unilateral_proporcao():

@@ -69,15 +69,15 @@ def extras_de_config(cfg: Mapping[str, Any]) -> list[ConfigBracoExtra]:
 class FabricaBracos:
     def __init__(self, provedores: Mapping[str, Any], *, catalogo: Catalogo | None = None,
                  papeis: Mapping[str, Papel] | None = None, diretorio_prompts: str | Path | None = None,
-                 stop_max_pontos: float = 250.0, prazos: Mapping[str, Prazos] | None = None,
-                 geometria: Geometria | None = None, cfg: Mapping[str, Any] | None = None) -> None:
+                 stop_max_pontos: float, prazos: Mapping[str, Prazos] | None = None,
+                 geometria: Geometria, cfg: Mapping[str, Any] | None = None) -> None:
         self.provedores = dict(provedores)
         self.catalogo = catalogo
         self.papeis = dict(papeis or {})
         self.diretorio_prompts = diretorio_prompts
         self.stop_max_pontos = stop_max_pontos
         self.prazos = dict(prazos) if prazos is not None else prazos_de_config(dict(cfg or {}))
-        self.geometria = geometria or Geometria(30.0, 30.0, 300)
+        self.geometria = geometria
         self._props: dict[tuple[str, str | None], ServicoProposta] = {}
         self._revs: dict[tuple[str, str | None], ServicoRevisao] = {}
 

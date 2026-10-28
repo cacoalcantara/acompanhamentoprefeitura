@@ -4,12 +4,14 @@ from __future__ import annotations
 import datetime as dt
 from types import SimpleNamespace
 
+from perfis_teste import WIN
+
 from robowin.core.relogio import RelogioSimulado
 from robowin.core.tipos import ComandoOrdem, Lado
 from robowin.mt5 import constantes as C
 from robowin.mt5.duble import (
     DubleMT5,
-    especificacao_win,
+    especificacao,
     gerar_livros_sinteticos,
     gerar_ticks_sinteticos,
 )
@@ -23,6 +25,10 @@ T0_MS = T0_NS // 1_000_000
 LOGIN, SERVIDOR = 900001, "XPMT5-DEMO"
 OFFSET_S = 10800
 SIMB = "WINZ26"
+
+
+def especificacao_win(nome, vencimento_ts=0):
+    return especificacao(WIN, nome, vencimento_ts)
 
 
 def ticks_planos(n: int = 400, preco: float = 100000.0, passo_ms: int = 100, spread: float = 5.0,

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pytest
+from perfis_teste import WIN
 
 from robowin.core.tipos import LivroSnapshot, NivelBook, Tick
 from robowin.features.contexto import Contexto
@@ -104,7 +105,7 @@ def test_vetor_antes_do_ultimo_evento_e_recusado():
 # ---- causalidade ---------------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def dados():
-    return gerar(n_ticks=12_000, seed=3, forca_sinal=0.1, n_dias=1)
+    return gerar(WIN, n_ticks=12_000, seed=3, forca_sinal=0.1, n_dias=1)
 
 
 def _corromper(ticks, livros, t_corte):
@@ -176,7 +177,7 @@ def test_replay_por_disponibilidade_ignora_tick_ainda_nao_recebido():
 
 
 def test_features_recuperam_o_fluxo_latente_do_gerador():
-    ticks, livros = gerar(n_ticks=20_000, seed=5, forca_sinal=0.1)
+    ticks, livros = gerar(WIN, n_ticks=20_000, seed=5, forca_sinal=0.1)
     inst = [ticks[0].t_utc_ns + k * 20 * NS for k in range(30, 240)]
     vs = calcular_offline(ticks, livros, inst)
     fl = np.array([v.valores["fluxo_imb_30s"] for v in vs])

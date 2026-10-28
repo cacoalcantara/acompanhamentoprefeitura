@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from perfis_teste import INS_WIN, WIN
 
 from robowin.core.tipos import Lado
 from robowin.dados.sintetico import ConfigSintetico, gerar
@@ -16,7 +17,7 @@ from robowin.mm.markouts import Preenchimento, markouts
 from robowin.mm.simulacao import simular_mm
 
 NS = 1_000_000_000
-P = ParamsAS()
+P = ParamsAS(tick=WIN.tick_pontos)
 
 
 def estado(mp=130002.5, q=0, sigma=3.0, bb=130000.0, ba=130005.0, **kw):
@@ -72,7 +73,7 @@ def _roteiro(cot, n=400, passo_s=0.5, tox=None):
 
 
 def test_cotador_respeita_tempo_minimo_de_2s_no_livro():
-    cot = CotadorMM(cfg=ConfigMM(mensagens_min_max=20, mensagens_sessao_max=10_000))
+    cot = CotadorMM(params=P, cfg=ConfigMM(mensagens_min_max=20, mensagens_sessao_max=10_000))
     _roteiro(cot)
     ult: dict[str, int] = {}
     for m in cot.historico:
@@ -86,19 +87,19 @@ def test_cotador_respeita_tempo_minimo_de_2s_no_livro():
 
 
 def test_cotador_respeita_orcamento_de_mensagens_por_minuto_e_por_sessao():
-    cot = CotadorMM(cfg=ConfigMM(mensagens_min_max=6, mensagens_sessao_max=10_000))
+    cot = CotadorMM(params=P, cfg=ConfigMM(mensagens_min_max=6, mensagens_sessao_max=10_000))
     _roteiro(cot, n=600)
     ts = np.array([m.t_ns for m in cot.historico])
     assert len(ts) > 6
     for t in ts:  # nenhuma janela de 60 s tem mais que 6 mensagens
         assert int(((ts >= t) & (ts < t + 60 * NS)).sum()) <= 6
-    cot2 = CotadorMM(cfg=ConfigMM(mensagens_min_max=20, mensagens_sessao_max=15))
+    cot2 = CotadorMM(params=P, cfg=ConfigMM(mensagens_min_max=20, mensagens_sessao_max=15))
     _roteiro(cot2, n=600)
     assert len(cot2.historico) <= 15
 
 
 def test_cotador_estoque_um_uma_ordem_por_lado_e_sem_cruzar():
-    cot = CotadorMM(cfg=ConfigMM(mensagens_min_max=30, mensagens_sessao_max=10_000))
+    cot = CotadorMM(params=P, cfg=ConfigMM(mensagens_min_max=30, mensagens_sessao_max=10_000))
     rng = np.random.default_rng(1)
     t0 = 1_700_000_000 * NS
     for i in range(300):
@@ -116,7 +117,7 @@ def test_cotador_estoque_um_uma_ordem_por_lado_e_sem_cruzar():
 
 
 def test_cotador_cancela_por_toxicidade_so_apos_tempo_minimo():
-    cot = CotadorMM(cfg=ConfigMM(mensagens_min_max=30))
+    cot = CotadorMM(params=P, cfg=ConfigMM(mensagens_min_max=30))
     t0 = 1_700_000_000 * NS
     r = cot.cotar(t0, estado())
     assert r["bid"] is not None and r["ask"] is not None
@@ -130,7 +131,7 @@ def test_cotador_cancela_por_toxicidade_so_apos_tempo_minimo():
 
 
 def test_cotador_execucao_remove_ordem_do_lado():
-    cot = CotadorMM()
+    cot = CotadorMM(params=P)
     t0 = 1_700_000_000 * NS
     cot.cotar(t0, estado())
     cot.registrar_execucao("bid", t0 + NS)
@@ -145,9 +146,9 @@ def test_flag_demo_mm_desligada_por_padrao_e_nao_implementada():
 
 
 def test_simulacao_mm_respeita_estoque_unitario_e_orcamento():
-    d = gerar(ConfigSintetico(seed=5, n_ticks=12_000))
-    cot = CotadorMM(cfg=ConfigMM(mensagens_min_max=10, mensagens_sessao_max=250))
-    r = simular_mm(d.ticks, d.livros, cot, seed=1)
+    d = gerar(ConfigSintetico.do_perfil(WIN, seed=5, n_ticks=12_000))
+    cot = CotadorMM(params=P, cfg=ConfigMM(mensagens_min_max=10, mensagens_sessao_max=250))
+    r = simular_mm(d.ticks, d.livros, cot, instrumento=INS_WIN, seed=1)
     assert r.max_abs_estoque <= 1
     assert len(cot.historico) <= 250
     assert len(r.fills) > 0
@@ -155,7 +156,7 @@ def test_simulacao_mm_respeita_estoque_unitario_e_orcamento():
     for t in ts[:: max(1, len(ts) // 50)]:
         assert int(((ts >= t) & (ts < t + 60 * NS)).sum()) <= 10
     assert not [al for al in cot.monitor.alertas if al.tipo == "tempo_minimo_no_livro"]
-    r2 = simular_mm(d.ticks, d.livros, CotadorMM(cfg=ConfigMM(mensagens_min_max=10, mensagens_sessao_max=250)), seed=1)
+    r2 = simular_mm(d.ticks, d.livros, CotadorMM(params=P, cfg=ConfigMM(mensagens_min_max=10, mensagens_sessao_max=250)), instrumento=INS_WIN, seed=1)
     assert [(f.t_ns, f.preco) for f in r.fills] == [(f.t_ns, f.preco) for f in r2.fills]  # determinismo
 
 

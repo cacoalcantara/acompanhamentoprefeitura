@@ -113,7 +113,7 @@ def test_validado_oos_exige_origem_real_e_lucratividade():
         s.treinar({"WIN": y[:1000], "REF": x[:1000]})
         s.validar_oos(oos, **kw)
         assert s.status == "em_validacao"
-        assert s.sinal(0, {"WIN": float(y[2000]) + 50, "REF": float(x[2000])})["direcional_win"] == 0.0
+        assert s.sinal(0, {"WIN": float(y[2000]) + 50, "REF": float(x[2000])})["direcional_alvo"] == 0.0
 
 
 def test_sinal_nao_treinado_nao_e_direcional():
@@ -123,7 +123,7 @@ def test_sinal_nao_treinado_nao_e_direcional():
     assert p.nome == "statarb_padrao"
     outs = [s.sinal(i, {"WIN": float(y[i]), "REF": float(x[i])}) for i in range(600)]
     assert s.status == "nao_treinado"
-    assert all(o["direcional_win"] == 0.0 and o["validado"] == 0.0 for o in outs)
+    assert all(o["direcional_alvo"] == 0.0 and o["validado"] == 0.0 for o in outs)
 
 
 def test_sinal_validado_e_direcao():
@@ -133,7 +133,7 @@ def test_sinal_validado_e_direcao():
     # WIN muito acima do justo -> venda (direcional negativo)
     s.sinal(0, {"WIN": float(y[2000]), "REF": float(x[2000])})
     alto = s.sinal(1, {"WIN": float(y[2000]) + 15.0, "REF": float(x[2000])})
-    assert alto["z"] > 2 and alto["direcional_win"] < 0
+    assert alto["z"] > 2 and alto["direcional_alvo"] < 0
 
 
 def test_sinal_reprovado_em_passeios():
@@ -142,7 +142,7 @@ def test_sinal_reprovado_em_passeios():
     s.treinar({"WIN": a[:1000], "REF": b[:1000]})
     s.validar_oos({"WIN": a[1000:2000], "REF": b[1000:2000]})
     assert s.status in ("reprovado",)
-    assert s.sinal(0, {"WIN": float(a[0]), "REF": float(b[0])})["direcional_win"] == 0.0
+    assert s.sinal(0, {"WIN": float(a[0]), "REF": float(b[0])})["direcional_alvo"] == 0.0
 
 
 def test_causalidade_futuro_nao_muda_sinal():

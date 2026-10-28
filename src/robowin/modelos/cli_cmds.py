@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import numpy as np
 
+from robowin.core.config import ErroConfig
+from robowin.core.instrumentos import argumentos_ativo, perfil_do_cli
+
 from .demo_sintetico import ROTULO, gerar, montar_amostras
 from .microestrutura import CriterioOOS, ModeloMicroestrutura, metricas_oos
 from .registro import RegistroModelos
+from .rotulagem import ConfigBarreiras, Custos
 from .walkforward import executar_walkforward
 
 NS = 1_000_000_000
@@ -17,9 +21,14 @@ def _treinar(a) -> int:
         print("somente --dados sinteticos esta disponivel nesta versao (dados reais exigem coleta propria)")
         return 2
     print(AVISO)
-    ticks, livros = gerar(n_ticks=a.ticks, seed=a.seed, forca_sinal=0.0 if a.sem_sinal else a.forca_sinal,
+    try:
+        perfil = perfil_do_cli(a)
+    except ErroConfig as e:
+        print(f"ERRO: {e}")
+        return 2
+    ticks, livros = gerar(perfil, n_ticks=a.ticks, seed=a.seed, forca_sinal=0.0 if a.sem_sinal else a.forca_sinal,
                           n_dias=a.dias)
-    am = montar_amostras(ticks, livros)
+    am = montar_amostras(ticks, livros, ConfigBarreiras.do_perfil(perfil), Custos.do_perfil(perfil))
     criterio = CriterioOOS()
     embargo = 60 * NS
     print(f"amostras: {len(am)}; criterio pre-registrado (hash): {criterio.hash()[:12]}")
@@ -63,4 +72,5 @@ def registrar(sub):
     p.add_argument("--forca-sinal", type=float, default=0.1)
     p.add_argument("--sem-sinal", action="store_true", help="gera ruido puro (sem edge)")
     p.add_argument("--registro", default="dados_locais/modelos/registro.json")
+    argumentos_ativo(p)
     p.set_defaults(func=_treinar)

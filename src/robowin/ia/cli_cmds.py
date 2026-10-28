@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 
+from robowin.core.instrumentos import argumentos_ativo, perfil_do_cli
 from robowin.core.tipos import ClassificacaoNoticia
 from robowin.ia.catalogo import Catalogo, ErroCatalogo, dividir_modelo
 from robowin.ia.provedores import criar_provedor
@@ -82,7 +83,7 @@ def _cmd_testar(a: Any) -> int:
     prov_nome, modelo = dividir_modelo(a.modelo)
     entrada = cat.obter(a.modelo)  # recusa modelo fora do catalogo / sem preco / sem corte
     prov, real = provedor_para_cli(prov_nome, cat)
-    res = asyncio.run(rodar_regressao(prov, a.modelo, k=a.k, fixavel=entrada.fixavel, effort=a.effort,
+    res = asyncio.run(rodar_regressao(prov, a.modelo, perfil=perfil_do_cli(a), k=a.k, fixavel=entrada.fixavel, effort=a.effort,
                                       prazo_s=a.prazo, faixas=Faixas()))
     print(json.dumps({
         "modelo": res.modelo, "provedor_real": real, "rotulo": "" if real else "FALSO", "k": res.k,
@@ -119,6 +120,7 @@ def registrar(sub: Any) -> None:
     t.add_argument("--effort", default=None)
     t.add_argument("--prazo", type=float, default=40.0)
     t.add_argument("--catalogo", default=None)
+    argumentos_ativo(t)
     t.set_defaults(func=_cmd_testar)
     p.set_defaults(func=lambda a: (p.print_help(), 2)[1])
 

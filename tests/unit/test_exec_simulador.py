@@ -2,10 +2,11 @@ import datetime as dt
 
 import numpy as np
 import pytest
+from perfis_teste import WIN
 
 from robowin.core.calendario_b3 import dt_utc_ns
 from robowin.core.relogio import RelogioSimulado
-from robowin.core.tipos import ComandoOrdem, Instrumento, Lado, LivroSnapshot, NivelBook, Tick
+from robowin.core.tipos import ComandoOrdem, Lado, LivroSnapshot, NivelBook, Tick
 from robowin.execucao.custos import Custos, TarifaB3, tarifa_em
 from robowin.execucao.preenchimento import FilaLimitada, ParamsSlippage, slippage_pontos
 from robowin.execucao.simulador import SimuladorExecucao
@@ -23,7 +24,7 @@ def tick(dt_ms, bid, ask, last=None, vol=1.0):
 
 def sim(latencia_ms=0, seed=1, custos=None, **kw):
     rel = RelogioSimulado(T0)
-    s = SimuladorExecucao(Instrumento(simbolo="WINZ26"), rel, custos=custos, latencia_ns=latencia_ms * MS,
+    s = SimuladorExecucao(WIN.instrumento("WINZ26"), rel, custos=custos, latencia_ns=latencia_ms * MS,
                           seed=seed, **kw)
     s.registrar_braco("b1", MAGIC)
     return s, rel
@@ -249,12 +250,13 @@ def test_custos_estresse_com_corretagem_e_taxa_de_zeragem():
 
 def test_tabela_de_tarifas_versionada_por_vigencia():
     import datetime
-    assert tarifa_em(datetime.date(2026, 3, 1)).vigente_desde == "2025-01-01"
-    assert tarifa_em(datetime.date(2026, 11, 3)).vigente_desde == "2026-11-03"
+    TAB = WIN.tarifas
+    assert tarifa_em(datetime.date(2026, 3, 1), TAB).vigente_desde == "2025-01-01"
+    assert tarifa_em(datetime.date(2026, 11, 3), TAB).vigente_desde == "2026-11-03"
     with pytest.raises(ValueError):
-        tarifa_em(datetime.date(2020, 1, 1))
-    assert Custos().ida_e_volta(datetime.date(2026, 11, 10), 1) == pytest.approx(0.5)
-    assert Custos.estresse().ida_e_volta(datetime.date(2026, 11, 10), 1) == pytest.approx(0.72)
+        tarifa_em(datetime.date(2020, 1, 1), TAB)
+    assert Custos.do_perfil(WIN).ida_e_volta(datetime.date(2026, 11, 10), 1) == pytest.approx(0.5)
+    assert Custos.do_perfil(WIN).estresse().ida_e_volta(datetime.date(2026, 11, 10), 1) == pytest.approx(0.72)
 
 
 def test_carteira_por_braco_independente():

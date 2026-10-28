@@ -13,12 +13,14 @@
 <dt>Último dado recebido</dt><dd>{{ v.ultimo_dado or "nenhum dado recebido" }}</dd>
 <dt>Orçamento mensal de IA</dt><dd>{% if orcamento_mensal %}US$ {{ orcamento_mensal|num(2) }}{% else %}não informado{% endif %}</dd></dl></section>
 <section class="cartao"><h2>Contrato vigente e especificações</h2>
-<dl><dt>Símbolo</dt><dd>{{ instr.simbolo }}</dd>
+{% if perfil %}<dl><dt>Ativo</dt><dd>{{ perfil.simbolo_base }} ({{ perfil.classe }})</dd>
+<dt>Símbolo</dt><dd>{{ instr.simbolo }}</dd>
 <dt>Vencimento</dt><dd>{{ instr.vencimento or "não informado" }}</dd>
-<dt>Tamanho do tick</dt><dd>{{ instr.tick_pontos|num(0) }} pontos</dd>
+<dt>Tamanho do tick</dt><dd>{{ instr.tick_pontos|num(2) }} pontos</dd>
 <dt>Valor do ponto</dt><dd>{{ instr.ponto_valor_brl|brl }}</dd>
 <dt>Valor do tick</dt><dd>{{ instr.tick_valor_brl|brl }}</dd>
-<dt>Lote</dt><dd>{{ instr.lote }}</dd></dl></section>
+<dt>Lote</dt><dd>{{ instr.lote }}</dd></dl>
+{% if perfil.a_confirmar %}<p class="aviso"><strong>Perfil a confirmar:</strong> operar este ativo está BLOQUEADO até confirmar em config/instrumentos.toml ({{ perfil.a_confirmar_itens|join("; ") }}). Só simulação sintética.</p>{% endif %}{% else %}<p>Ativo não configurado: defina [geral].simbolo_base em config/robowin.toml.</p>{% endif %}</section>
 </div>
 {% include "_resumo.html" %}
 <section class="cartao emergencia"><h2>Emergência — kill switch</h2>

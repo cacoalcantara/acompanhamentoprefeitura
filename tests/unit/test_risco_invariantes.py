@@ -3,10 +3,11 @@ import datetime as dt
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from perfis_teste import WIN
 
 from robowin.core.calendario_b3 import dt_utc_ns
 from robowin.core.ids import novo_id
-from robowin.core.tipos import Acao, ConfigRisco, Instrumento, Intencao, Lado, Posicao
+from robowin.core.tipos import Acao, ConfigRisco, Intencao, Lado, Posicao
 from robowin.risco.invariantes import (
     inv_entrada_permitida,
     inv_exposicao,
@@ -36,7 +37,7 @@ eventos = st.one_of(
 def test_exposicao_maxima_em_todas_as_intercalacoes(evs):
     """|posicao + pendentes| <= 1 apos QUALQUER sequencia de eventos; nenhuma entrada fora da janela/com kill."""
     ks = KillSwitch()
-    m = MotorRiscoPadrao(CFG, Instrumento(simbolo="WINZ26"), kill_switch=ks)
+    m = MotorRiscoPadrao(CFG, WIN.instrumento("WINZ26"), kill_switch=ks)
     t = BASE
     pos_qtd, pos_lado = 0, None
     pend: dict[str, Lado] = {}
@@ -79,7 +80,7 @@ def test_exposicao_maxima_em_todas_as_intercalacoes(evs):
 @given(st.lists(st.tuples(st.integers(1, 3), st.floats(-100, 100)), min_size=1, max_size=30))
 def test_sem_martingale_no_motor(ops):
     """Apos uma perda, nenhuma entrada aprovada pode ser maior que a anterior (usa limite alto de contratos)."""
-    m = MotorRiscoPadrao(CFG_LIVRE, Instrumento(simbolo="WINZ26"))
+    m = MotorRiscoPadrao(CFG_LIVRE, WIN.instrumento("WINZ26"))
     m.cfg = m.cfg.model_copy(update={"contratos_max": 3})  # simula politica futura com mais contratos
     t = BASE + int(3600e9)
     aprovados, perdas = [], []
@@ -97,7 +98,7 @@ def test_sem_martingale_no_motor(ops):
 
 @given(st.lists(st.integers(-100, 100), min_size=1, max_size=40), st.sampled_from(list(Lado)))
 def test_stop_so_aperta_monotono(propostas, lado):
-    m = MotorRiscoPadrao(CFG, Instrumento(simbolo="WINZ26"))
+    m = MotorRiscoPadrao(CFG, WIN.instrumento("WINZ26"))
     stop = 100.0
     historico = [stop]
     for delta in propostas:
@@ -117,7 +118,7 @@ def test_janela_e_kill_switch(seg, kill, acao):
     ks = KillSwitch()
     if kill:
         ks.acionar("x", "manual_cli", 0)
-    m = MotorRiscoPadrao(CFG, Instrumento(simbolo="WINZ26"), kill_switch=ks)
+    m = MotorRiscoPadrao(CFG, WIN.instrumento("WINZ26"), kill_switch=ks)
     t = BASE - int(8 * 3600e9) + int(seg * 1e9)  # dia 10/11 (SP) segundo `seg`
     it = Intencao(id=novo_id("i"), braco="b", acao=acao, stop_pontos=100.0, validade_ns=t + int(1e9),
                   preco_referencia=130000.0)

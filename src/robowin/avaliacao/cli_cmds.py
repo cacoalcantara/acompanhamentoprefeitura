@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from robowin.core.config import ErroConfig, carregar_toml
+from robowin.core.instrumentos import perfil_da_config
 from robowin.core.tipos import Lado, Trade
 
 from . import relatorio
@@ -52,6 +54,25 @@ def _origem_manifestos(banco: str | Path) -> set[str]:
     return out
 
 
+def ativo_do_banco(banco: str | Path) -> str | None:
+    """`ativo` gravado nos manifestos de experimento (None se ausente ou ambiguo)."""
+    con = sqlite3.connect(f"file:{banco}?mode=ro", uri=True)
+    ativos: set[str] = set()
+    try:
+        for (m,) in con.execute("SELECT manifesto_json FROM experimentos"):
+            try:
+                v = json.loads(m or "")
+            except ValueError:
+                continue
+            if isinstance(v, dict) and v.get("ativo"):
+                ativos.add(str(v["ativo"]).upper())
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return next(iter(ativos)) if len(ativos) == 1 else None
+
+
 def banco_sintetico(banco: str | Path) -> bool:
     """Sintetico se o manifesto declarar origem sintetica/mencionar 'sinteti' OU houver incidente
     de origem `dados_sinteticos` (a marca que o orquestrador/painel gravam)."""
@@ -81,7 +102,14 @@ def _avaliar(a) -> int:
     else:
         sint = None
     cont: bool | None = True if a.contaminado else (False if a.nao_contaminado else None)
-    rel = relatorio.gerar_relatorio(trades, controle=a.controle, sintetico=sint, contaminado=cont,
+    cfg_geral = carregar_toml(a.config) if Path(a.config).is_file() else {}
+    ativo = a.ativo or ativo_do_banco(a.banco)  # --ativo > ativo gravado no manifesto do experimento > config
+    try:
+        perfil = perfil_da_config(cfg_geral, ativo, permitir_a_confirmar=True)
+    except ErroConfig as e:
+        print(f"ERRO: {e}")
+        return 2
+    rel = relatorio.gerar_relatorio(trades, perfil=perfil, controle=a.controle, sintetico=sint, contaminado=cont,
                                     n_alvo=a.n_alvo, tentativas=a.tentativas, var_sr_tentativas=a.var_sr_tentativas,
                                     n_boot=a.n_boot, seed=a.seed)
     saida = Path(a.saida)
@@ -115,4 +143,6 @@ def registrar(sub):
                    help="afirma que o periodo e posterior ao corte de conhecimento dos LLMs")
     p.add_argument("--n-boot", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--ativo", default=None, help="simbolo_base do perfil (padrao: o ativo do manifesto do banco)")
+    p.add_argument("--config", default="config/robowin.toml")
     p.set_defaults(func=_avaliar)

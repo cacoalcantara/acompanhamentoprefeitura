@@ -5,17 +5,18 @@ import datetime as dt
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from perfis_teste import WIN
+
 from robowin.core.calendario_b3 import dt_utc_ns
 from robowin.core.relogio import RelogioSimulado
 from robowin.core.tipos import (
     Acao,
     ConfigRisco,
-    Instrumento,
     PlanoCondicional,
     Tick,
 )
 from robowin.dados.banco import BancoSQLite
-from robowin.decisao.bracos.base import BracoBase, ContextoDecisao, ResultadoDecisao
+from robowin.decisao.bracos.base import BracoBase, ContextoDecisao, Geometria, ResultadoDecisao
 from robowin.decisao.gatilhos import ConfigGatilhos
 from robowin.decisao.orquestrador import ConfigOrquestrador, Orquestrador
 from robowin.decisao.registro import Registro
@@ -24,7 +25,7 @@ from robowin.ia.dossie import hash_dossie, montar_dossie
 T0 = dt_utc_ns(dt.datetime(2026, 11, 10, 10, 0))  # terca, dentro da janela de entradas
 MS = 1_000_000
 NS = 1_000_000_000
-INS = Instrumento(simbolo="WINZ26")
+INS = WIN.instrumento("WINZ26")
 
 
 def tk(dt_ms: int, bid: float, ask: float | None = None, last: float | None = None, vol: float = 1.0) -> Tick:
@@ -43,7 +44,7 @@ def dossie_basico(posicao: dict[str, Any] | None = None, t0: int = T0, extra_mod
     """Dossie anonimizado real (montar_dossie) com ~15 min de precos sinteticos."""
     ticks = [(t0 - (900 - i) * NS, 130_000.0 + (i % 40) * 5.0 - (i // 100) * 5.0) for i in range(901)]
     return montar_dossie(
-        t0_ns=t0, ticks=ticks, spread_pontos=5.0, features={"ret_5s": 1.0}, features_permitidas={"ret_5s"},
+        t0_ns=t0, ticks=ticks, spread_pontos=5.0, tick_pontos=INS.tick_pontos, features={"ret_5s": 1.0}, features_permitidas={"ret_5s"},
         modelos=extra_modelos or {}, statarb=statarb, regime="normal", posicao=posicao, limites={"contratos_max": 1},
         minutos_desde_abertura=60, minutos_para_zeragem=400)
 
@@ -53,7 +54,8 @@ def ctx_basico(dossie: dict[str, Any] | None = None, posicao: Any = None, t0: in
     from robowin.core.tipos import Posicao
     d = dossie if dossie is not None else dossie_basico()
     return ContextoDecisao(t0_ns=t0, dossie=d, hash_dossie=hash_dossie(d), preco_ref=preco, bid=preco - 2.5,
-                           ask=preco + 2.5, posicao=posicao or Posicao(simbolo="WINZ26"), ciclo_id=ciclo)
+                           ask=preco + 2.5, posicao=posicao or Posicao(simbolo="WINZ26"), ciclo_id=ciclo,
+                           tick_pontos=INS.tick_pontos)
 
 
 def plano_rel(toca: float = -10.0, expira_s: int = 120, invalida_acima: float | None = 50.0) -> PlanoCondicional:
@@ -74,7 +76,7 @@ class BracoRoteirizado(BracoBase):
     familia = "teste"
 
     def __init__(self, id: str, passos: list[Passo], modo: str = "imediato", ia: bool = False) -> None:
-        super().__init__(id, modo)  # type: ignore[arg-type]
+        super().__init__(id, modo, Geometria(30.0, 30.0, 60))  # type: ignore[arg-type]
         self.passos = passos
         self.i = 0
         self.ia = ia

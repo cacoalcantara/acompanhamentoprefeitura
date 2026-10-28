@@ -13,7 +13,7 @@ from typing import Any
 from robowin.core.tipos import Acao, Condicao, PlanoCondicional
 
 from ..plano_condicional import converter_plano
-from .base import NS, BracoBase, ContextoDecisao, Geometria, Modo, ResultadoDecisao
+from .base import DESVIO_MAX_TICKS, NS, BracoBase, ContextoDecisao, Geometria, Modo, ResultadoDecisao
 
 STATUS_LIMPO = "validado_oos"
 STATUS_EXPLORATORIO = "em_validacao"
@@ -25,14 +25,14 @@ class BracoQuant(BracoBase):
 
     def __init__(self, id: str = "quant", modo: Modo = "imediato", *, modelo: str, theta_brl: float = 0.0,
                  p_stop_max: float = 0.5, geometria: Geometria | None = None, permitir_exploratorio: bool = True,
-                 usar_statarb: bool = True, pullback_pontos: float = 10.0, expira_plano_s: float = 180.0,
-                 validade_s: float = 60.0, desvio_max_pts: float = 20.0) -> None:
+                 usar_statarb: bool = True, pullback_ticks: float = 2.0, expira_plano_s: float = 180.0,
+                 validade_s: float = 60.0, desvio_max_ticks: float = DESVIO_MAX_TICKS) -> None:
         super().__init__(id, modo, geometria)
         self.nome_modelo = modelo
         self.theta_brl, self.p_stop_max = theta_brl, p_stop_max
         self.permitir_exploratorio, self.usar_statarb = permitir_exploratorio, usar_statarb
-        self.pullback_pontos, self.expira_plano_s = pullback_pontos, expira_plano_s
-        self.validade_s, self.desvio_max_pts = validade_s, desvio_max_pts
+        self.pullback_ticks, self.expira_plano_s = pullback_ticks, expira_plano_s
+        self.validade_s, self.desvio_max_ticks = validade_s, desvio_max_ticks
 
     def manifesto(self) -> dict[str, Any]:
         m = super().manifesto()
@@ -41,7 +41,7 @@ class BracoQuant(BracoBase):
         return m
 
     def _plano(self, ctx: ContextoDecisao, compra: bool) -> PlanoCondicional:
-        pb = self.pullback_pontos
+        pb = self.pullback_ticks * ctx.tick_pontos
         spread = Condicao(tipo="spread_max_pontos", valor=2 * ctx.tick_pontos)
         if compra:  # espera um recuo para comprar mais barato; abandona se o preco fugir para cima
             gat = (Condicao(tipo="preco_toca", valor=-pb), spread)
@@ -58,7 +58,7 @@ class BracoQuant(BracoBase):
         saida: dict[str, Any] = info.get("saida") or {}
         base: dict[str, Any] = {"origem": "quant", "modelo": self.nome_modelo, "status_modelo": status,
                                 "theta_brl": self.theta_brl, "p_stop_max": self.p_stop_max}
-        kw: dict[str, Any] = {"validade_s": self.validade_s, "desvio_max_pts": self.desvio_max_pts}
+        kw: dict[str, Any] = {"validade_s": self.validade_s, "desvio_max_pts": self.desvio_max_ticks * ctx.tick_pontos}
         if (ctx.posicao.quantidade or 0) > 0:
             return self._resultado(ctx, Acao.NAO_OPERAR, "nao_operar", motivos=("posicao_aberta",),
                                    proposta=base, **kw)
@@ -82,7 +82,7 @@ class BracoQuant(BracoBase):
             return self._resultado(ctx, Acao.NAO_OPERAR, "nao_operar", motivos=("sem_edge",), proposta=base,
                                    rotulos=rotulos, **kw)
         e, compra, ps = max(cands, key=lambda c: c[0])
-        d = float((ctx.dossie.get("statarb") or {}).get("direcional_win", 0.0) or 0.0)
+        d = float((ctx.dossie.get("statarb") or {}).get("direcional_alvo", 0.0) or 0.0)
         base.update(lado="compra" if compra else "venda", e_brl=e, p_stop=ps, statarb_direcional=d)
         if self.usar_statarb and d != 0.0 and (d > 0) != compra:
             return self._resultado(ctx, Acao.NAO_OPERAR, "nao_operar", motivos=("statarb_contradiz",),

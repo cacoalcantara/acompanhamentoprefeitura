@@ -171,7 +171,7 @@ def acerto_controle_teorico(stop_pontos: float, alvo_pontos: float) -> float:
 
 
 def gerar_controle_aleatorio(n: int, stop_pontos: float, alvo_pontos: float, custos_brl: float,
-                             ponto_valor_brl: float = 0.20, seed: int = 0) -> np.ndarray:
+                             ponto_valor_brl: float, seed: int = 0) -> np.ndarray:
     """Resultados liquidos de n entradas aleatorias com a mesma geometria (stop/alvo) e os mesmos custos."""
     rng = np.random.default_rng(seed)
     ganho = rng.random(n) < acerto_controle_teorico(stop_pontos, alvo_pontos)

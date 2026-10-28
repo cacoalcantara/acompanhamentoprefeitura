@@ -2,20 +2,20 @@ import datetime as dt
 import json
 
 import pytest
+from perfis_teste import WIN
 
 from robowin.auditoria.cadeia import RegistradorAuditoria, verificar_arquivo
 from robowin.core import calendario_b3 as cal
 from robowin.core.barramento import BarramentoLocal
 from robowin.core.config import ErroConfig, carregar_risco, sha256_arquivo
 from robowin.core.relogio import RelogioSimulado
-from robowin.core.tipos import Instrumento
 
 
 def test_contrato_vigente_e_vencimento():
-    assert cal.vencimento_win(2026, 12) == dt.date(2026, 12, 16)
-    assert cal.contrato_vigente(dt.date(2026, 10, 27)) == "WINZ26"
-    assert cal.contrato_vigente(dt.date(2026, 12, 17)) == "WING27"
-    assert cal.vencimento_win(2027, 2) == dt.date(2027, 2, 17)
+    assert cal.vencimento_contrato(WIN, 2026, 12) == dt.date(2026, 12, 16)
+    assert cal.contrato_vigente(WIN, dt.date(2026, 10, 27)) == "WINZ26"
+    assert cal.contrato_vigente(WIN, dt.date(2026, 12, 17)) == "WING27"
+    assert cal.vencimento_contrato(WIN, 2027, 2) == dt.date(2027, 2, 17)
 
 
 def test_feriados_e_grade():
@@ -26,7 +26,7 @@ def test_feriados_e_grade():
 
 
 def test_instrumento_tick():
-    assert Instrumento(simbolo="WINZ26").tick_valor_brl == pytest.approx(1.0)
+    assert WIN.instrumento("WINZ26").tick_valor_brl == pytest.approx(1.0)
 
 
 def test_relogio_nao_volta():

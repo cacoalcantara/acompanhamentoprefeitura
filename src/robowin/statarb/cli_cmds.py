@@ -27,12 +27,12 @@ def demo(args: argparse.Namespace) -> int:
     tx, xx, ty, yy = ticks_assincronos(2000.0, lag=3.0, seed=args.seed)
     ll = lead_lag(tx, np.asarray(xx), ty, np.asarray(yy), np.arange(-8.0, 8.5, 0.5))
     print(f"[SINTETICO] Hayashi-Yoshida: lag estimado={ll.lag_otimo:+.1f} (real +3.0) corr={ll.correlacao:.2f}")
-    s = SinalStatArbPadrao(alvo="WIN", referencias=("REF",))
+    s = SinalStatArbPadrao(alvo="ALVO", referencias=("REF",))
     h = args.n // 2
-    s.treinar({"WIN": y[:h], "REF": x[:h]})
-    s.validar_oos({"WIN": y[h:], "REF": x[h:]})
-    out = [s.sinal(i, {"WIN": float(y[i]), "REF": float(x[i])}) for i in range(h, args.n)]
-    ativos = sum(1 for o in out if o["direcional_win"] != 0.0)
+    s.treinar({"ALVO": y[:h], "REF": x[:h]})
+    s.validar_oos({"ALVO": y[h:], "REF": x[h:]})
+    out = [s.sinal(i, {"ALVO": float(y[i]), "REF": float(x[i])}) for i in range(h, args.n)]
+    ativos = sum(1 for o in out if o["direcional_alvo"] != 0.0)
     print(f"[SINTETICO] sinal: status={s.status} instantes com direcional != 0: {ativos}/{len(out)}")
     return 0
 

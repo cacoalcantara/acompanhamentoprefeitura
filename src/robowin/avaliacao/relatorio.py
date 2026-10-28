@@ -8,40 +8,60 @@ from typing import Any
 
 import numpy as np
 
-from robowin.core.tipos import Trade
+from robowin.core.instrumentos import PerfilInstrumento
+from robowin.core.tipos import ConfigRisco, Trade
 
 from . import comparacao as comp
 from . import estatistica as est
 from . import impostos, metricas
 from .metricas import dia_pregao
 
-CUSTOS_BASE_BRL = 0.8  # custo ida e volta por contrato (tarifas+corretagem+slippage), cenario-base
-CUSTOS_ESTRESSE_BRL = 2.4  # idem, cenario de estresse
+SLIPPAGE_BASE_TICKS = 1.0      # cenario-base: 1 tick de slippage por operacao
+SLIPPAGE_ESTRESSE_TICKS = 2.0  # cenario de estresse: 2 ticks
+CORRETAGEM_ESTRESSE_BRL = 0.22  # corretagem ida e volta do estresse (igual a execucao.custos)
 
 
-def stop_efetivo_padrao_pontos(ponto_valor_brl: float = 0.20) -> float:
-    """Stop efetivo pela politica de risco padrao: min(stop_max, perda_max_op/pv - folga) = min(300, 60/0.2 - 50)."""
-    from robowin.core.tipos import ConfigRisco
-    from robowin.risco.politica import stop_maximo_efetivo_pontos
-    return stop_maximo_efetivo_pontos(ConfigRisco(), ponto_valor_brl)
+def custos_do_perfil(perfil: PerfilInstrumento) -> tuple[float, float]:
+    """(base, estresse): custo ida e volta por contrato = tarifas B3 do perfil + corretagem + slippage em ticks."""
+    t = max(perfil.tarifas, key=lambda x: x.vigente_desde)
+    tarifas = 2 * t.tarifa_lado_brl
+    return (tarifas + SLIPPAGE_BASE_TICKS * perfil.tick_valor_brl,
+            tarifas + CORRETAGEM_ESTRESSE_BRL + SLIPPAGE_ESTRESSE_TICKS * perfil.tick_valor_brl)
 
 
-def texto_aviso_acerto(stop_pontos: float | None = None, alvo_pontos: float = 100.0, ponto_valor_brl: float = 0.20,
-                       custos_brl: tuple[float, float] = (CUSTOS_BASE_BRL, CUSTOS_ESTRESSE_BRL)) -> str:
-    """Aviso sobre acerto, com o acerto de equilibrio calculado dos parametros EFETIVOS (nada fixo no texto)."""
-    stop = stop_efetivo_padrao_pontos(ponto_valor_brl) if stop_pontos is None else stop_pontos
-    lo = est.acerto_equilibrio(stop, alvo_pontos, custos_brl[0], ponto_valor_brl)
-    hi = est.acerto_equilibrio(stop, alvo_pontos, custos_brl[1], ponto_valor_brl)
+def stop_efetivo_padrao_pontos(perfil: PerfilInstrumento, cfg: ConfigRisco | None = None) -> float:
+    """Stop efetivo pela politica de risco: min(stop_max, perda_max_op/pv - folga), na unidade do ativo."""
+    from robowin.risco.politica import limites_conservadores, stop_maximo_efetivo_pontos
+    cfg = cfg or limites_conservadores(perfil, ConfigRisco())
+    return stop_maximo_efetivo_pontos(cfg, perfil.ponto_valor_brl)
+
+
+def texto_aviso_acerto(perfil: PerfilInstrumento | None = None, stop_pontos: float | None = None,
+                       alvo_pontos: float | None = None, risco: ConfigRisco | None = None,
+                       custos_brl: tuple[float, float] | None = None) -> str:
+    """Aviso sobre acerto, com o acerto de equilibrio calculado dos parametros EFETIVOS do ativo (nada fixo no texto).
+
+    Sem `perfil` o aviso e generico (sem numeros): o equilibrio depende de stop, alvo, custos e valor do ponto."""
+    geral = ("Taxa de acerto alta NAO implica expectativa positiva: uma geometria assimetrica faz entradas aleatorias "
+             "acertarem muito antes dos custos. A metrica primaria e a expectativa liquida com IC; o acerto deve ser "
+             "lido sempre ao lado do controle aleatorio.")
+    if perfil is None:
+        return geral
+    stop = stop_efetivo_padrao_pontos(perfil, risco) if stop_pontos is None else stop_pontos
+    alvo = perfil.alvo_padrao_pontos if alvo_pontos is None else alvo_pontos
+    c = custos_brl or custos_do_perfil(perfil)
+    pv = perfil.ponto_valor_brl
+    lo = est.acerto_equilibrio(stop, alvo, c[0], pv)
+    hi = est.acerto_equilibrio(stop, alvo, c[1], pv)
     return (
-        f"Taxa de acerto alta NAO implica expectativa positiva. Com stop de {stop:.0f} pontos e alvo de "
-        f"{alvo_pontos:.0f} pontos, o acerto de equilibrio e de {100 * lo:.0f}% a {100 * hi:.0f}% "
-        f"(custos de R$ {custos_brl[0]:.2f} a R$ {custos_brl[1]:.2f} por operacao) e uma geometria assimetrica "
+        f"Taxa de acerto alta NAO implica expectativa positiva. Ativo {perfil.simbolo_base}: com stop de {stop:g} pontos e "
+        f"alvo de {alvo:g} pontos, o acerto de equilibrio e de {100 * lo:.0f}% a {100 * hi:.0f}% "
+        f"(custos de R$ {c[0]:.2f} a R$ {c[1]:.2f} por operacao) e uma geometria assimetrica "
         "faz entradas aleatorias acertarem muito antes dos custos. A metrica primaria e a expectativa liquida "
         "com IC; o acerto deve ser lido sempre ao lado do controle aleatorio."
     )
 
 
-AVISO_ACERTO = texto_aviso_acerto()
 AVISO_SIMULACAO = "SIMULACAO - sem ordens reais. Resultados simulados nao garantem resultado real."
 FL_MINIMO = 1.2
 DSR_MINIMO = 0.95
@@ -118,7 +138,8 @@ def _relatorio_braco(nome: str, trades: Sequence[Trade], *, n_alvo: int | None, 
 def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativas: int,
                     controle: str | None = None, sintetico: bool | None = None, contaminado: bool | None = None,
                     n_alvo: int | None = None, var_sr_tentativas: float | None = None,
-                    stop_pontos: float | None = None, alvo_pontos: float = 100.0,
+                    stop_pontos: float | None = None, alvo_pontos: float | None = None,
+                    perfil: PerfilInstrumento | None = None, risco: ConfigRisco | None = None,
                     cfg_impostos: impostos.ConfigImpostos | None = None,
                     n_boot: int = 2000, seed: int = 0, titulo: str = "Relatorio de avaliacao",
                     ids_vetados: Mapping[str, set[str]] | None = None,
@@ -147,7 +168,8 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
     dias = sorted({dia_pregao(t) for t in todos})
     return {
         "titulo": titulo, "aviso_simulacao": AVISO_SIMULACAO,
-        "aviso_acerto": texto_aviso_acerto(stop_pontos, alvo_pontos),
+        "aviso_acerto": texto_aviso_acerto(perfil, stop_pontos, alvo_pontos, risco),
+        "ativo": perfil.simbolo_base if perfil is not None else None,
         "periodo": {"inicio": dias[0] if dias else None, "fim": dias[-1] if dias else None, "pregoes": len(dias)},
         "dados": {"sintetico": sintetico, "contaminado": contaminado}, "controle": controle,
         "tentativas": tentativas, "var_sr_tentativas": var_sr_tentativas, "bracos": bracos, "comparacoes_com_controle": comparacoes,
@@ -185,6 +207,8 @@ def renderizar_markdown(rel: Mapping[str, Any]) -> str:
     if rel["dados"]["contaminado"]:
         L += ["> **DADOS CONTAMINADOS** - periodo anterior ao corte de conhecimento dos LLMs.", ""]
     p = rel["periodo"]
+    if rel.get("ativo"):
+        L += [f"Ativo: **{rel['ativo']}**", ""]
     L += [f"Periodo: {p['inicio'] or 'n/d'} a {p['fim'] or 'n/d'} ({p['pregoes']} pregoes). "
           f"Tentativas contadas no DSR: {rel['tentativas']}.", "", f"**Aviso:** {rel['aviso_acerto']}", ""]
     ctrl = rel.get("controle")

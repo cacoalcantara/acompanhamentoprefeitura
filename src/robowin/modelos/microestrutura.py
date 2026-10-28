@@ -237,6 +237,7 @@ class ModeloMicroestrutura:
         self.colunas: list[str] = []
         self.treinado_ate_ns = 0
         self.origem_dados = ""
+        self.ativo = ""  # simbolo_base do perfil em que foi treinado (preenchido por quem treina)
         self.hash_dados = ""
         self.hash_criterio_pre_registrado = ""
         self.metricas_oos: dict[str, float] = {}

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from perfis_teste import WIN
 from test_mt5_comum import SIMB, cmd, montar_exec, ticks_planos
 from test_mt5_gateway import montar_gw, ordem, passos
 from test_mt5_guardiao import montar
@@ -70,7 +71,7 @@ def test_intencao_vai_a_disco_antes_do_envio_e_sobrevive_a_reinicio(tmp_path):
 def test_gateway_sem_diretorio_alerta_que_auditoria_e_so_memoria(tmp_path):
     from test_mt5_comum import LOGIN, SERVIDOR, montar_duble
     d, rel = montar_duble(ticks_planos(100))
-    gw = Gateway(d, ConfigGateway(login=LOGIN, servidor=SERVIDOR), rel)
+    gw = Gateway(d, ConfigGateway(perfil=WIN, login=LOGIN, servidor=SERVIDOR), rel)
     gw.iniciar()
     assert any(t == "auditoria_so_memoria" for t, _ in gw.incidentes)
 

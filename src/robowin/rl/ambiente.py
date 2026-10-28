@@ -24,7 +24,7 @@ Determinismo: tudo vem de `numpy.random.default_rng(seed)`; mesma seed + mesmos 
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -53,7 +53,7 @@ class ConfigAmbiente:
     horizonte_s: float = 30.0         # prazo maximo da ordem-mae; depois disso, agride
     latencia_ms: float = 50.0
     fator_fila: float = 1.0
-    custos: Custos = field(default_factory=Custos)
+    custos: Custos | None = None   # None => tarifas do perfil do ativo
 
     def __post_init__(self) -> None:
         if self.apregoar_s < LimitesAntimanipulacao().tempo_min_livro_s:
@@ -73,7 +73,9 @@ class AmbienteExecucao:
         if len(ticks) < 10:
             raise ValueError("ticks insuficientes")
         self.cfg = config or ConfigAmbiente()
-        self.ins = instrumento or Instrumento(simbolo="SINT_WIN")
+        if instrumento is None:
+            raise ValueError("ambiente de execucao exige o Instrumento do ativo (perfil)")
+        self.ins = instrumento
         self.ticks = list(ticks)
         self.livros = list(livros)
         self._t = np.array([t.t_utc_ns for t in self.ticks], dtype=np.int64)
@@ -112,7 +114,7 @@ class AmbienteExecucao:
         self._protecao = bool(options.get("saida_protecao", False))
         self._rel = RelogioSimulado(int(self._t[i0]))
         self._sim = SimuladorExecucao(
-            self.ins, self._rel, custos=self.cfg.custos, latencia_ns=int(self.cfg.latencia_ms * 1e6),
+            self.ins, self._rel, custos=self.cfg.custos or Custos.do_instrumento(self.ins), latencia_ns=int(self.cfg.latencia_ms * 1e6),
             seed=int(self._rng.integers(0, 2**31 - 1)), fator_fila=self.cfg.fator_fila)
         self._sim.registrar_braco(BRACO, MAGIC)
         self._i = 0

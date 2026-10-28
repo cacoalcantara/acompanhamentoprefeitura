@@ -1,6 +1,7 @@
 import datetime as dt
 
 import numpy as np
+from perfis_teste import WIN
 
 from robowin.cli import main
 from robowin.core.tipos import LivroSnapshot, NivelBook, Tick
@@ -99,9 +100,9 @@ def test_relatorio_sintetico_propaga():
 
 # ---------------- sintetico ----------------
 def test_determinismo_e_rotulo():
-    a = gerar(ConfigSintetico(seed=7, n_ticks=3000))
-    b = gerar(ConfigSintetico(seed=7, n_ticks=3000))
-    c = gerar(ConfigSintetico(seed=8, n_ticks=3000))
+    a = gerar(ConfigSintetico.do_perfil(WIN, seed=7, n_ticks=3000))
+    b = gerar(ConfigSintetico.do_perfil(WIN, seed=7, n_ticks=3000))
+    c = gerar(ConfigSintetico.do_perfil(WIN, seed=8, n_ticks=3000))
     assert a.hash() == b.hash() != c.hash()
     assert a.sintetico is True and a.rotulo == ROTULO_SINTETICO
     rel = a.relatorio()
@@ -109,7 +110,7 @@ def test_determinismo_e_rotulo():
 
 
 def test_propriedades_do_sintetico():
-    d = gerar(ConfigSintetico(seed=1, n_ticks=20000))
+    d = gerar(ConfigSintetico.do_perfil(WIN, seed=1, n_ticks=20000))
     assert len(d.ticks) == 20000 and d.livros
     assert all(t.bid % 5 == 0 and t.ask > t.bid and t.flags & (32 | 64) for t in d.ticks)
     ms = [t.t_servidor_ms for t in d.ticks]
@@ -119,7 +120,7 @@ def test_propriedades_do_sintetico():
 
 def test_sinal_injetado_detectavel():
     def corr(forca):
-        d = gerar(ConfigSintetico(seed=3, n_ticks=20000, sinal_forca=forca, livro_a_cada_ticks=0))
+        d = gerar(ConfigSintetico.do_perfil(WIN, seed=3, n_ticks=20000, sinal_forca=forca, livro_a_cada_ticks=0))
         s = np.array([1.0 if t.flags & 32 else -1.0 for t in d.ticks])
         return float(np.corrcoef(s[:-1], s[1:])[0, 1])
     assert abs(corr(0.0)) < 0.03
@@ -127,7 +128,7 @@ def test_sinal_injetado_detectavel():
 
 
 def test_gaps_saltos_lacunas():
-    d = gerar(ConfigSintetico(seed=2, n_ticks=8000, n_saltos=2, salto_pts=1500, n_lacunas=2, lacuna_s=400,
+    d = gerar(ConfigSintetico.do_perfil(WIN, seed=2, n_ticks=8000, n_saltos=2, salto_pts=1500, n_lacunas=2, lacuna_s=400,
                               gap_abertura_pts=2000, livro_a_cada_ticks=0))
     assert len(d.ticks) < 8000
     assert d.ticks[0].bid > 131000
@@ -136,7 +137,7 @@ def test_gaps_saltos_lacunas():
 
 
 def test_gerar_dias_pula_fim_de_semana():
-    ds = gerar_dias(ConfigSintetico(data=dt.date(2026, 3, 13), n_ticks=200), 3)  # sexta
+    ds = gerar_dias(ConfigSintetico.do_perfil(WIN, data=dt.date(2026, 3, 13), n_ticks=200), 3)  # sexta
     datas = [x.config.data for x in ds]
     assert datas == [dt.date(2026, 3, 13), dt.date(2026, 3, 16), dt.date(2026, 3, 17)]
 
@@ -144,7 +145,7 @@ def test_gerar_dias_pula_fim_de_semana():
 # ---------------- CLI ----------------
 def test_cli_resumo_verificar(tmp_path, capsys):
     arm = ArmazenamentoTicks(tmp_path)
-    gerar(ConfigSintetico(seed=5, n_ticks=2000)).gravar(arm)
+    gerar(ConfigSintetico.do_perfil(WIN, seed=5, n_ticks=2000)).gravar(arm)
     assert main(["dados", "resumo", "--dir", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert "SINTETICO" in out and "SINT_WIN" in out and "ticks=2000" in out

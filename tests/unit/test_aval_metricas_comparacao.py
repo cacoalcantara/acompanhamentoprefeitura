@@ -3,6 +3,7 @@ import math
 
 import numpy as np
 import pytest
+from perfis_teste import WIN
 from scipy import stats
 
 from robowin.avaliacao import comparacao as comp
@@ -127,7 +128,7 @@ def test_beneficio_liquido_do_llm():
 
 def test_controle_aleatorio_e_teste_contra_controle():
     assert comp.acerto_controle_teorico(300, 100) == pytest.approx(0.75)
-    x = comp.gerar_controle_aleatorio(20000, 300, 100, custos_brl=2.0, seed=3)
+    x = comp.gerar_controle_aleatorio(20000, 300, 100, custos_brl=2.0, ponto_valor_brl=WIN.ponto_valor_brl, seed=3)
     assert (x > 0).mean() == pytest.approx(0.75, abs=0.01)
     assert set(np.round(np.unique(x), 6)) == {18.0, -62.0}
     # 80% em 300 contra controle de 75%: diferenca significativa

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from perfis_teste import WIN
 from test_decisao_comum import NS, T0, BracoRoteirizado, alimentar, montar_orq, serie
 
 from robowin.avaliacao.estatistica import n_expectativa
@@ -62,7 +63,7 @@ def test_gasto_de_ia_e_gravado_a_cada_chamada_por_dia():
 def test_risco_nao_aprovado_simulacao_registra_incidente_critico_e_rotula(tmp_path):
     p = ParamsSimulacao(n_ticks=1500, saida=tmp_path / "s", risco=tmp_path / "inexistente.toml",
                         aprovacao=tmp_path / "nao-existe.toml")
-    risco, erro = carregar_risco_simulacao(p)
+    risco, erro = carregar_risco_simulacao(p, WIN)
     assert erro and risco.contratos_max == 1
     s = montar_sessao(p)
     try:
@@ -77,16 +78,15 @@ def test_risco_nao_aprovado_simulacao_registra_incidente_critico_e_rotula(tmp_pa
 def test_risco_nao_aprovado_ao_vivo_propaga_erro(tmp_path):
     p = ParamsSimulacao(saida=tmp_path / "n", risco=tmp_path / "inexistente.toml", aprovacao=tmp_path / "x.toml")
     with pytest.raises(ErroConfig):
-        carregar_risco_simulacao(p, ao_vivo=True)
+        carregar_risco_simulacao(p, WIN, ao_vivo=True)
     from robowin.core.relogio import RelogioReal
-    from robowin.core.tipos import Instrumento
     from robowin.decisao.simulacao import abrir_banco
     from robowin.modelos.microestrutura import ModeloMicroestrutura
     rel = RelogioReal()
     banco, registro, _, _ = abrir_banco(p.saida, rel, "n1")
     try:
         with pytest.raises(ErroConfig):
-            construir_orquestrador(p, rel=rel, registro=registro, ins=Instrumento(simbolo="WINZ26"),
+            construir_orquestrador(p, rel=rel, registro=registro, ins=WIN.instrumento("WINZ26"),
                                    modelo=ModeloMicroestrutura("logistica"), statarb=None, precos_aux=None,
                                    sintetico=False, modo_tempo="real", sessao_id="n1", t_ref_ns=rel.agora_ns())
     finally:

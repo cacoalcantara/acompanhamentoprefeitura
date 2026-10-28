@@ -26,38 +26,40 @@ from .motor import ResultadoBacktest
 from .replay import disponivel_tick
 
 FLAG_BUY, FLAG_SELL = 32, 64
-TICK_PTS = 5.0
+ESCALA_TICKS = 300.0  # desvio-padrao da perturbacao, em ticks do ativo
 
 
 # ============================================================================================ perturbacao
 def perturbar_futuro(ticks: Sequence[Tick], livros: Sequence[LivroSnapshot], t_corte_ns: int, semente: int = 0,
-                     escala_pts: float = 1500.0) -> tuple[list[Tick], list[LivroSnapshot]]:
+                     escala_pts: float | None = None, *, tick_pontos: float) -> tuple[list[Tick], list[LivroSnapshot]]:
     """Altera TUDO que so fica disponivel apos `t_corte_ns` (tick: max(t_utc, t_recebido); livro: t_utc).
 
     Mantem os carimbos de tempo (a ordem de replay nao muda); altera precos, volumes, flags e niveis do livro.
     Um backfill com t_utc <= t_corte mas recebido depois e perturbado tambem (ele e futuro para o sistema).
     """
     rng = np.random.default_rng(semente)
+    tk = tick_pontos
+    escala_pts = ESCALA_TICKS * tk if escala_pts is None else escala_pts
     out_t: list[Tick] = []
     for t in ticks:
         if disponivel_tick(t) <= t_corte_ns:
             out_t.append(t)
             continue
-        d = float(np.round(rng.normal(0.0, escala_pts) / TICK_PTS) * TICK_PTS)
+        d = float(np.round(rng.normal(0.0, escala_pts) / tk) * tk)
         flags = t.flags
         if rng.random() < 0.5:  # troca o lado do agressor
             flags = (flags & ~(FLAG_BUY | FLAG_SELL)) | (FLAG_SELL if flags & FLAG_BUY else FLAG_BUY)
         out_t.append(t.model_copy(update={
-            "bid": max(t.bid + d, TICK_PTS), "ask": max(t.ask + d, 2 * TICK_PTS), "last": max(t.last + d, TICK_PTS),
+            "bid": max(t.bid + d, tk), "ask": max(t.ask + d, 2 * tk), "last": max(t.last + d, tk),
             "volume": float(max(1.0, round(t.volume * float(rng.uniform(0.2, 5.0))))), "flags": flags}))
     out_l: list[LivroSnapshot] = []
     for lv in livros:
         if lv.t_utc_ns <= t_corte_ns:
             out_l.append(lv)
             continue
-        d = float(np.round(rng.normal(0.0, escala_pts) / TICK_PTS) * TICK_PTS)
+        d = float(np.round(rng.normal(0.0, escala_pts) / tk) * tk)
         out_l.append(LivroSnapshot(t_utc_ns=lv.t_utc_ns, niveis=tuple(
-            NivelBook(preco=max(n.preco + d, TICK_PTS), volume=float(rng.integers(1, 400)), lado=n.lado)
+            NivelBook(preco=max(n.preco + d, tk), volume=float(rng.integers(1, 400)), lado=n.lado)
             for n in lv.niveis)))
     return out_t, out_l
 
@@ -97,11 +99,11 @@ class RelatorioVazamento:
 def verificar_perturbacao_futura(
     executar: Callable[[Sequence[Tick], Sequence[LivroSnapshot]], ResultadoBacktest],
     ticks: Sequence[Tick], livros: Sequence[LivroSnapshot], t_corte_ns: int, *, semente: int = 0,
-    escala_pts: float = 1500.0, exigir_efetiva: bool = True,
+    escala_pts: float | None = None, exigir_efetiva: bool = True, tick_pontos: float,
 ) -> RelatorioVazamento:
     """`executar(ticks, livros)` deve montar um backtest NOVO (bracos novos) e executa-lo."""
     base = executar(ticks, livros)
-    t_p, l_p = perturbar_futuro(ticks, livros, t_corte_ns, semente, escala_pts)
+    t_p, l_p = perturbar_futuro(ticks, livros, t_corte_ns, semente, escala_pts, tick_pontos=tick_pontos)
     pert = executar(t_p, l_p)
     a, b = assinatura_decisoes(base, t_corte_ns), assinatura_decisoes(pert, t_corte_ns)
     div: list[str] = []
@@ -183,11 +185,11 @@ def zscore_global(x: Sequence[float]) -> list[float]:
 
 
 def features_causais(ticks: Sequence[Tick], livros: Sequence[LivroSnapshot], instantes: Sequence[int],
-                     t_corte_ns: int, semente: int = 0) -> list[str]:
+                     t_corte_ns: int, semente: int = 0, *, tick_pontos: float) -> list[str]:
     """PipelineFeatures: vetores em instantes <= t_corte nao podem mudar se o futuro for perturbado."""
     from robowin.features.pipeline import calcular_offline
     ate = [t for t in instantes if t <= t_corte_ns]
-    t_p, l_p = perturbar_futuro(ticks, livros, t_corte_ns, semente)
+    t_p, l_p = perturbar_futuro(ticks, livros, t_corte_ns, semente, tick_pontos=tick_pontos)
     kw = {"usar_recebido": True}
     v0 = calcular_offline(ticks, livros, ate, **kw)
     v1 = calcular_offline(t_p, l_p, ate, **kw)

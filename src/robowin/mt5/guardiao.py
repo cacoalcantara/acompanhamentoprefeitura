@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from robowin.core import calendario_b3
+from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.relogio import Relogio
 from robowin.core.tipos import ComandoOrdem, ConfigRisco
 
@@ -46,7 +47,8 @@ class ConfigGuardiao:
     magics_permitidos: frozenset[int] = field(default_factory=frozenset)
     exigir_dia_util: bool = True
     exigir_sl: bool = True  # entrada sem stop e recusada
-    stop_max_pontos: float = 300.0  # distancia maxima preco->SL (pontos do WIN = unidades de preco)
+    stop_max_pontos: float = 300.0  # distancia maxima preco->SL (pontos de cotacao = unidades de preco)
+    perfil: PerfilInstrumento | None = None  # quando informado: simbolo e stop sao validados contra o perfil
 
     @classmethod
     def de_risco(cls, r: ConfigRisco, **kw: Any) -> ConfigGuardiao:
@@ -80,6 +82,24 @@ class Guardiao:
         self.alertas: list[tuple[str, dict[str, Any]]] = []
         self.classificacao: dict[str, int] = {"esperado": 0, "robo": 0, "manual": 0, "outro": 0}
         self.pnl_dia_brl = 0.0
+        if cfg.perfil is not None:
+            self._validar_perfil(cfg.perfil)
+
+    def _validar_perfil(self, perfil: PerfilInstrumento) -> None:
+        """Recusa (GuardaDemoViolada) se o perfil e a_confirmar ou se o simbolo do executor nao e do ativo do perfil."""
+        from .contrato import listar_contratos
+        try:
+            perfil.exigir_confirmado()
+        except Exception as e:  # PerfilNaoConfirmado
+            raise GuardaDemoViolada(f"perfil {perfil.simbolo_base} bloqueado: {e}") from e
+        if not listar_contratos([self.ex.cfg.simbolo], perfil):
+            raise GuardaDemoViolada(f"simbolo da corretora {self.ex.cfg.simbolo} nao e do ativo {perfil.simbolo_base}")
+
+    @property
+    def stop_max_efetivo_pontos(self) -> float:
+        """Teto da distancia do stop: o MENOR entre a politica de risco e o perfil do ativo (em ticks)."""
+        p = self.cfg.perfil
+        return self.cfg.stop_max_pontos if p is None else min(self.cfg.stop_max_pontos, p.stop_max_pontos)
 
     # --- tempo ---------------------------------------------------------------------------------
     def _agora_sp(self) -> dt.datetime:
@@ -180,8 +200,9 @@ class Guardiao:
             ref = float(tk.ask if compra else tk.bid)
         if (compra and cmd.sl >= ref) or (not compra and cmd.sl <= ref):
             return False, f"sl {cmd.sl} do lado errado do preco {ref}"
-        if abs(ref - cmd.sl) > self.cfg.stop_max_pontos + 1e-9:
-            return False, f"distancia do stop {abs(ref - cmd.sl):.0f} acima do maximo {self.cfg.stop_max_pontos:.0f}"
+        teto = self.stop_max_efetivo_pontos
+        if abs(ref - cmd.sl) > teto + 1e-9:
+            return False, f"distancia do stop {abs(ref - cmd.sl):g} acima do maximo {teto:g}"
         return True, ""
 
     def rearmar(self, motivo: str) -> None:

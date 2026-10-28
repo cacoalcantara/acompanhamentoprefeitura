@@ -6,6 +6,7 @@ import datetime as dt
 
 import numpy as np
 import pytest
+from perfis_teste import INS_WIN, WIN
 
 from robowin.backtest import (
     BracoSonda,
@@ -14,14 +15,20 @@ from robowin.backtest import (
     FonteMemoria,
     MotorBacktest,
     dossie_sem_datas,
-    perturbar_futuro,
     verificar_causal,
-    verificar_perturbacao_futura,
+)
+from robowin.backtest import (
+    perturbar_futuro as _perturbar_futuro,
+)
+from robowin.backtest import (
+    verificar_perturbacao_futura as _verificar_perturbacao_futura,
 )
 from robowin.backtest.anonimizacao import verificar_anonimizacao_rapida
 from robowin.backtest.replay import disponivel_tick
 from robowin.backtest.vazamento import (
-    features_causais,
+    features_causais as _features_causais,
+)
+from robowin.backtest.vazamento import (
     pipeline_incremental,
     zscore_expansivo,
     zscore_global,
@@ -32,9 +39,21 @@ from robowin.dados.sintetico import ConfigSintetico, gerar
 from robowin.ia.dossie import montar_dossie, verificar_anonimizacao
 
 S = 1_000_000_000
-DADOS = gerar(ConfigSintetico(seed=11, n_ticks=3000, livro_a_cada_ticks=10))
+DADOS = gerar(ConfigSintetico.do_perfil(WIN, seed=11, n_ticks=3000, livro_a_cada_ticks=10))
 T_CORTE = dt_utc_ns(dt.datetime(2026, 3, 10, 13, 30))
-CFG = ConfigBacktest(seed=3, intervalo_decisao_s=30.0)
+
+def _com_tick(fn):
+    def f(*a, **k):
+        k.setdefault("tick_pontos", WIN.tick_pontos)
+        return fn(*a, **k)
+    return f
+
+
+perturbar_futuro = _com_tick(_perturbar_futuro)
+verificar_perturbacao_futura = _com_tick(_verificar_perturbacao_futura)
+features_causais = _com_tick(_features_causais)
+
+CFG = ConfigBacktest(instrumento=INS_WIN, seed=3, intervalo_decisao_s=30.0)
 
 
 def executar(ticks, livros, bracos=None):
@@ -194,5 +213,5 @@ def test_verificador_rapido_equivale_ao_original(seed):
 
 def test_dossie_real_passa_nos_dois_verificadores():
     ticks = [(i * S, 130000.0 + 5 * (i % 9)) for i in range(1, 1200)]
-    d = montar_dossie(t0_ns=1199 * S, ticks=ticks, spread_pontos=5.0)
+    d = montar_dossie(t0_ns=1199 * S, ticks=ticks, spread_pontos=5.0, tick_pontos=5.0)
     assert verificar_anonimizacao_rapida(d, [p for _, p in ticks]) == verificar_anonimizacao(d, [p for _, p in ticks]) == []

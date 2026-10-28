@@ -117,7 +117,7 @@ class SimuladorExecucao:
     ) -> None:
         self.ins = instrumento
         self.relogio = relogio
-        self.custos = custos or Custos()
+        self.custos = custos or Custos.do_instrumento(instrumento)
         self._lat = latencia_ns
         self.rng = np.random.default_rng(seed)
         self.slip = slippage or ParamsSlippage()

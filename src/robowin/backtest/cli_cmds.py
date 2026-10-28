@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from robowin.avaliacao import relatorio
-from robowin.core.tipos import Instrumento
+from robowin.core.instrumentos import argumentos_ativo, perfil_do_cli
 from robowin.dados.banco import BancoSQLite
 from robowin.dados.sintetico import ROTULO_SINTETICO, ConfigSintetico, gerar_dias
 from robowin.dados.ticks import ArmazenamentoTicks
+from robowin.risco.politica import ROTULO_RISCO_NAO_APROVADO, risco_do_ativo
 
 from .bracos_referencia import ControleAleatorio, NaoOperar
 from .latencia_injetada import DistribuicaoLatencia
@@ -32,11 +33,11 @@ def _limpar_banco(caminho: Path) -> None:
 
 
 def _escrever_relatorio(res: ResultadoBacktest, saida: Path, sufixo: str, *, contaminado: bool, n_boot: int,
-                        seed: int) -> dict[str, Any]:
+                        seed: int, perfil: Any, risco: Any) -> dict[str, Any]:
     rel = relatorio.gerar_relatorio(
         res.trades_por_braco(), controle=CONTROLE if CONTROLE in res.bracos else None, sintetico=res.sintetico,
         contaminado=contaminado, tentativas=max(1, len(res.bracos)), n_boot=n_boot, seed=seed,
-        titulo=f"Backtest de infraestrutura ({res.cenario})")
+        titulo=f"Backtest de infraestrutura ({res.cenario})", perfil=perfil, risco=risco)
     md = relatorio.renderizar_markdown(rel)
     if res.sintetico:
         md = f"> **{ROTULO_SINTETICO}**\n\n" + md
@@ -49,11 +50,15 @@ def _escrever_relatorio(res: ResultadoBacktest, saida: Path, sufixo: str, *, con
 
 
 def _backtest(a: argparse.Namespace) -> int:
+    perfil = perfil_do_cli(a)
+    risco, erro_risco = risco_do_ativo(perfil, a.risco, a.aprovacao)
+    if erro_risco:
+        print(f"AVISO: {ROTULO_RISCO_NAO_APROVADO}: {erro_risco}")
     saida = Path(a.saida)
     saida.mkdir(parents=True, exist_ok=True)
     if a.dados == "sinteticos":
         arm = ArmazenamentoTicks(saida / "ticks")
-        cfg_s = ConfigSintetico(seed=a.seed, n_ticks=a.n_ticks, sinal_forca=a.sinal_forca)
+        cfg_s = ConfigSintetico.do_perfil(perfil, seed=a.seed, n_ticks=a.n_ticks, sinal_forca=a.sinal_forca)
         for d in gerar_dias(cfg_s, a.dias):
             d.gravar(arm)
         simbolo = cfg_s.simbolo
@@ -67,7 +72,7 @@ def _backtest(a: argparse.Namespace) -> int:
             print(f"*** {ROTULO_SINTETICO} ***")
     fonte = FonteArmazem(arm, simbolo)
     cfg = ConfigBacktest(
-        instrumento=Instrumento(simbolo=simbolo), seed=a.seed, intervalo_decisao_s=a.intervalo_s,
+        instrumento=perfil.instrumento(simbolo), cfg_risco=risco, seed=a.seed, intervalo_decisao_s=a.intervalo_s,
         latencia=DistribuicaoLatencia.fixa(a.latencia_ms), id_experimento=f"backtest-{a.seed}")
     cenarios = [("", cfg)] + ([("_estresse", cfg.estresse())] if a.estresse else [])
     for sufixo, c in cenarios:
@@ -76,7 +81,8 @@ def _backtest(a: argparse.Namespace) -> int:
         with BancoSQLite(db) as banco:
             bracos = [ControleAleatorio(a.seed, id=CONTROLE, p_entrada=a.p_entrada), NaoOperar()]
             res = MotorBacktest(fonte, bracos, c, banco).executar()
-        rel = _escrever_relatorio(res, saida, sufixo, contaminado=a.contaminado, n_boot=a.n_boot, seed=a.seed)
+        rel = _escrever_relatorio(res, saida, sufixo, contaminado=a.contaminado, n_boot=a.n_boot, seed=a.seed,
+                              perfil=perfil, risco=risco)
         selos = {n: b["selo"]["selo"] for n, b in rel["bracos"].items()}
         print(f"[{res.cenario}] eventos={res.n_eventos} hash={res.hash_resultado()} selos={selos}")
         for b in res.bracos:
@@ -101,4 +107,7 @@ def registrar(sub: Any) -> None:
     p.add_argument("--estresse", action="store_true", help="roda tambem o cenario de estresse")
     p.add_argument("--contaminado", action="store_true")
     p.add_argument("--n-boot", type=int, default=500)
+    p.add_argument("--risco", default="config/risco.toml")
+    p.add_argument("--aprovacao", default="config/aprovacoes/risco-v1.toml")
+    argumentos_ativo(p)
     p.set_defaults(func=_backtest)

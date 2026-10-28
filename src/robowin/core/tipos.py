@@ -1,4 +1,4 @@
-"""Tipos de dominio congelados (M0). Dinheiro em reais; precos em pontos do WIN."""
+"""Tipos de dominio congelados (M0). Dinheiro em reais; precos em pontos de cotacao do ativo (perfil)."""
 from __future__ import annotations
 
 from enum import StrEnum
@@ -39,10 +39,11 @@ class Heartbeat(Base):
 
 
 class Instrumento(Base):
-    simbolo: str
-    ponto_valor_brl: float = 0.20
-    tick_pontos: float = 5.0
+    simbolo: str  # simbolo da corretora (ex.: contrato com vencimento)
+    ponto_valor_brl: float  # sempre do perfil (core.instrumentos), nunca fixo no codigo
+    tick_pontos: float
     lote: int = 1
+    ativo: str = ""  # simbolo_base do perfil (ex.: o ativo cujo perfil gerou este instrumento)
     vencimento: str | None = None  # AAAA-MM-DD
     filling_mode: int = 0
     trade_exemode: int = 0
@@ -305,11 +306,13 @@ class ManifestoExperimento(Base):
     fixavel: dict[str, bool] = Field(default_factory=dict)
     hashes: dict[str, str] = Field(default_factory=dict)
     origem_dados: str = "desconhecida"  # "sinteticos" | "historico_real" | "desconhecida"
+    ativo: str = ""  # simbolo_base do perfil: trocar o ativo abre OUTRO experimento (outro hash)
 
 
 class EntradaRegistroModelo(Base):
     nome: str
     versao: str
+    ativo: str = ""  # simbolo_base do perfil em que foi treinado; nunca reutilizado em outro ativo
     hash_dados: str
     hash_codigo: str
     status: Literal["nao_treinado", "em_validacao", "validado_oos", "reprovado"] = "nao_treinado"

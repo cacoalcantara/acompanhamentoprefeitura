@@ -37,8 +37,25 @@ _TERMOS_INDICADOR = ("rsi", "macd", "media_movel", "mm_", "ema", "sma", "bolling
 _CHAVES_PROIBIDAS = {"data", "datas", "date", "timestamp", "t_ns", "t0_ns", "hora", "simbolo", "symbol",
                      "bid", "ask", "last", "preco", "preco_absoluto", "ultimo", "wdo", "titulo", "texto",
                      "manchete", "url", "fonte"}
+
+
+def _padrao_ativos() -> str:
+    """Regex dos NOMES de ativo de config/instrumentos.toml (futuros com codigo de vencimento; acoes/ETF pelo ticker)."""
+    from robowin.core.instrumentos import _bruto, ativos_disponiveis
+    try:
+        brutos = _bruto()
+        nomes = ativos_disponiveis()
+    except Exception:  # sem arquivo de perfis: so os nomes genericos de contrato
+        return r"(\b[A-Z]{3}[FGHJKMNQUVXZ]\d{2}\b)"
+    fut = [n for n in nomes if brutos[n].get("vencimento", "nenhum") != "nenhum"]
+    partes = [rf"(\b(?:{'|'.join(map(re.escape, fut))})[FGHJKMNQUVXZ]\d{{2}}\b)"] if fut else []
+    # nome do ativo sozinho: so em MAIUSCULAS (evita "indicador", "window"); tickers de acao/ETF idem
+    partes += [rf"((?-i:\b(?:{'|'.join(map(re.escape, nomes))})\w*\b))"] if nomes else []
+    return "|".join(partes)
+
+
 _RE_STRING_PROIBIDA = re.compile(
-    r"(\d{4}-\d{2}-\d{2})|(\d{1,2}/\d{1,2}/\d{2,4})|(\b(19|20)\d{2}\b)|(\bWDO\w*)|(\bWIN[FGHJKMNQUVXZ]\d{2}\b)"
+    r"(\d{4}-\d{2}-\d{2})|(\d{1,2}/\d{1,2}/\d{2,4})|(\b(19|20)\d{2}\b)|" + _padrao_ativos() +
     r"|(\b(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|january"
     r"|february|march|april|june|july|august|september|october|november|december)\b)"
     r"|(\b(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)/\d{2,4})"
@@ -180,7 +197,7 @@ def montar_dossie(
     noticias: Sequence[dict[str, Any]] = (), regime: str = "indefinido",
     posicao: dict[str, Any] | None = None, limites: dict[str, float] | None = None,
     memoria: Sequence[dict[str, Any]] = (), minutos_desde_abertura: int | None = None,
-    minutos_para_zeragem: int | None = None, tick_pontos: float = 5.0,
+    minutos_para_zeragem: int | None = None, tick_pontos: float,
     niveis_extras_absolutos: Iterable[float] = (),
 ) -> dict[str, Any]:
     """Monta o dossie anonimizado.

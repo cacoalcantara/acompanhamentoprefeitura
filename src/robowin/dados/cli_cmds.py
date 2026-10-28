@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 
 from robowin.core.calendario_b3 import SP
+from robowin.core.instrumentos import argumentos_ativo, perfil_do_cli
 
 from .qualidade import ConfigQualidade, RelatorioQualidade, verificar
 from .sintetico import ROTULO_SINTETICO, ConfigSintetico, gerar_dias
@@ -57,7 +58,8 @@ def _verificar(a: argparse.Namespace) -> int:
 
 def _sintetico(a: argparse.Namespace) -> int:
     arm = ArmazenamentoTicks(a.dir)
-    cfg = ConfigSintetico(seed=a.seed, n_ticks=a.n_ticks, data=dt.date.fromisoformat(a.data))
+    perfil = perfil_do_cli(a)
+    cfg = ConfigSintetico.do_perfil(perfil, seed=a.seed, n_ticks=a.n_ticks, data=dt.date.fromisoformat(a.data))
     for r in gerar_dias(cfg, a.dias):
         n = r.gravar(arm)
         print(f"{r.config.data} novos={n} hash={r.hash()[:12]}  [{ROTULO_SINTETICO}]")
@@ -80,5 +82,6 @@ def registrar(sub: argparse._SubParsersAction) -> None:  # type: ignore[type-arg
     s.add_argument("--n-ticks", type=int, default=20000)
     s.add_argument("--dias", type=int, default=1)
     s.add_argument("--data", default="2026-03-10")
+    argumentos_ativo(s)
     s.set_defaults(func=_sintetico)
     p.set_defaults(func=lambda a: (p.print_help(), 2)[1])

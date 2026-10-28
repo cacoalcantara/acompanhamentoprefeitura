@@ -13,25 +13,29 @@ from pathlib import Path
 from typing import Any
 
 from robowin.core.barramento import BarramentoLocal
-from robowin.core.config import caminho_flag_emergencia, carregar_toml
+from robowin.core.config import ErroConfig, caminho_flag_emergencia, carregar_toml
+from robowin.core.instrumentos import (
+    PerfilInstrumento,
+    PerfilNaoConfirmado,
+    ativos_disponiveis,
+    perfil_da_config,
+)
 from robowin.core.relogio import Relogio, RelogioReal
 
 from . import constantes as C
 from .coleta import ColetorLivro, ColetorTicks, LogBruto
 from .conta import ler_estado_conta
-from .contrato import ContratoRecusado, resolver_contrato_win
+from .contrato import ContratoRecusado, resolver_contrato
 from .execucao_demo import ConfigDemo, ExecucaoDemo, GuardaDemoViolada
-from .specs import ESPEC_WIN, valor_ponto_brl
+from .specs import EspecEsperada, valor_ponto_brl
 from .tempo_servidor import calibrar
-
-PREFIXOS_ATIVOS = ("WIN", "IND", "WDO", "WIN$", "BOVA11")
 
 
 # ----------------------------------------------------------------------------------------------
 # diagnostico
 # ----------------------------------------------------------------------------------------------
 def executar_diagnostico(
-    terminal: Any, *, login_esperado: int | None = None, servidor_esperado: str | None = None,
+    terminal: Any, perfil: PerfilInstrumento, *, login_esperado: int | None = None, servidor_esperado: str | None = None,
     hoje: dt.date | None = None, relogio: Relogio | None = None, modo_config: str = "demo_mt5",
 ) -> dict[str, Any]:
     """Coleta o diagnostico do ambiente MT5. NUNCA envia ordens (somente order_check)."""
@@ -75,16 +79,16 @@ def executar_diagnostico(
     # contrato e especificacoes
     res = None
     try:
-        res = resolver_contrato_win(terminal, hoje)
+        res = resolver_contrato(terminal, hoje, perfil)
         info = terminal.symbol_info(res.simbolo_corretora)
+        esp = EspecEsperada.do_perfil(perfil)
         rel["contrato"] = {"codigo_calendario": res.codigo_calendario, "simbolo_corretora": res.simbolo_corretora,
-                           "prefixo": res.prefixo, "sufixo": res.sufixo, "vencimento": res.vencimento.isoformat(),
+                           "prefixo": res.prefixo, "sufixo": res.sufixo, "vencimento": res.vencimento.isoformat() if res.vencimento else None,
                            "outros_contratos": res.outros_contratos}
         rel["especificacoes"] = {
             "tick_pontos": res.instrumento.tick_pontos, "ponto_valor_brl": res.instrumento.ponto_valor_brl,
-            "lote": res.instrumento.lote, "esperado": {"tick_pontos": ESPEC_WIN.tick_pontos,
-                                                       "ponto_valor_brl": ESPEC_WIN.ponto_valor_brl,
-                                                       "lote": ESPEC_WIN.lote},
+            "lote": res.instrumento.lote, "esperado": {"tick_pontos": esp.tick_pontos,
+                                                       "ponto_valor_brl": esp.ponto_valor_brl, "lote": esp.lote},
             "filling_mode": res.instrumento.filling_mode, "trade_exemode": res.instrumento.trade_exemode,
             "ticks_bookdepth": res.instrumento.book_depth, "valor_ponto_calculado": valor_ponto_brl(info),
             "validas": True,
@@ -92,11 +96,15 @@ def executar_diagnostico(
     except ContratoRecusado as e:
         rec.extend(f"contrato/especificacao: {m}" for m in e.motivos)
         rel["contrato"] = {"codigo_calendario": None, "recusado": e.motivos}
+    except PerfilNaoConfirmado as e:
+        rec.append(f"perfil de instrumento: {e}")
+        rel["contrato"] = {"codigo_calendario": None, "recusado": [str(e)]}
+    rel["ativo"] = perfil.simbolo_base
 
     # ativos
     simbolos = terminal.symbols_get() or ()
     nomes = sorted(str(s.name) for s in simbolos)
-    rel["ativos"] = [n for n in nomes if n.startswith(PREFIXOS_ATIVOS)]
+    rel["ativos"] = [n for n in nomes if any(a in n for a in ativos_disponiveis())]
     rel["total_simbolos"] = len(nomes)
 
     if res is not None:
@@ -204,12 +212,24 @@ def _terminal(args: argparse.Namespace, cfg: dict[str, Any], relogio: Relogio) -
 def _comuns(p: argparse.ArgumentParser) -> None:
     p.add_argument("--duble", action="store_true", help="usa o duble sintetico em vez do terminal MT5 real")
     p.add_argument("--config", default="config/robowin.toml", help="TOML com [geral].conta e opcional [mt5]")
+    p.add_argument("--ativo", default=None, help="simbolo_base do perfil em config/instrumentos.toml (padrao: [geral].simbolo_base)")
     p.add_argument("--login", type=int, default=None)
     p.add_argument("--servidor", default=None)
     p.add_argument("--terminal", default=None, help="caminho do terminal portatil (terminal64.exe)")
 
 
+def _perfil(args: argparse.Namespace, *, estrito: bool) -> PerfilInstrumento:
+    """Perfil do ativo (`--ativo` > [geral].simbolo_base). Estrito: perfil a_confirmar BLOQUEIA (PerfilNaoConfirmado)."""
+    bruto = carregar_toml(args.config) if Path(args.config).is_file() else {}
+    return perfil_da_config(bruto, args.ativo, permitir_a_confirmar=not estrito)
+
+
 def _cmd_diagnostico(args: argparse.Namespace) -> int:
+    try:
+        perfil = _perfil(args, estrito=False)  # o diagnostico REPORTA o bloqueio a_confirmar em vez de abortar
+    except ErroConfig as e:
+        print(f"ERRO: {e}")
+        return 2
     cfg = _config_mt5(args)
     relogio = RelogioReal()
     try:
@@ -219,7 +239,7 @@ def _cmd_diagnostico(args: argparse.Namespace) -> int:
         return 3
     login = args.login or cfg.get("login") or (900001 if args.duble else None)
     servidor = args.servidor or cfg.get("servidor") or ("XPMT5-DEMO" if args.duble else None)
-    rel = executar_diagnostico(term, login_esperado=login, servidor_esperado=servidor, relogio=relogio,
+    rel = executar_diagnostico(term, perfil, login_esperado=login, servidor_esperado=servidor, relogio=relogio,
                                modo_config=cfg.get("modo_config") or "demo_mt5")
     arq = _gravar_relatorio(rel, Path(args.saida))
     print(texto_relatorio(rel))
@@ -231,6 +251,11 @@ def _cmd_diagnostico(args: argparse.Namespace) -> int:
 def _cmd_gateway(args: argparse.Namespace) -> int:
     from .gateway import ConfigGateway, rodar_gateway_zmq
     from .guardiao import ConfigGuardiao
+    try:
+        perfil = _perfil(args, estrito=True)
+    except ErroConfig as e:
+        print(f"ERRO (operacao bloqueada): {e}")
+        return 2
     cfg = _config_mt5(args)
     relogio = RelogioReal()
     login = args.login or cfg.get("login") or (900001 if args.duble else None)
@@ -242,7 +267,7 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         print(f"[geral].conta = '{cfg.get('modo_config')}': o gateway so inicia com 'demo_mt5'.")
         return 2
     gcfg = ConfigGateway(
-        login=int(login), servidor=str(servidor), modo_config="demo_mt5", dir_log=Path(args.dir_log),
+        login=int(login), servidor=str(servidor), modo_config="demo_mt5", dir_log=Path(args.dir_log), perfil=perfil,
         offset_fixo_s=args.offset_fixo_s,
         guardiao=ConfigGuardiao(arquivo_emergencia=caminho_flag_emergencia(args.config, args.arquivo_emergencia),
                                 exigir_dia_util=not args.duble))
@@ -259,6 +284,11 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
 
 
 def _cmd_coletar(args: argparse.Namespace) -> int:
+    try:
+        perfil = _perfil(args, estrito=True)
+    except ErroConfig as e:
+        print(f"ERRO (operacao bloqueada): {e}")
+        return 2
     cfg = _config_mt5(args)
     relogio = RelogioReal()
     term = _terminal(args, cfg, relogio)
@@ -266,7 +296,7 @@ def _cmd_coletar(args: argparse.Namespace) -> int:
         print(f"initialize falhou: {term.last_error()}")
         return 3
     try:
-        res = resolver_contrato_win(term, dt.datetime.fromtimestamp(relogio.agora_ns() / 1e9, dt.UTC).date())
+        res = resolver_contrato(term, dt.datetime.fromtimestamp(relogio.agora_ns() / 1e9, dt.UTC).date(), perfil)
     except ContratoRecusado as e:
         print("Contrato recusado: " + "; ".join(e.motivos))
         return 1

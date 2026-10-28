@@ -9,6 +9,7 @@ import functools
 import json
 import multiprocessing as mp
 import socket
+import sys
 import time
 from pathlib import Path
 
@@ -25,6 +26,9 @@ from robowin.mt5.duble import criar_duble_padrao
 from robowin.mt5.gateway import ConfigGateway, rodar_gateway_zmq
 from robowin.mt5.guardiao import ConfigGuardiao
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'unit'))
+from perfis_teste import WIN  # noqa: E402
+
 LOGIN, SERVIDOR = 900001, "XPMT5-DEMO"
 HOJE = dt.date(2026, 10, 27)
 
@@ -39,7 +43,7 @@ def cfg_gateway(tmp_path: Path, **g) -> ConfigGateway:
     # janela de entradas aberta o dia todo: o relogio e o real e o duble nao tem pregao
     guard = ConfigGuardiao(entradas_de="00:00", entradas_ate="23:58", zeragem="23:59", exigir_dia_util=False, exigir_sl=False,
                            arquivo_emergencia=tmp_path / "EMERGENCIA", **g)
-    return ConfigGateway(login=LOGIN, servidor=SERVIDOR, hoje=HOJE, dir_log=tmp_path / "bruto", guardiao=guard,
+    return ConfigGateway(perfil=WIN, login=LOGIN, servidor=SERVIDOR, hoje=HOJE, dir_log=tmp_path / "bruto", guardiao=guard,
                          intervalo_guardiao_s=0.2, intervalo_hb_s=0.2, intervalo_estado_s=0.3, espera_emergencia_s=0.05)
 
 
@@ -172,7 +176,7 @@ def test_log_bruto_gravado_pelo_processo_do_gateway(gw, tmp_path):
 # --- diagnostico ---------------------------------------------------------------------------------------
 def test_diagnostico_contra_duble_nao_envia_ordem_e_grava_relatorio(tmp_path):
     d = criar_duble_padrao(RelogioReal(), n_ticks=20000, passo_ms=50)
-    rel = executar_diagnostico(d, login_esperado=LOGIN, servidor_esperado=SERVIDOR, hoje=HOJE)
+    rel = executar_diagnostico(d, WIN, login_esperado=LOGIN, servidor_esperado=SERVIDOR, hoje=HOJE)
     assert rel["ok"], rel["recusas"]
     assert d.envios == [] and len(d.checks) == 1  # order_check SEM envio
     assert "DUBLE" in rel["origem"]
@@ -197,7 +201,7 @@ def test_diagnostico_cli_com_duble_grava_json_e_txt(tmp_path, capsys):
 @pytest.mark.parametrize("modo", ["real", "contest"])
 def test_diagnostico_recusa_conta_nao_demo(modo):
     d = criar_duble_padrao(RelogioReal(), n_ticks=2000, trade_mode=modo)
-    rel = executar_diagnostico(d, login_esperado=LOGIN, servidor_esperado=SERVIDOR, hoje=HOJE)
+    rel = executar_diagnostico(d, WIN, login_esperado=LOGIN, servidor_esperado=SERVIDOR, hoje=HOJE)
     assert not rel["ok"] and any(modo.upper() in r for r in rel["recusas"])
     assert d.envios == [] and d.checks == []
     assert "NAO APTO" in texto_relatorio(rel)
@@ -206,7 +210,7 @@ def test_diagnostico_recusa_conta_nao_demo(modo):
 def test_diagnostico_recusa_login_e_especificacao_divergentes():
     d = criar_duble_padrao(RelogioReal(), n_ticks=2000)
     d.especificacoes["WINZ26"].trade_tick_size = 10.0
-    rel = executar_diagnostico(d, login_esperado=123, servidor_esperado=SERVIDOR, hoje=HOJE)
+    rel = executar_diagnostico(d, WIN, login_esperado=123, servidor_esperado=SERVIDOR, hoje=HOJE)
     assert not rel["ok"]
     assert any("login" in r for r in rel["recusas"]) and any("tick_size" in r for r in rel["recusas"])
     assert d.envios == []

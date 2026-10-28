@@ -1,6 +1,7 @@
 """Rotulagem por tripla barreira, walk-forward com purga/embargo, calibracao e HAR-RV. Dados SINTETICOS."""
 import numpy as np
 import pytest
+from perfis_teste import WIN
 
 from robowin.modelos import rotulagem as rot
 from robowin.modelos.calibracao import PISO_PROB, CalibradorIsotonico, ece
@@ -14,7 +15,7 @@ from robowin.modelos.walkforward import (
 )
 
 NS = 1_000_000_000
-CFG = rot.ConfigBarreiras(alvo_pontos=30, stop_pontos=30, tempo_s=60, atraso_ns=0)
+CFG = rot.ConfigBarreiras(alvo_pontos=30, stop_pontos=30, tempo_s=60, atraso_ns=0, ponto_valor_brl=WIN.ponto_valor_brl)
 SEM_CUSTO = rot.Custos(tarifas_corretagem_brl=0.0, slippage_stop_pontos=0.0)
 CUSTO = rot.Custos(tarifas_corretagem_brl=0.5, slippage_stop_pontos=5.0)
 
@@ -60,7 +61,7 @@ def test_custos_reduzem_resultado_e_coerencia():
     b = rot.rotular_um(q, 0, +1, CFG, CUSTO)
     assert a.pnl_liquido_brl - b.pnl_liquido_brl == pytest.approx(0.5)
     # geometria do plano (stop 300, alvo 100): acerto de equilibrio na faixa de 76-78%
-    cfg = rot.ConfigBarreiras(alvo_pontos=100, stop_pontos=300)
+    cfg = rot.ConfigBarreiras(alvo_pontos=100, stop_pontos=300, ponto_valor_brl=WIN.ponto_valor_brl)
     assert 0.75 < rot.acerto_equilibrio(cfg, CUSTO) < 0.78
     # com esse acerto a expectativa e ~0: p*alvo - (1-p)*(stop+slip) - custo = 0
     p = rot.acerto_equilibrio(cfg, CUSTO)

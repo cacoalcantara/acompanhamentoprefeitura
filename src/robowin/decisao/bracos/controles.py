@@ -16,14 +16,14 @@ from typing import Any
 from robowin.core.tipos import Acao, Condicao, Intencao, PlanoCondicional
 
 from ..plano_condicional import converter_plano
-from .base import NS, BracoBase, ContextoDecisao, Geometria, Modo, ResultadoDecisao
+from .base import DESVIO_MAX_TICKS, NS, BracoBase, ContextoDecisao, Geometria, Modo, ResultadoDecisao
 
 
 class BracoNaoOperar(BracoBase):
     familia = "controle"
 
     def __init__(self, id: str = "nao_operar", modo: Modo = "imediato") -> None:
-        super().__init__(id, modo)
+        super().__init__(id, modo, Geometria(0.0, 0.0, 0))  # nunca opera: a geometria nao se aplica
 
     async def adecidir(self, ctx: ContextoDecisao) -> ResultadoDecisao:
         return self._resultado(ctx, Acao.NAO_OPERAR, "nao_operar", motivos=("controle_nao_operar",))
@@ -33,9 +33,9 @@ class BracoAleatorio(BracoBase):
     familia = "controle"
 
     def __init__(self, id: str = "controle_aleatorio", modo: Modo = "imediato", *, seed: int = 0,
-                 frequencia_por_hora: float = 2.0, geometrias: Sequence[Geometria] = (Geometria(),),
+                 frequencia_por_hora: float = 2.0, geometrias: Sequence[Geometria],
                  frequencia_fn: Callable[[int], float] | None = None, validade_s: float = 60.0,
-                 desvio_max_pts: float = 20.0, rompimento_pontos: float = 10.0,
+                 desvio_max_ticks: float = DESVIO_MAX_TICKS, rompimento_ticks: float = 2.0,
                  expira_plano_s: float = 180.0) -> None:
         super().__init__(id, modo, geometrias[0])
         self.seed = seed
@@ -44,8 +44,8 @@ class BracoAleatorio(BracoBase):
         self.frequencia_fn = frequencia_fn
         self._geoms: list[Geometria] = list(geometrias)
         self._padrao = len(self._geoms)
-        self.validade_s, self.desvio_max_pts = validade_s, desvio_max_pts
-        self.rompimento_pontos, self.expira_plano_s = rompimento_pontos, expira_plano_s
+        self.validade_s, self.desvio_max_ticks = validade_s, desvio_max_ticks
+        self.rompimento_ticks, self.expira_plano_s = rompimento_ticks, expira_plano_s
         self._ultimo_t: int | None = None
 
     def manifesto(self) -> dict[str, Any]:
@@ -78,7 +78,7 @@ class BracoAleatorio(BracoBase):
         self._ultimo_t = ctx.t0_ns
         taxa = self._taxa_por_hora(ctx.t0_ns)
         p = 1.0 - math.exp(-taxa * dt_h)
-        kw: dict[str, Any] = {"validade_s": self.validade_s, "desvio_max_pts": self.desvio_max_pts}
+        kw: dict[str, Any] = {"validade_s": self.validade_s, "desvio_max_pts": self.desvio_max_ticks * ctx.tick_pontos}
         base: dict[str, Any] = {"origem": "controle_aleatorio", "seed": self.seed, "taxa_por_hora": taxa,
                                 "p_ciclo": p}
         if (ctx.posicao.quantidade or 0) > 0 or u >= p:
@@ -91,7 +91,7 @@ class BracoAleatorio(BracoBase):
         base.update(lado="compra" if compra else "venda", stop_pontos=g.stop_pontos, alvo_pontos=g.alvo_pontos)
         plano = None
         if self.modo == "condicional":  # rompimento a favor do lado sorteado
-            rb = self.rompimento_pontos
+            rb = self.rompimento_ticks * ctx.tick_pontos
             rel = PlanoCondicional(
                 gatilhos=(Condicao(tipo="preco_rompe_acima" if compra else "preco_rompe_abaixo",
                                    valor=rb if compra else -rb),),

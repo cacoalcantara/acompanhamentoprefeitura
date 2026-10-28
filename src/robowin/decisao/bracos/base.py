@@ -19,6 +19,7 @@ from typing import Any, Literal
 from robowin.core.tipos import Acao, CarimboLatencia, ChamadaLLM, Intencao, PlanoCondicional, Posicao
 
 NS = 1_000_000_000
+DESVIO_MAX_TICKS = 4.0  # desvio maximo do preco entre a decisao e o envio, em TICKS do ativo
 Modo = Literal["imediato", "condicional"]
 MODOS: tuple[Modo, ...] = ("imediato", "condicional")
 
@@ -26,8 +27,8 @@ MODOS: tuple[Modo, ...] = ("imediato", "condicional")
 @dataclass(frozen=True)
 class Geometria:
     """Geometria da operacao: distancias em pontos e tempo maximo (coerente com a rotulagem do modelo)."""
-    stop_pontos: float = 30.0
-    alvo_pontos: float = 30.0
+    stop_pontos: float
+    alvo_pontos: float
     tempo_max_s: int = 60
 
 
@@ -43,8 +44,8 @@ class ContextoDecisao:
     ask: float
     posicao: Posicao
     ciclo_id: str
+    tick_pontos: float  # do perfil do ativo
     gatilhos: tuple[str, ...] = ()
-    tick_pontos: float = 5.0
 
 
 @dataclass
@@ -76,7 +77,7 @@ class ResultadoDecisao:
     hash_dossie: str = ""
     preco_ref: float = 0.0
     validade_s: float = 60.0
-    desvio_max_pts: float = 20.0
+    desvio_max_pts: float = float("inf")  # sempre preenchido por `_resultado` (ticks do ativo x tick)
     plano: PlanoCondicional | None = None  # ABSOLUTO (ver plano_condicional.converter_plano)
     gatilhos: tuple[str, ...] = ()
 
@@ -106,7 +107,9 @@ class BracoBase:
             raise ValueError(f"modo invalido: {modo}")
         self.id = id
         self.modo: Modo = modo
-        self.geometria = geometria or Geometria()
+        if geometria is None:
+            raise ValueError("geometria obrigatoria: derive-a do perfil do ativo (stop/alvo em ticks)")
+        self.geometria = geometria
         self._ctx: ContextoDecisao | None = None
 
     # --- API assincrona (usada pelo orquestrador) ----------------------------------------------------
@@ -136,6 +139,7 @@ class BracoBase:
 
     # --- auxiliares ----------------------------------------------------------------------------------
     def _resultado(self, ctx: ContextoDecisao, acao: Acao, resultado: str, **kw: Any) -> ResultadoDecisao:
+        kw.setdefault("desvio_max_pts", DESVIO_MAX_TICKS * ctx.tick_pontos)
         return ResultadoDecisao(braco=self.id, modo=self.modo, t0_ns=ctx.t0_ns, ciclo_id=ctx.ciclo_id, acao=acao,
                                 resultado=resultado, hash_dossie=ctx.hash_dossie, preco_ref=ctx.preco_ref,
                                 gatilhos=ctx.gatilhos, **kw)

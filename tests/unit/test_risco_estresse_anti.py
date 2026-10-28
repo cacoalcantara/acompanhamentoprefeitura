@@ -1,4 +1,6 @@
-from robowin.core.tipos import ConfigRisco, Instrumento, Lado
+from perfis_teste import WIN
+
+from robowin.core.tipos import ConfigRisco, Lado
 from robowin.risco.antimanipulacao import LimitesAntimanipulacao, MonitorAntimanipulacao
 from robowin.risco.estresse import imprimir_estresse, rodar_estresse
 
@@ -7,7 +9,7 @@ S = int(1e9)
 
 # ---- estresse -------------------------------------------------------------------------------------
 def test_estresse_gap_10pct_perda_em_reais_e_limites(capsys):
-    cfg, ins = ConfigRisco(), Instrumento(simbolo="WINZ26")
+    cfg, ins = ConfigRisco(), WIN.instrumento("WINZ26")
     res = {r.cenario: r for r in rodar_estresse(cfg, ins, preco=130_000.0)}
     r = res["gap_ate_limite_10pct"]
     assert r.pontos == 13_000 and abs(r.perda_brl - 2600.0) < 1e-6  # 13000 pts * R$0,20
@@ -22,7 +24,7 @@ def test_estresse_gap_10pct_perda_em_reais_e_limites(capsys):
 
 
 def test_estresse_escala_com_quantidade():
-    cfg, ins = ConfigRisco(), Instrumento(simbolo="WINZ26")
+    cfg, ins = ConfigRisco(), WIN.instrumento("WINZ26")
     r1 = rodar_estresse(cfg, ins, quantidade=1)[2]
     r2 = rodar_estresse(cfg, ins, quantidade=2)[2]
     assert abs(r2.perda_brl - 2 * r1.perda_brl) < 1e-9

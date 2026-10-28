@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import heapq
+import math
 import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -26,6 +27,7 @@ from typing import Any
 
 from robowin.core import calendario_b3
 from robowin.core.config import ErroConfig
+from robowin.core.instrumentos import exigir_mesmo_ativo, perfil_de_instrumento
 from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
 from robowin.core.relogio import Relogio, RelogioSimulado
 from robowin.core.tipos import (
@@ -76,7 +78,7 @@ FEATURES_DOSSIE = (
 
 @dataclass
 class ConfigOrquestrador:
-    instrumento: Instrumento = field(default_factory=lambda: Instrumento(simbolo="WIN"))
+    instrumento: Instrumento  # obrigatorio: vem do perfil do ativo
     risco: ConfigRisco = field(default_factory=ConfigRisco)
     sessao_id: str = "sim"
     sintetico: bool = True
@@ -171,15 +173,23 @@ class Orquestrador:
         if len(set(ids)) != len(ids):
             raise ErroConfig(f"ids de braco duplicados: {ids}")
         self.cfg, self.rel, self.registro = cfg, relogio, registro
+        self.perfil = perfil_de_instrumento(cfg.instrumento)
+        self.ativo = self.perfil.simbolo_base
         self.pipeline = pipeline or PipelineFeatures()
         self.modelos = dict(modelos or {})
+        for nome_m, m in self.modelos.items():  # modelo de outro ativo NUNCA e reutilizado (nem o sem ativo, fora de sintetico)
+            declarado = str(getattr(m, "ativo", ""))
+            if declarado or not cfg.sintetico:
+                exigir_mesmo_ativo(self.ativo, declarado, f"modelo '{nome_m}'")
+        if orcamento is not None:
+            orcamento.vincular_ativo(self.ativo)
         self.statarb, self.precos_aux, self.noticias_fn = statarb, precos_aux, noticias
         self.orcamento = orcamento
         self._mes_orcamento: str | None = None
         self.bloqueio = bloqueio or BloqueioDados()
         self.eventos = list(eventos)
         self.sim = simulador or SimuladorExecucao(
-            cfg.instrumento, relogio, custos or Custos(), latencia_ns=cfg.latencia_exec_ns, seed=cfg.seed)
+            cfg.instrumento, relogio, custos or Custos.do_instrumento(cfg.instrumento), latencia_ns=cfg.latencia_exec_ns, seed=cfg.seed)
         self.saidas = GestorSaidas()
         self.contas: dict[str, ContaBraco] = {}
         self.grupos: dict[str, list[ContaBraco]] = {}
@@ -209,7 +219,7 @@ class Orquestrador:
         cfg = self.cfg
         ks = KillSwitch(arquivo_flag=cfg.arquivo_emergencia, auditoria=self.registro.auditoria)
         motor = MotorRiscoPadrao(cfg.risco, cfg.instrumento, kill_switch=ks, auditoria=self.registro.auditoria,
-                                 eventos=self.eventos)
+                                 eventos=self.eventos, grade=lambda d: calendario_b3.sessao_em(d, self.perfil))
         oms = OMS(self.rel, {b.id: magic}, banco=self.registro.banco, auditoria=self.registro.auditoria,
                   simulada=True)
         self.sim.registrar_braco(b.id, magic)
@@ -218,6 +228,7 @@ class Orquestrador:
         oms.ao_transicao.append(lambda o: self.registro.ordem(o))
         conta = ContaBraco(b, magic, ks, motor, oms, rot, GerenciadorPlano(b.id, cfg.instrumento.tick_pontos))
         ks.registrar_efeito(lambda ev, c=conta: self._efeito_kill(c, ev))
+        conta.rotulos |= self.perfil.rotulos()  # ativo_a_confirmar: resultado sintetico, nunca operacional
         self.contas[b.id] = conta
         g = b.grupo_ciclo
         self.grupos.setdefault(g, []).append(conta)
@@ -1023,9 +1034,9 @@ class ExecucaoRegistrada:
     execucao: ResultadoExecucao | None
 
 
-def geometria_de(risco: ConfigRisco, ins: Instrumento, stop: float = 30.0, alvo: float = 30.0,
-                 tempo_max_s: int = 60) -> Geometria:
-    """Geometria dentro do que o risco aceita (o stop nunca passa do maximo efetivo da politica)."""
+def geometria_de(risco: ConfigRisco, ins: Instrumento, stop: float, alvo: float, tempo_max_s: int = 60) -> Geometria:
+    """Geometria dentro do que o risco aceita (o stop nunca passa do maximo efetivo da politica), na grade do tick."""
     por_perda = risco.perda_max_operacao_brl / (risco.contratos_max * ins.ponto_valor_brl) - risco.slippage_folga_pontos
-    return Geometria(min(stop, risco.stop_max_pontos, por_perda), alvo, tempo_max_s)
+    bruto = min(stop, risco.stop_max_pontos, por_perda)
+    return Geometria(max(math.floor(bruto / ins.tick_pontos + 1e-9), 1) * ins.tick_pontos, alvo, tempo_max_s)
 

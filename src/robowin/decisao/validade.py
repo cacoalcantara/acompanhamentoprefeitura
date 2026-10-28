@@ -66,7 +66,7 @@ class Prazos:
     claude_s: float
     gpt_s: float
     validade_s: float
-    desvio_max_pts: float
+    desvio_max_ticks: float
     margem_s: float = 0.0  # reservada ao motor de risco e ao OMS
 
     def prazo_proponente(self) -> float:
@@ -77,9 +77,9 @@ class Prazos:
         return min(self.gpt_s, self.validade_s - self.margem_s - decorrido_s)
 
 
-PRAZOS_IMEDIATO = Prazos(claude_s=40.0, gpt_s=12.0, validade_s=60.0, desvio_max_pts=20.0, margem_s=8.0)
+PRAZOS_IMEDIATO = Prazos(claude_s=40.0, gpt_s=12.0, validade_s=60.0, desvio_max_ticks=4.0, margem_s=8.0)
 # condicional: o plano e gerado a cada ~4 min ou por evento e revisado ANTES de armar; expira em 3-10 min.
-PRAZOS_CONDICIONAL = Prazos(claude_s=90.0, gpt_s=30.0, validade_s=600.0, desvio_max_pts=float("inf"),
+PRAZOS_CONDICIONAL = Prazos(claude_s=90.0, gpt_s=30.0, validade_s=600.0, desvio_max_ticks=float("inf"),
                             margem_s=0.0)
 
 
@@ -93,13 +93,13 @@ def prazos_de_config(cfg: dict[str, Any] | None) -> dict[str, Prazos]:
         claude_s=float(im.get("claude_s", PRAZOS_IMEDIATO.claude_s)),
         gpt_s=float(im.get("gpt_s", PRAZOS_IMEDIATO.gpt_s)),
         validade_s=float(im.get("validade_s", PRAZOS_IMEDIATO.validade_s)),
-        desvio_max_pts=float(im.get("desvio_max_pts", PRAZOS_IMEDIATO.desvio_max_pts)),
+        desvio_max_ticks=float(im.get("desvio_max_ticks", PRAZOS_IMEDIATO.desvio_max_ticks)),
         margem_s=float(im.get("margem_s", PRAZOS_IMEDIATO.margem_s)))
     condicional = Prazos(
         claude_s=float(co.get("claude_s", PRAZOS_CONDICIONAL.claude_s)),
         gpt_s=float(co.get("gpt_s", PRAZOS_CONDICIONAL.gpt_s)),
         validade_s=float(co.get("expira_min_max", PRAZOS_CONDICIONAL.validade_s / 60)) * 60.0,
-        desvio_max_pts=PRAZOS_CONDICIONAL.desvio_max_pts, margem_s=0.0)
+        desvio_max_ticks=PRAZOS_CONDICIONAL.desvio_max_ticks, margem_s=0.0)
     return {"imediato": imediato, "condicional": condicional}
 
 

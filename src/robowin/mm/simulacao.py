@@ -42,7 +42,9 @@ def simular_mm(ticks: list[Tick] | tuple[Tick, ...], livros: list[LivroSnapshot]
                cotador: CotadorMM, instrumento: Instrumento | None = None, intervalo_s: float = 1.0,
                seed: int = 0, cfg: ConfigMM | None = None, latencia_ms: float = 50.0) -> ResultadoMM:
     exigir_simulador_apenas(cfg or cotador.cfg)
-    ins = instrumento or Instrumento(simbolo="SINT_WIN")
+    if instrumento is None:
+        raise ValueError("simular_mm exige o Instrumento do ativo (perfil)")
+    ins = instrumento
     rel = RelogioSimulado(ticks[0].t_utc_ns)
     sim = SimuladorExecucao(ins, rel, latencia_ns=int(latencia_ms * 1e6), seed=seed)
     sim.registrar_braco(BRACO, MAGIC)

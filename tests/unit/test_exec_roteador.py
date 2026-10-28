@@ -3,6 +3,7 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
+from perfis_teste import WIN
 
 from robowin.core.calendario_b3 import dt_utc_ns
 from robowin.core.relogio import RelogioSimulado
@@ -11,7 +12,6 @@ from robowin.core.tipos import (
     AckOrdem,
     ConfigRisco,
     EstadoOrdem,
-    Instrumento,
     Intencao,
     Lado,
     Posicao,
@@ -27,7 +27,7 @@ from robowin.risco.motor import MotorRiscoPadrao
 RAIZ = Path(__file__).resolve().parents[2] / "src" / "robowin"
 MS = 1_000_000
 T0 = dt_utc_ns(dt.datetime(2026, 11, 10, 10, 0))
-INS = Instrumento(simbolo="WINZ26")
+INS = WIN.instrumento("WINZ26")
 
 
 def tick(rel, dt_ms, bid, ask, last=None, vol=1.0):

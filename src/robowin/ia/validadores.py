@@ -124,7 +124,7 @@ def plano_para_absoluto(plano: PlanoCondicional, t0_ns: int) -> PlanoCondicional
 
 def validar_proposta(
     p: PropostaIA, dossie: dict[str, Any], *, modo: str = "imediato", validade_max_s: int = 60,
-    stop_max_pontos: float = 300.0,
+    stop_max_pontos: float,
 ) -> ResultadoValidacao:
     v: list[str] = []
     entrada = p.acao in (Acao.COMPRAR, Acao.VENDER)

@@ -10,17 +10,25 @@ from test_decisao_comum import NS, T0, ctx_basico, dossie_basico, plano_rel
 
 from robowin.core.tipos import Acao, Lado, Posicao, PropostaIA, RevisaoIA
 from robowin.decisao.bracos import (
-    BracoAleatorio,
+    BracoAleatorio as _BracoAleatorio,
+)
+from robowin.decisao.bracos import (
     BracoNaoOperar,
     BracoProponente,
     BracoProponenteRevisor,
-    BracoQuant,
     ErroConfigBraco,
-    FabricaBracos,
     Geometria,
-    ServicoProposta,
     ServicoRevisao,
     extras_de_config,
+)
+from robowin.decisao.bracos import (
+    BracoQuant as _BracoQuant,
+)
+from robowin.decisao.bracos import (
+    FabricaBracos as _FabricaBracos,
+)
+from robowin.decisao.bracos import (
+    ServicoProposta as _ServicoProposta,
 )
 from robowin.decisao.validade import Prazos
 from robowin.ia.catalogo import Catalogo, ErroCatalogo
@@ -32,6 +40,29 @@ RAIZ = Path(__file__).resolve().parents[2]
 CATALOGO = Catalogo.carregar(RAIZ / "config" / "modelos.toml")
 MODELO = "falso:claude-opus-5-5"
 REV = "falso:gpt-6.1-sol"
+GEOM = Geometria(30.0, 30.0, 60)
+
+
+def ServicoProposta(*a, **k):
+    k.setdefault("stop_max_pontos", 250.0)
+    return _ServicoProposta(*a, **k)
+
+
+def BracoQuant(*a, **k):
+    k.setdefault("geometria", GEOM)
+    return _BracoQuant(*a, **k)
+
+
+def BracoAleatorio(*a, **k):
+    k.setdefault("geometrias", (GEOM,))
+    return _BracoAleatorio(*a, **k)
+
+
+def FabricaBracos(*a, **k):
+    k.setdefault("stop_max_pontos", 250.0)
+    k.setdefault("geometria", GEOM)
+    return _FabricaBracos(*a, **k)
+
 
 
 def proposta(acao=Acao.COMPRAR, **kw) -> PropostaIA:
@@ -67,7 +98,7 @@ class Erro429(Exception):
 # =============================================================================================== quant (A) ===
 def dossie_quant(status="validado_oos", ec=3.0, ev=-2.0, ps_c=0.2, ps_v=0.4, direcional=None):
     saida = {"e_brl_compra": ec, "e_brl_venda": ev, "p_stop_compra": ps_c, "p_stop_venda": ps_v}
-    sa = {"direcional_win": direcional} if direcional is not None else None
+    sa = {"direcional_alvo": direcional} if direcional is not None else None
     return dossie_basico(extra_modelos={"mm": {"status": status, "saida": saida}}, statarb=sa)
 
 
@@ -121,7 +152,7 @@ async def test_quant_com_posicao_aberta_nao_opera_e_condicional_gera_plano():
     a = BracoQuant("quant", modelo="mm")
     pos = Posicao(simbolo="W", lado=Lado.COMPRA, quantidade=1, preco_medio=130_000.0, ticket=1)
     assert (await a.adecidir(ctx_basico(dossie_quant(), posicao=pos))).resultado == "nao_operar"
-    c = BracoQuant("quant_cond", "condicional", modelo="mm", pullback_pontos=10.0, expira_plano_s=180.0)
+    c = BracoQuant("quant_cond", "condicional", modelo="mm", pullback_ticks=2.0, expira_plano_s=180.0)
     r = await c.adecidir(ctx_basico(dossie_quant()))
     assert r.resultado == "plano" and r.plano is not None and r.intencao.modo == "condicional"
     assert r.plano.expira_ns == T0 + 180 * NS and {g.tipo for g in r.plano.gatilhos} == {"preco_toca", "spread_max_pontos"}
@@ -349,7 +380,7 @@ FALHAS = [
     ("evidencia_inexistente", prov_evidencia_inexistente, "resposta_invalida"),
     ("orcamento_esgotado", prov_orcamento_esgotado, "orcamento_esgotado"),
 ]
-PZ_CURTO = Prazos(claude_s=0.05, gpt_s=0.05, validade_s=60.0, desvio_max_pts=20.0, margem_s=8.0)
+PZ_CURTO = Prazos(claude_s=0.05, gpt_s=0.05, validade_s=60.0, desvio_max_ticks=4.0, margem_s=8.0)
 
 
 @pytest.mark.parametrize("nome,fabrica,motivo", FALHAS, ids=[f[0] for f in FALHAS])

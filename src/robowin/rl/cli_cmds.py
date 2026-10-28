@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..core.instrumentos import argumentos_ativo, perfil_do_cli
 from ..dados.sintetico import ROTULO_SINTETICO, ConfigSintetico, gerar
 from .ambiente import AGREDIR, N_ACOES, AmbienteExecucao, ConfigAmbiente
 from .bandit import BanditThompsonLinear
@@ -10,9 +11,12 @@ from .ips import estimar_ips, razao_trajetoria
 from .politica import PoliticaBandit, PoliticaQ, contexto
 from .q_tabular import Discretizador, QTabularFinito
 
-AVISO = (f"*** {ROTULO_SINTETICO} ***\n"
-         "Ganho maximo plausivel da execucao otima ~1 tick (R$ 1,00/contrato): e um LIMITE teorico, NAO uma medicao.\n"
-         "Resultados em dados sinteticos demonstram o pipeline; nao provam ganho em mercado real.")
+
+def aviso(tick_valor_brl: float) -> str:
+    return (f"*** {ROTULO_SINTETICO} ***\n"
+            f"Ganho maximo plausivel da execucao otima ~1 tick (R$ {tick_valor_brl:.2f}/contrato): e um LIMITE teorico, "
+            "NAO uma medicao.\n"
+            "Resultados em dados sinteticos demonstram o pipeline; nao provam ganho em mercado real.")
 
 
 def coletar(env: AmbienteExecucao, n: int, seed: int) -> list[dict]:
@@ -66,10 +70,11 @@ def _avaliar(nome: str, eps: list[dict], prob, clip: float) -> str:
 
 
 def _demo(a) -> int:
-    print(AVISO)
-    dados = gerar(ConfigSintetico(seed=a.seed, n_ticks=a.ticks, sinal_forca=0.0))
+    perfil = perfil_do_cli(a)
+    print(aviso(perfil.tick_valor_brl))
+    dados = gerar(ConfigSintetico.do_perfil(perfil, seed=a.seed, n_ticks=a.ticks, sinal_forca=0.0))
     cfg = ConfigAmbiente()
-    env = AmbienteExecucao(dados.ticks, dados.livros, cfg, seed=a.seed)
+    env = AmbienteExecucao(dados.ticks, dados.livros, cfg, instrumento=perfil.instrumento(dados.config.simbolo), seed=a.seed)
     eps = coletar(env, a.episodios, a.seed + 1)
     corte = int(len(eps) * 0.7)
     treino, teste = eps[:corte], eps[corte:]
@@ -94,4 +99,5 @@ def registrar(sub):
     d.add_argument("--seed", type=int, default=7)
     d.add_argument("--ticks", type=int, default=30_000)
     d.add_argument("--episodios", type=int, default=300)
+    argumentos_ativo(d)
     d.set_defaults(func=_demo)

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..core.config import ErroConfig, carregar_risco, sha256_arquivo
+from ..core.config import ErroConfig, carregar_risco, carregar_toml, sha256_arquivo
+from ..core.instrumentos import PerfilInstrumento
 from ..core.tipos import ConfigRisco
 from .tempo import hhmm_para_s
 
@@ -53,3 +54,63 @@ def stop_maximo_efetivo_pontos(cfg: ConfigRisco, ponto_valor_brl: float) -> floa
     """Menor entre stop_max_pontos e o stop que, somado a folga, cabe em perda_max_operacao_brl."""
     por_perda = cfg.perda_max_operacao_brl / (cfg.contratos_max * ponto_valor_brl) - cfg.slippage_folga_pontos
     return min(cfg.stop_max_pontos, por_perda)
+
+
+ROTULO_RISCO_NAO_APROVADO = "risco_nao_aprovado"
+OPERACOES_DIA_MAX_CONSERVADOR = 5
+PERDAS_SEGUIDAS_MAX_CONSERVADOR = 2
+
+
+def limites_conservadores(perfil: PerfilInstrumento, base: ConfigRisco) -> ConfigRisco:
+    """Limites MINIMOS para um ativo sem politica propria aprovada: parte do config/risco.toml (limites em R$ e
+    horarios) e troca stop/folga pelos do PERFIL em ticks (convertidos em pontos do ativo), com menos operacoes."""
+    cfg = base.model_copy(update={
+        "contratos_max": 1, "stop_max_pontos": perfil.stop_max_pontos,
+        "slippage_folga_pontos": perfil.slippage_folga_pontos,
+        "operacoes_dia_max": min(base.operacoes_dia_max, OPERACOES_DIA_MAX_CONSERVADOR),
+        "perdas_seguidas_max": min(base.perdas_seguidas_max, PERDAS_SEGUIDAS_MAX_CONSERVADOR)})
+    validar_coerencia(cfg)
+    if stop_maximo_efetivo_pontos(cfg, perfil.ponto_valor_brl) < perfil.tick_pontos:
+        raise ErroConfig(f"perfil {perfil.simbolo_base}: perda por operacao de R$ {cfg.perda_max_operacao_brl:.2f} nao "
+                         "comporta nem 1 tick de stop mais a folga; ajuste o perfil ou aprove risco proprio")
+    return cfg
+
+
+def arquivos_de_risco_do_ativo(perfil: PerfilInstrumento, caminho: str | Path, aprovacao: str | Path | None
+                               ) -> tuple[Path, Path | None]:
+    """`risco-<ativo>.toml` (ao lado de risco.toml) e seu registro de aprovacao (ao lado do de risco.toml)."""
+    nome = f"risco-{perfil.simbolo_base.lower()}.toml"
+    return Path(caminho).with_name(nome), (Path(aprovacao).with_name(nome) if aprovacao else None)
+
+
+def risco_do_ativo(perfil: PerfilInstrumento, caminho: str | Path, aprovacao: str | Path | None, *,
+                   ao_vivo: bool = False) -> tuple[ConfigRisco, str | None]:
+    """Politica de risco do ATIVO. Devolve (config, erro); `erro` nao nulo => rotular `risco_nao_aprovado`.
+
+    * ativo cujo config/risco.toml foi aprovado (`risco_aprovado_padrao`): politica travada por hash;
+    * outro ativo: exige `risco-<ativo>.toml` com aprovacao de hash; sem isso usa `limites_conservadores`
+      (ao vivo, recusa: `ErroConfig`). Limites de um ativo NUNCA valem para outro."""
+    erro: str | None = None
+    if perfil.risco_aprovado_padrao:
+        try:
+            return carregar_politica(caminho, aprovacao), None
+        except Exception as e:
+            erro = f"{type(e).__name__}: {e}"
+            fallback = ConfigRisco()
+    else:
+        arq, apr = arquivos_de_risco_do_ativo(perfil, caminho, aprovacao)
+        if arq.is_file():
+            try:
+                return carregar_politica(arq, apr if apr is not None and apr.is_file() else None), None
+            except Exception as e:
+                erro = f"{type(e).__name__}: {e}"
+        else:
+            erro = f"sem {arq.name} aprovado para o ativo {perfil.simbolo_base}"
+        try:
+            base = ConfigRisco(**carregar_toml(caminho)) if Path(caminho).is_file() else ConfigRisco()
+        except Exception:
+            base = ConfigRisco()
+        fallback = limites_conservadores(perfil, base)
+    if ao_vivo:
+        raise ErroConfig(f"politica de risco nao aprovada: {erro}")
+    return fallback, erro

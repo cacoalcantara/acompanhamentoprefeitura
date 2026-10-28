@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from robowin.core.config import ErroConfig
+from robowin.core.config import ErroConfig, carregar_toml
 
 
 def _params(a: argparse.Namespace) -> Any:
@@ -20,7 +20,7 @@ def _params(a: argparse.Namespace) -> Any:
         seed=a.seed, n_ticks=a.n_ticks, sinal_forca=a.sinal_forca, saida=Path(a.saida), provedor=a.provedor,
         config=Path(a.config), catalogo=Path(a.catalogo), risco=Path(a.risco), aprovacao=Path(a.aprovacao),
         theta_brl=a.theta, com_condicional=not a.sem_condicional, p_timeout=a.p_timeout, p_http=a.p_http,
-        passo_s=a.passo_s, checagem_s=a.checagem_s,
+        passo_s=a.passo_s, checagem_s=a.checagem_s, ativo=a.ativo,
         idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 60.0)
 
 
@@ -32,7 +32,11 @@ def _cmd_simular(a: argparse.Namespace) -> int:
     except ErroConfig as e:
         print(f"ERRO: {e}")
         return 2
-    print("SIMULACAO / SINTETICO: sessao completa em tempo simulado (nenhuma ordem real).")
+    ativo = s.orq.ativo
+    print(f"SIMULACAO / SINTETICO: sessao completa em tempo simulado (nenhuma ordem real). Ativo: {ativo}.")
+    if s.orq.perfil.a_confirmar:
+        print(f"ATENCAO: perfil {ativo} a_confirmar ({'; '.join(s.orq.perfil.a_confirmar_itens)}). "
+              "Resultado so de simulacao, rotulado 'ativo_a_confirmar'; operar esta BLOQUEADO ate confirmar.")
     try:
         resumo = asyncio.run(executar_sessao(s))
     finally:
@@ -45,8 +49,8 @@ def _cmd_simular(a: argparse.Namespace) -> int:
 
 def _cmd_nucleo(a: argparse.Namespace) -> int:
     from robowin.core.config import caminho_flag_emergencia
+    from robowin.core.instrumentos import perfil_da_config
     from robowin.core.relogio import RelogioReal
-    from robowin.core.tipos import Instrumento
     from robowin.modelos.microestrutura import ModeloMicroestrutura
 
     from .nucleo import FonteZMQ, Nucleo
@@ -54,16 +58,18 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
 
     p = ParamsSimulacao(
         saida=Path(a.saida), provedor=a.provedor, config=Path(a.config), catalogo=Path(a.catalogo),
-        risco=Path(a.risco), aprovacao=Path(a.aprovacao), passo_s=a.passo_s, checagem_s=a.checagem_s,
+        risco=Path(a.risco), aprovacao=Path(a.aprovacao), passo_s=a.passo_s, checagem_s=a.checagem_s, ativo=a.ativo,
         idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 15.0,
         com_condicional=not a.sem_condicional, arquivo_emergencia=caminho_flag_emergencia(a.config, a.arquivo_emergencia))
     rel = RelogioReal()
     sessao_id = f"nucleo-{int(time.time())}"
     try:
+        cfg_geral = carregar_toml(a.config) if Path(a.config).is_file() else {}
+        perfil = perfil_da_config(cfg_geral, a.ativo)  # ao vivo: perfil a_confirmar BLOQUEIA (PerfilNaoConfirmado)
         banco, registro, caminho, dir_aud = abrir_banco(p.saida, rel, sessao_id)
         # sem artefato de modelo persistido: o quant fica 'nao_treinado' (honesto) ate haver modelo validado
         m = construir_orquestrador(
-            p, rel=rel, registro=registro, ins=Instrumento(simbolo=a.simbolo),
+            p, rel=rel, registro=registro, ins=perfil.instrumento(a.simbolo or perfil.simbolo_base),
             modelo=ModeloMicroestrutura("logistica"), statarb=None, precos_aux=None, sintetico=False,
             modo_tempo="real", sessao_id=sessao_id, t_ref_ns=rel.agora_ns())
     except ErroConfig as e:
@@ -109,6 +115,8 @@ def _comuns(p: argparse.ArgumentParser) -> None:
     p.add_argument("--provedor", choices=["falso", "real"], default="falso",
                    help="falso (padrao, rotulado) ou real (SDKs oficiais; exige chaves de API no ambiente)")
     p.add_argument("--config", default="config/robowin.toml")
+    p.add_argument("--ativo", default=None,
+                   help="simbolo_base do perfil em config/instrumentos.toml (padrao: [geral].simbolo_base)")
     p.add_argument("--catalogo", default="config/modelos.toml")
     p.add_argument("--risco", default="config/risco.toml")
     p.add_argument("--aprovacao", default="config/aprovacoes/risco-v1.toml")
@@ -136,7 +144,7 @@ def registrar(sub: Any) -> None:
     n.add_argument("--pub", default="tcp://127.0.0.1:5555")
     n.add_argument("--cmd", default="tcp://127.0.0.1:5556", help="ROUTER do gateway (heartbeat); '' desliga")
     n.add_argument("--sem-heartbeat", action="store_true")
-    n.add_argument("--simbolo", default="WIN")
+    n.add_argument("--simbolo", default=None, help="simbolo da corretora (padrao: o simbolo_base do ativo)")
     n.add_argument("--saida", default=f"dados_locais/nucleo/sessao-{int(time.time())}")
     n.add_argument("--arquivo-emergencia", default=None,
                    help="padrao: <[geral].dados do robowin.toml>/EMERGENCIA (mesmo caminho do painel e do gateway)")

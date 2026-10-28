@@ -57,7 +57,7 @@ def n_proporcao_poder(p0: float, p1: float, alfa: float = 0.05, poder: float = 0
 
 
 def acerto_equilibrio(stop_pontos: float, alvo_pontos: float, custos_brl: float,
-                      ponto_valor_brl: float = 0.20) -> float:
+                      ponto_valor_brl: float) -> float:
     """Taxa de acerto que zera a expectativa liquida: p*G - (1-p)*L = c, ou seja p = (L + c)/(G + L), com
     G = alvo*ponto_valor e L = stop*ponto_valor em BRL; `custos_brl` por ida e volta (tarifas + corretagem +
     slippage) e descontado UMA vez do resultado esperado (nao de cada lado)."""

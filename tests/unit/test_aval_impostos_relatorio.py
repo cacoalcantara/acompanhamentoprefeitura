@@ -3,6 +3,7 @@ import json
 import sqlite3
 
 import pytest
+from perfis_teste import WIN
 
 from robowin.avaliacao import impostos, relatorio
 from robowin.avaliacao.cli_cmds import carregar_trades
@@ -129,12 +130,12 @@ def test_selo_recusa_origem_desconhecida_poucos_pregoes_e_dsr_sem_variancia():
 
 
 def test_aviso_de_acerto_vem_dos_parametros_efetivos():
-    efetivo = relatorio.stop_efetivo_padrao_pontos()
+    efetivo = relatorio.stop_efetivo_padrao_pontos(WIN)
     assert efetivo == 250.0  # (300+50)*0.2 = 70 > 60 => stop efetivo 250
-    txt = relatorio.texto_aviso_acerto()
+    txt = relatorio.texto_aviso_acerto(WIN)
     assert "250 pontos" in txt and "300 pontos" not in txt and "76%" not in txt
-    assert "NAO implica expectativa positiva" in relatorio.texto_aviso_acerto(stop_pontos=200, alvo_pontos=50)
-    assert "200 pontos" in relatorio.texto_aviso_acerto(stop_pontos=200, alvo_pontos=50)
+    assert "NAO implica expectativa positiva" in relatorio.texto_aviso_acerto(WIN, stop_pontos=200, alvo_pontos=50)
+    assert "200 pontos" in relatorio.texto_aviso_acerto(WIN, stop_pontos=200, alvo_pontos=50)
 
 
 def test_acerto_alto_com_expectativa_negativa_e_aviso():

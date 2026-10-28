@@ -4,6 +4,7 @@ import json
 import re
 
 import pytest
+from perfis_teste import WIN
 
 from robowin.ia.dossie import (
     ErroDossie,
@@ -24,7 +25,7 @@ def _ticks(n=1000, drift=0.1):
 
 
 def _dossie(**kw):
-    args = dict(t0_ns=T0, ticks=_ticks(), spread_pontos=5.0, regime="tendencia",
+    args = dict(t0_ns=T0, ticks=_ticks(), spread_pontos=5.0, tick_pontos=5.0, regime="tendencia",
                 limites={"contratos_restantes": 1, "perda_restante_dia_brl": 180.0},
                 minutos_desde_abertura=90, minutos_para_zeragem=300)
     args.update(kw)
@@ -95,7 +96,7 @@ def test_ticks_do_futuro_nao_vazam():
     d2 = _dossie(ticks=_ticks())
     assert d1 == d2
     with pytest.raises(ErroDossie):
-        montar_dossie(t0_ns=T0, ticks=[(T0 + S, BASE)])
+        montar_dossie(t0_ns=T0, ticks=[(T0 + S, BASE)], tick_pontos=WIN.tick_pontos)
 
 
 def test_pontos_sao_relativos_ao_ultimo_preco():

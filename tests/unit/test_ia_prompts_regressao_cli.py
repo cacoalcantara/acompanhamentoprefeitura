@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from perfis_teste import WIN
 
 from robowin.cli import main
 from robowin.core.tipos import Acao, PropostaIA
@@ -74,25 +75,25 @@ class Esperto(ProvedorFalso):
 
 
 async def test_bateria_fixa_e_estavel():
-    assert [c.id for c in bateria_padrao()] == [c.id for c in bateria_padrao()]
-    assert len(bateria_padrao()) >= 4
+    assert [c.id for c in bateria_padrao(WIN)] == [c.id for c in bateria_padrao(WIN)]
+    assert len(bateria_padrao(WIN)) >= 4
 
 
 async def test_regressao_ok_com_modelo_estavel():
     p = Esperto()
     p.nome = "openai"
-    res = await rodar_regressao(p, "openai:gpt-x", k=3, fixavel=False)
+    res = await rodar_regressao(p, "openai:gpt-x", perfil=WIN, k=3, fixavel=False)
     assert res.ok, res.violacoes
     assert res.modelos_servidos == ("gpt-x-v1",) and not res.mudou_modelo_servido
     assert res.alias_nao_fixavel  # alias sem snapshot: sinalizado mesmo quando estavel
     assert all(r.n == 3 and r.validas == 3 for r in res.por_caso.values())
-    assert p.chamadas == 3 * len(bateria_padrao())
+    assert p.chamadas == 3 * len(bateria_padrao(WIN))
 
 
 async def test_regressao_sinaliza_mudanca_do_modelo_servido():
     p = Esperto()
     p.nome = "openai"
-    res = await rodar_regressao(p, "openai:gpt-x", k=2, fixavel=False, servido_anterior="gpt-x-v0")
+    res = await rodar_regressao(p, "openai:gpt-x", perfil=WIN, k=2, fixavel=False, servido_anterior="gpt-x-v0")
     assert res.mudou_modelo_servido and not res.ok
     assert any("modelo servido mudou" in v for v in res.violacoes)
 
@@ -104,7 +105,7 @@ async def test_regressao_sinaliza_mudanca_no_meio_da_execucao():
             return await super()._executar(**kw)
     try:
         p = Troca()
-        res = await rodar_regressao(p, "openai:gpt-x", k=3, fixavel=False)
+        res = await rodar_regressao(p, "openai:gpt-x", perfil=WIN, k=3, fixavel=False)
         assert res.mudou_modelo_servido and set(res.modelos_servidos) == {"gpt-x-v1", "gpt-x-v2"}
     finally:
         Esperto.servido = "gpt-x-v1"
@@ -112,7 +113,7 @@ async def test_regressao_sinaliza_mudanca_no_meio_da_execucao():
 
 async def test_regressao_falha_com_respostas_invalidas_e_fora_de_faixa():
     ruim = ProvedorFalso(roteiro=["lixo"])
-    res = await rodar_regressao(ruim, "falso:m", k=2)
+    res = await rodar_regressao(ruim, "falso:m", perfil=WIN, k=2)
     assert not res.ok and any("validas" in v for v in res.violacoes)
     # modelo que sempre compra: acao fora do aceito na bateria
     class Compra(Esperto):
@@ -121,13 +122,13 @@ async def test_regressao_falha_com_respostas_invalidas_e_fora_de_faixa():
             obj = PropostaIA(acao=Acao.COMPRAR, stop_pontos=50, alvo_pontos=60)
             r.objeto, r.texto, r.modelo_servido = obj, obj.model_dump_json(), "m-FALSO"
             return r
-    res2 = await rodar_regressao(Compra(), "falso:m", k=2, faixas=Faixas(taxa_acao_aceita_min=0.9))
+    res2 = await rodar_regressao(Compra(), "falso:m", perfil=WIN, k=2, faixas=Faixas(taxa_acao_aceita_min=0.9))
     assert any("acoes aceitas" in v for v in res2.violacoes)
 
 
 def test_proposta_da_bateria_validada_pelo_validador():
-    caso = next(c for c in bateria_padrao() if c.id == "posicao_comprada_perdendo")
-    assert not validar_proposta(PropostaIA(acao=Acao.COMPRAR, stop_pontos=10, alvo_pontos=10), caso.dossie).ok
+    caso = next(c for c in bateria_padrao(WIN) if c.id == "posicao_comprada_perdendo")
+    assert not validar_proposta(PropostaIA(acao=Acao.COMPRAR, stop_pontos=10, alvo_pontos=10), caso.dossie, stop_max_pontos=WIN.stop_max_pontos).ok
     assert "proponente" not in mensagem_proponente(caso.dossie)  # a mensagem so leva o dossie
 
 

@@ -7,14 +7,17 @@ from types import SimpleNamespace as NS
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from test_mt5_comum import OFFSET_S, SIMB, T0_MS, T0_NS, montar_duble, ticks_planos
+from perfis_teste import WIN
+from test_mt5_comum import OFFSET_S, SIMB, T0_MS, T0_NS, especificacao_win, montar_duble, ticks_planos
 
 from robowin.core.relogio import RelogioSimulado
 from robowin.mt5 import constantes as C
-from robowin.mt5.contrato import ContratoRecusado, escolher_simbolo, resolver_contrato_win
-from robowin.mt5.duble import DubleMT5, criar_duble_padrao, especificacao_win
-from robowin.mt5.specs import ESPEC_WIN, preenchimento_do_simbolo, validar_especificacoes
+from robowin.mt5.contrato import ContratoRecusado, escolher_simbolo, resolver_contrato
+from robowin.mt5.duble import DubleMT5, criar_duble_padrao
+from robowin.mt5.specs import EspecEsperada, preenchimento_do_simbolo, validar_especificacoes
 from robowin.mt5.tempo_servidor import RelogioServidor, calibrar, estimar_offset
+
+ESPEC = EspecEsperada.do_perfil(WIN)
 
 
 def duble_com(nomes, venc=None, **alt):
@@ -31,7 +34,7 @@ def duble_com(nomes, venc=None, **alt):
 def test_resolve_contrato_vigente_no_duble_padrao():
     d = criar_duble_padrao()
     d.initialize()
-    r = resolver_contrato_win(d, dt.date(2026, 10, 27))
+    r = resolver_contrato(d, dt.date(2026, 10, 27), WIN)
     i = r.instrumento
     assert r.simbolo_corretora == "WINZ26" and i.simbolo == "WINZ26" and i.vencimento == "2026-12-16"
     assert i.tick_pontos == 5.0 and i.ponto_valor_brl == pytest.approx(0.20) and i.lote == 1
@@ -49,29 +52,29 @@ def test_resolve_contrato_vigente_no_duble_padrao():
 def test_contrato_nas_datas_criticas(dia, esperado):
     d = criar_duble_padrao()
     d.initialize()
-    assert resolver_contrato_win(d, dia).simbolo_corretora == esperado
+    assert resolver_contrato(d, dia, WIN).simbolo_corretora == esperado
 
 
 def test_mesmo_prefixo_e_sufixo_da_corretora():
     d = duble_com(["B3.WINZ26.A", "B3.WING27.A", "B3.INDZ26.A"])
-    r = resolver_contrato_win(d, dt.date(2026, 10, 27), esperado=ESPEC_WIN)
+    r = resolver_contrato(d, dt.date(2026, 10, 27), WIN)
     assert r.simbolo_corretora == "B3.WINZ26.A" and (r.prefixo, r.sufixo) == ("B3.", ".A")
 
 
 def test_decoracao_predominante_resolve_ambiguidade():
-    c = escolher_simbolo(["WINZ26", "WINZ26F", "WING27"], "WINZ26")
+    c = escolher_simbolo(["WINZ26", "WINZ26F", "WING27"], "WINZ26", WIN)
     assert c.nome == "WINZ26"
     with pytest.raises(ContratoRecusado):
-        escolher_simbolo(["WINZ26", "XWINZ26", "WING27F", "WINJ27F"], "WINZ26")
+        escolher_simbolo(["WINZ26", "XWINZ26", "WING27F", "WINJ27F"], "WINZ26", WIN)
 
 
 def test_contrato_nao_oferecido_recusa():
     d = duble_com(["WING27", "WINJ27"])
     with pytest.raises(ContratoRecusado, match="nao oferecido"):
-        resolver_contrato_win(d, dt.date(2026, 10, 27))
+        resolver_contrato(d, dt.date(2026, 10, 27), WIN)
     d2 = duble_com(["INDZ26"])
     with pytest.raises(ContratoRecusado):
-        resolver_contrato_win(d2, dt.date(2026, 10, 27))
+        resolver_contrato(d2, dt.date(2026, 10, 27), WIN)
 
 
 @pytest.mark.parametrize("campo,valor", [
@@ -81,24 +84,24 @@ def test_contrato_nao_oferecido_recusa():
 def test_especificacao_divergente_recusa(campo, valor):
     d = duble_com([SIMB, "WING27"], **{SIMB: {campo: valor}})
     with pytest.raises(ContratoRecusado):
-        resolver_contrato_win(d, dt.date(2026, 10, 27))
+        resolver_contrato(d, dt.date(2026, 10, 27), WIN)
 
 
 def test_vencimento_divergente_do_calendario_recusa():
     errado = int(dt.datetime(2026, 12, 30, tzinfo=dt.UTC).timestamp())
     d = duble_com([SIMB], **{SIMB: {"expiration_time": errado}})
     with pytest.raises(ContratoRecusado, match="vencimento"):
-        resolver_contrato_win(d, dt.date(2026, 10, 27))
+        resolver_contrato(d, dt.date(2026, 10, 27), WIN)
     certo = int(dt.datetime(2026, 12, 16, 21, tzinfo=dt.UTC).timestamp())
-    assert resolver_contrato_win(duble_com([SIMB], **{SIMB: {"expiration_time": certo}}), dt.date(2026, 10, 27))
+    assert resolver_contrato(duble_com([SIMB], **{SIMB: {"expiration_time": certo}}), dt.date(2026, 10, 27), WIN)
 
 
 def test_validar_especificacoes_lista_divergencias():
-    assert validar_especificacoes(especificacao_win("WINZ26")) == []
-    assert validar_especificacoes(None)
+    assert validar_especificacoes(especificacao_win("WINZ26"), ESPEC) == []
+    assert validar_especificacoes(None, ESPEC)
     ruim = especificacao_win("WINZ26")
     ruim.trade_tick_size, ruim.trade_tick_value = 10.0, 2.0
-    assert len(validar_especificacoes(ruim)) == 1  # tick diverge; valor do ponto (0,20) confere
+    assert len(validar_especificacoes(ruim, ESPEC)) == 1  # tick diverge; valor do ponto (0,20) confere
 
 
 def test_preenchimento_lido_do_simbolo():

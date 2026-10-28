@@ -48,7 +48,7 @@ class _Viva:
 
 @dataclass
 class CotadorMM:
-    params: ParamsAS = field(default_factory=ParamsAS)
+    params: ParamsAS
     cfg: ConfigMM = field(default_factory=ConfigMM)
     monitor: MonitorAntimanipulacao = field(default_factory=lambda: MonitorAntimanipulacao(LimitesAntimanipulacao()))
     braco: str = "mm"

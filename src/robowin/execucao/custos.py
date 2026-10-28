@@ -4,30 +4,18 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 
-from ..core.tipos import Base
+from ..core.instrumentos import PerfilInstrumento, TarifaB3, perfil_de_instrumento
+from ..core.tipos import Instrumento
 
+__all__ = ["TarifaB3", "Custos", "CustoLado", "tarifa_em"]
 
-class TarifaB3(Base):
-    vigente_desde: str  # AAAA-MM-DD
-    tarifa_lado_brl: float  # emolumentos + liquidacao por contrato e por lado
-    taxa_zeragem_brl: float = 0.0  # cobrada pela corretora na zeragem forcada (por contrato)
-    fonte: str = ""
-
-
-# [a confirmar] valores do plano (secao 8): ~R$ 0,25/lado em day trade. Novas vigencias entram AQUI,
-# sem apagar as antigas, para o backtest reproduzir os custos da epoca.
-TABELA_TARIFAS: tuple[TarifaB3, ...] = (
-    TarifaB3(vigente_desde="2025-01-01", tarifa_lado_brl=0.25, taxa_zeragem_brl=0.0,
-             fonte="premissa do plano v1 (secao 8) - V4.8 a confirmar"),
-    TarifaB3(vigente_desde="2026-11-03", tarifa_lado_brl=0.25, taxa_zeragem_brl=0.0,
-             fonte="premissa do plano v1 (nova grade); confirmar com o oficio da B3"),
-)
-
+# A tabela de tarifas B3 (versionada por vigencia) mora em config/instrumentos.toml, por ativo: novas vigencias
+# entram LA, sem apagar as antigas, para o backtest reproduzir os custos da epoca.
 CORRETAGEM_BASE_IDA_VOLTA_BRL = 0.0
 CORRETAGEM_ESTRESSE_IDA_VOLTA_BRL = 0.22
 
 
-def tarifa_em(d: dt.date, tabela: tuple[TarifaB3, ...] = TABELA_TARIFAS) -> TarifaB3:
+def tarifa_em(d: dt.date, tabela: tuple[TarifaB3, ...]) -> TarifaB3:
     vig = [t for t in tabela if t.vigente_desde <= d.isoformat()]
     if not vig:
         raise ValueError(f"sem tarifa B3 vigente em {d}")
@@ -46,12 +34,19 @@ class CustoLado:
 
 @dataclass(frozen=True)
 class Custos:
-    tabela: tuple[TarifaB3, ...] = TABELA_TARIFAS
+    tabela: tuple[TarifaB3, ...]
     corretagem_ida_volta_brl: float = CORRETAGEM_BASE_IDA_VOLTA_BRL
 
     @classmethod
-    def estresse(cls) -> Custos:
-        return cls(corretagem_ida_volta_brl=CORRETAGEM_ESTRESSE_IDA_VOLTA_BRL)
+    def do_perfil(cls, perfil: PerfilInstrumento, corretagem_ida_volta_brl: float = CORRETAGEM_BASE_IDA_VOLTA_BRL) -> Custos:
+        return cls(tabela=perfil.tarifas, corretagem_ida_volta_brl=corretagem_ida_volta_brl)
+
+    @classmethod
+    def do_instrumento(cls, ins: Instrumento) -> Custos:
+        return cls.do_perfil(perfil_de_instrumento(ins))
+
+    def estresse(self) -> Custos:
+        return Custos(tabela=self.tabela, corretagem_ida_volta_brl=CORRETAGEM_ESTRESSE_IDA_VOLTA_BRL)
 
     def lado(self, d: dt.date, quantidade: int, zeragem: bool = False) -> CustoLado:
         t = tarifa_em(d, self.tabela)

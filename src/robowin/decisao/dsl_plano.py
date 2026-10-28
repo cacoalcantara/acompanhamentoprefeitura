@@ -53,7 +53,7 @@ def limite_janela_ns(c: Condicao, t_armado_ns: int) -> int | None:
 
 
 def condicao_satisfeita(c: Condicao, *, ref: float, est: EstadoPlano, t_armado_ns: int,
-                        tick_pontos: float = 5.0, papel: Literal["gatilho", "invalidacao"] = "gatilho") -> bool:
+                        tick_pontos: float, papel: Literal["gatilho", "invalidacao"] = "gatilho") -> bool:
     if c.tipo not in TIPOS_CONDICAO:
         return False  # fora da DSL nunca dispara (nem invalida: o plano nem seria aceito)
     if c.tipo == "preco_toca":
@@ -78,7 +78,7 @@ def condicao_satisfeita(c: Condicao, *, ref: float, est: EstadoPlano, t_armado_n
 
 
 def gatilhos_satisfeitos(plano: PlanoCondicional, *, ref: float, est: EstadoPlano, t_armado_ns: int,
-                         tick_pontos: float = 5.0) -> bool:
+                         tick_pontos: float) -> bool:
     """TODOS os gatilhos precisam ocorrer (o validador exige ao menos um)."""
     return bool(plano.gatilhos) and all(
         condicao_satisfeita(c, ref=ref, est=est, t_armado_ns=t_armado_ns, tick_pontos=tick_pontos)
@@ -86,7 +86,7 @@ def gatilhos_satisfeitos(plano: PlanoCondicional, *, ref: float, est: EstadoPlan
 
 
 def invalidacao_ativa(plano: PlanoCondicional, *, ref: float, est: EstadoPlano, t_armado_ns: int,
-                      tick_pontos: float = 5.0) -> Condicao | None:
+                      tick_pontos: float) -> Condicao | None:
     """Primeira invalidacao verdadeira (QUALQUER uma cancela) ou None."""
     for c in plano.invalidacoes:
         if condicao_satisfeita(c, ref=ref, est=est, t_armado_ns=t_armado_ns, tick_pontos=tick_pontos,

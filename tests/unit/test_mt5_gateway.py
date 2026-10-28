@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from perfis_teste import WIN
 from test_mt5_comum import LOGIN, SERVIDOR, SIMB, T0_MS, T0_NS, cmd, montar_duble, ticks_planos
 
 from robowin.core.barramento import BarramentoLocal
@@ -22,7 +23,7 @@ def montar_gw(tmp_path, ticks=None, duble_kw=None, **cfg_kw):
     eventos: list[dict] = []
     bus.assinar("*", eventos.append)
     canal = CanalComandosLocal()
-    cfg = ConfigGateway(login=LOGIN, servidor=SERVIDOR, hoje=dt.date(2026, 10, 27), dir_log=tmp_path / "log",
+    cfg = ConfigGateway(perfil=WIN, login=LOGIN, servidor=SERVIDOR, hoje=dt.date(2026, 10, 27), dir_log=tmp_path / "log",
                         inicio_coleta_ns=T0_NS - 1_000_000_000, espera_emergencia_s=0.0, **cfg_kw)
     gw = Gateway(d, cfg, rel, bus, canal, dormir=lambda s: rel.avancar(int(s * 1e9)))
     gw.iniciar()
@@ -134,7 +135,7 @@ def test_ordem_apos_troca_para_conta_real_responde_recusa_e_para(tmp_path):
 def test_inicio_recusa_conta_real_e_contest(tmp_path):
     for modo in ("real", "contest"):
         d, rel = montar_duble(ticks_planos(), trade_mode=modo)
-        gw = Gateway(d, ConfigGateway(login=LOGIN, servidor=SERVIDOR, hoje=dt.date(2026, 10, 27)), rel,
+        gw = Gateway(d, ConfigGateway(perfil=WIN, login=LOGIN, servidor=SERVIDOR, hoje=dt.date(2026, 10, 27)), rel,
                      BarramentoLocal(), CanalComandosLocal())
         with pytest.raises(ExecucaoRealNaoAutorizada):
             gw.iniciar()

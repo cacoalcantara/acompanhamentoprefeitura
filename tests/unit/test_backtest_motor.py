@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import pytest
+from perfis_teste import INS_WIN, WIN
 
 from robowin.avaliacao import relatorio
 from robowin.avaliacao.cli_cmds import banco_sintetico, carregar_trades
@@ -68,7 +69,7 @@ class Roteiro:
 
 
 def cfg(**kw) -> ConfigBacktest:
-    base = dict(aquecimento_s=0.0, intervalo_decisao_s=1.0, latencia=DistribuicaoLatencia.fixa(100.0))
+    base = dict(instrumento=INS_WIN, aquecimento_s=0.0, intervalo_decisao_s=1.0, latencia=DistribuicaoLatencia.fixa(100.0))
     base.update(kw)
     return ConfigBacktest(**base)
 
@@ -101,13 +102,13 @@ def test_backtest_sem_metatrader5_order_send_nem_indicadores():
 
 # ============================================================================================== determinismo
 def _sintetico(seed=5, n=3000):
-    return gerar(ConfigSintetico(seed=seed, n_ticks=n))
+    return gerar(ConfigSintetico.do_perfil(WIN, seed=seed, n_ticks=n))
 
 
 def _rodar_sint(d, seed_braco=1, seed_motor=1, banco=None):
     bracos = [ControleAleatorio(seed_braco, p_entrada=0.2), NaoOperar()]
     return MotorBacktest(FonteMemoria(d.ticks, d.livros, sintetico=True), bracos,
-                         ConfigBacktest(seed=seed_motor, intervalo_decisao_s=30.0), banco).executar()
+                         ConfigBacktest(instrumento=INS_WIN, seed=seed_motor, intervalo_decisao_s=30.0), banco).executar()
 
 
 def test_mesma_seed_gera_hash_identico_e_seed_diferente_gera_outro():

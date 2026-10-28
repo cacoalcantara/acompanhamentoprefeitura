@@ -9,7 +9,7 @@ import robowin
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="robowin", description="Agente de IA para day trade de WIN (simulacao)")
+    p = argparse.ArgumentParser(prog="robowin", description="Agente de IA para day trade na B3 (simulacao; ativo configuravel em config/instrumentos.toml)")
     sub = p.add_subparsers(dest="cmd")
     for m in pkgutil.iter_modules(robowin.__path__):
         if not m.ispkg:

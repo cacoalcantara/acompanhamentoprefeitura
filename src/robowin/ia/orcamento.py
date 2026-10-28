@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from robowin.core.instrumentos import exigir_mesmo_ativo
 from robowin.core.tipos import ChamadaLLM
 
 
@@ -30,18 +31,25 @@ class Reserva:
 
 class OrcamentoIA:
     def __init__(self, teto_mensal_usd: float, *, pregoes_no_mes: int = 21, gasto_mes_usd: float = 0.0,
-                 fator_ritmo: float = 1.0):
+                 fator_ritmo: float = 1.0, ativo: str = ""):
         if teto_mensal_usd <= 0:
             raise ValueError("teto mensal deve ser positivo")
         self.teto = float(teto_mensal_usd)
         self.gasto_mes = float(gasto_mes_usd)
         self.gasto_hoje = 0.0
         self.fator_ritmo = fator_ritmo
+        self.ativo = ativo  # o orcamento (gasto e ritmo) pertence a UM ativo: nunca e reutilizado em outro
         self.cota_dia = self.teto / max(pregoes_no_mes, 1) * fator_ritmo
         self.dia: str | None = None
         self._reservas: dict[int, float] = {}
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
+
+    def vincular_ativo(self, ativo: str) -> None:
+        """Vincula o orcamento ao ativo da sessao; recusa (AtivoDivergente) se ja pertence a outro."""
+        if self.ativo:
+            exigir_mesmo_ativo(ativo, self.ativo, "orcamento de IA")
+        self.ativo = ativo
 
     # --- ciclo do pregao ---
     def iniciar_pregao(self, dia: str, pregoes_restantes: int) -> None:
@@ -89,7 +97,7 @@ class OrcamentoIA:
             self._reservas.pop(reserva.id, None)
 
     def estado(self) -> dict[str, Any]:
-        return {"teto": self.teto, "gasto_mes": self.gasto_mes, "gasto_hoje": self.gasto_hoje,
+        return {"ativo": self.ativo, "teto": self.teto, "gasto_mes": self.gasto_mes, "gasto_hoje": self.gasto_hoje,
                 "reservado": self.reservado, "cota_dia": self.cota_dia, "esgotado": self.esgotado}
 
 

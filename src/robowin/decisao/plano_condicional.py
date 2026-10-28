@@ -82,7 +82,7 @@ class EventoPlano:
 @dataclass
 class GerenciadorPlano:
     braco: str
-    tick_pontos: float = 5.0
+    tick_pontos: float
     validade_disparo_s: float = 30.0  # a intencao gerada no disparo vale este tempo para o motor de risco
     armado: PlanoArmado | None = None
     historico: list[EventoPlano] = field(default_factory=list)

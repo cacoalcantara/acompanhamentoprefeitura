@@ -1,4 +1,4 @@
-"""Sinal StatArb padrao (implementa `SinalStatArb`): z-score do residuo WIN x referencias, direcional para o WIN.
+"""Sinal StatArb padrao (implementa `SinalStatArb`): z-score do residuo ALVO x referencias, direcional para o ativo alvo.
 
 Status segue o registro de modelos: 'nao_treinado' -> 'em_validacao' (treinar) -> 'validado_oos' | 'reprovado'
 (validar_oos). Enquanto nao validado, o sinal direcional e sempre 0.0 (os z-scores continuam sendo reportados).
@@ -10,14 +10,14 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 
-from .base import BaseWinVista
+from .base import BaseAlvoVista
 from .cointegracao import ResultadoEG, engle_granger
 
 
 class SinalStatArbPadrao:
     nome = "statarb_padrao"
 
-    def __init__(self, alvo: str = "WIN", referencias: Sequence[str] = ("BOVA11",), z_entrada: float = 2.0,
+    def __init__(self, alvo: str, referencias: Sequence[str], z_entrada: float = 2.0,
                  alfa: float = 0.05, meia_vida_max: float = 500.0, delta: float = 1e-4, var_obs: float = 1.0,
                  halflife_z: float = 60.0, min_obs: int = 30) -> None:
         self.alvo = alvo
@@ -29,11 +29,11 @@ class SinalStatArbPadrao:
         self.status = "nao_treinado"
         self.ativas: tuple[str, ...] = ()
         self.t_ns = 0
-        self._bases = {r: BaseWinVista(**self._cfg) for r in self.referencias}
+        self._bases = {r: BaseAlvoVista(**self._cfg) for r in self.referencias}
 
     def _reiniciar(self, betas: Mapping[str, float] | None = None) -> None:
         betas = betas or {}
-        self._bases = {r: BaseWinVista(beta0=betas.get(r, 0.0), **self._cfg) for r in self.referencias}
+        self._bases = {r: BaseAlvoVista(beta0=betas.get(r, 0.0), **self._cfg) for r in self.referencias}
 
     def treinar(self, historico: Mapping[str, np.ndarray]) -> dict[str, ResultadoEG]:
         """Engle-Granger do alvo contra cada referencia no historico de treino; aquece os filtros (causal)."""
@@ -86,8 +86,8 @@ class SinalStatArbPadrao:
         z = float(np.mean(zs)) if zs else 0.0
         direcional = 0.0
         if self.status == "validado_oos" and abs(z) >= self.z_entrada:
-            direcional = float(np.clip(-z / (2 * self.z_entrada), -1.0, 1.0))  # WIN caro -> vender
+            direcional = float(np.clip(-z / (2 * self.z_entrada), -1.0, 1.0))  # alvo caro -> vender
         saida["z"] = z
-        saida["direcional_win"] = direcional
+        saida["direcional_alvo"] = direcional
         saida["validado"] = 1.0 if self.status == "validado_oos" else 0.0
         return saida

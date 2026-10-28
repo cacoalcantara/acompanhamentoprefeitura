@@ -2,14 +2,21 @@ import datetime as dt
 
 import numpy as np
 import pytest
+from perfis_teste import INS_WIN, WIN
 
 from robowin.core.calendario_b3 import dt_utc_ns
 from robowin.core.tipos import Lado, Tick
 from robowin.dados.sintetico import ConfigSintetico, gerar
-from robowin.rl.ambiente import AGREDIR, AGUARDAR, APREGOAR, AmbienteExecucao, ConfigAmbiente
+from robowin.rl.ambiente import AGREDIR, AGUARDAR, APREGOAR, ConfigAmbiente
+from robowin.rl.ambiente import AmbienteExecucao as _AmbienteExecucao
 
 T0 = dt_utc_ns(dt.datetime(2026, 11, 10, 13, 0))
 S = 1_000_000_000
+
+
+def AmbienteExecucao(*a, **k):
+    k.setdefault("instrumento", INS_WIN)
+    return _AmbienteExecucao(*a, **k)
 
 
 def tk(seg, bid=130000.0, ask=130005.0, last=None, vol=1.0):
@@ -80,7 +87,7 @@ def test_step_apos_termino_exige_reset():
 
 
 def _dados(seed=3, n=6000):
-    d = gerar(ConfigSintetico(seed=seed, n_ticks=n))
+    d = gerar(ConfigSintetico.do_perfil(WIN, seed=seed, n_ticks=n))
     return d.ticks, d.livros
 
 

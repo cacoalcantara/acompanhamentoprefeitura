@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 import pytest
+from perfis_teste import INS_WIN
 from test_decisao_comum import NS, T0, plano_rel
 
 from robowin.core.tipos import (
@@ -19,18 +20,26 @@ from robowin.core.tipos import (
 )
 from robowin.decisao.dsl_plano import (
     EstadoPlano,
-    condicao_satisfeita,
-    gatilhos_satisfeitos,
-    invalidacao_ativa,
     validar_dsl,
     validar_dsl_absoluto,
+)
+from robowin.decisao.dsl_plano import (
+    condicao_satisfeita as _condicao_satisfeita,
+)
+from robowin.decisao.dsl_plano import (
+    gatilhos_satisfeitos as _gatilhos_satisfeitos,
+)
+from robowin.decisao.dsl_plano import (
+    invalidacao_ativa as _invalidacao_ativa,
 )
 from robowin.decisao.gatilhos import ConfigGatilhos, EstadoGatilho, GerenciadorGatilhos
 from robowin.decisao.plano_condicional import (
     AssinaturaPosicao,
-    GerenciadorPlano,
     converter_plano,
     niveis_recalculados,
+)
+from robowin.decisao.plano_condicional import (
+    GerenciadorPlano as _GerenciadorPlano,
 )
 from robowin.decisao.saidas import GestorSaidas
 from robowin.decisao.validade import (
@@ -45,6 +54,24 @@ from robowin.ia.orcamento import OrcamentoIA
 from robowin.ia.validadores import TIPOS_CONDICAO, validar_plano_bruto
 
 REF = 130_000.0
+TICK = INS_WIN.tick_pontos
+
+
+def _com_tick(fn):
+    def f(*a, **k):
+        k.setdefault("tick_pontos", TICK)
+        return fn(*a, **k)
+    return f
+
+
+condicao_satisfeita = _com_tick(_condicao_satisfeita)
+gatilhos_satisfeitos = _com_tick(_gatilhos_satisfeitos)
+invalidacao_ativa = _com_tick(_invalidacao_ativa)
+
+
+def GerenciadorPlano(braco, **k):
+    return _GerenciadorPlano(braco, TICK, **k)
+
 
 
 def est(preco, t=T0, spread=5.0):
@@ -96,7 +123,7 @@ def test_dsl_so_aceita_a_lista_permitida_sem_construcao_de_indicador():
                                    "janela_tempo"}
     ruim = {"gatilhos": [{"tipo": "cruza_media", "valor": 9}], "invalidacoes": [], "expira_ns": NS}
     assert validar_plano_bruto(ruim)
-    assert condicao_satisfeita.__module__.endswith("dsl_plano")
+    assert _condicao_satisfeita.__module__.endswith("dsl_plano")
     # a DSL nao importa nada de features/indicadores: so tipos do nucleo
     arvore = ast.parse(Path(__import__("robowin.decisao.dsl_plano", fromlist=["x"]).__file__).read_text())
     mods = {n.module for n in ast.walk(arvore) if isinstance(n, ast.ImportFrom)}
@@ -192,7 +219,7 @@ def test_toda_falha_de_ia_vira_motivo_normalizado(erro, cat, esperado):
 
 def test_prazos_pre_registrados_e_margem_do_revisor():
     assert (PRAZOS_IMEDIATO.claude_s, PRAZOS_IMEDIATO.gpt_s, PRAZOS_IMEDIATO.validade_s) == (40.0, 12.0, 60.0)
-    assert PRAZOS_IMEDIATO.desvio_max_pts == 20.0 and PRAZOS_IMEDIATO.margem_s >= 8.0
+    assert PRAZOS_IMEDIATO.desvio_max_ticks == 4.0 and PRAZOS_IMEDIATO.margem_s >= 8.0
     assert PRAZOS_IMEDIATO.prazo_revisor(0.0) == 12.0  # GPT: 12 s
     assert PRAZOS_IMEDIATO.prazo_revisor(45.0) == pytest.approx(7.0)  # sobra: 60 - 8 - 45
     assert PRAZOS_IMEDIATO.prazo_revisor(55.0) < 0  # sem tempo para revisar

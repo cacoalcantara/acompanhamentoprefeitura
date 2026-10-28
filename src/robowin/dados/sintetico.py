@@ -11,17 +11,19 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
 from robowin.core.calendario_b3 import eh_pregao
+from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.tipos import LivroSnapshot, NivelBook, Tick
 
 from .ticks import ArmazenamentoTicks, dia_ns
 
 ROTULO_SINTETICO = "SINTETICO - dados gerados por simulacao; NAO sao dados de mercado"
 FLAG_BID, FLAG_ASK, FLAG_LAST, FLAG_VOLUME, FLAG_BUY, FLAG_SELL = 2, 4, 8, 16, 32, 64  # constantes do MT5
-TICK_PTS = 5.0
+SALTO_TICKS = 300.0  # "limit move" padrao, em ticks do ativo
 _SESSAO_S = 9 * 3600 + 25 * 60  # 09:00 -> 18:25
 
 
@@ -29,19 +31,29 @@ _SESSAO_S = 9 * 3600 + 25 * 60  # 09:00 -> 18:25
 class ConfigSintetico:
     seed: int = 42
     data: dt.date = dt.date(2026, 3, 10)
-    simbolo: str = "SINT_WIN"
+    simbolo: str = "SINT"
+    tick_pontos: float = 1.0              # tick do ativo (perfil): use ConfigSintetico.do_perfil
     n_ticks: int = 20_000
-    preco_inicial: float = 130_000.0
-    passo_medio_ticks: float = 0.6        # media da quantidade de ticks (5 pts) por negocio, antes da sazonalidade
+    preco_inicial: float = 100.0          # nivel de preco do ativo (perfil.preco_sintetico_ref)
+    passo_medio_ticks: float = 0.6        # media da quantidade de ticks por negocio, antes da sazonalidade
     sinal_forca: float = 0.0              # 0 = sem sinal; ex. 0.03 => P(continuacao) = 0.53
     gap_abertura_pts: float = 0.0
     n_saltos: int = 0                     # "limit moves" instantaneos
-    salto_pts: float = 1_500.0
+    salto_pts: float | None = None        # None => SALTO_TICKS ticks do ativo
     n_lacunas: int = 0                    # janelas sem ticks (feed parado)
     lacuna_s: float = 120.0
     offset_servidor_ms: int = 0
     livro_a_cada_ticks: int = 20          # 0 = sem livro
     niveis_livro: int = 5
+
+
+    @classmethod
+    def do_perfil(cls, perfil: PerfilInstrumento, **kw: Any) -> ConfigSintetico:
+        """Dados sinteticos na grade de tick e no nivel de preco do ativo (rotulados `SINT_<ativo>`)."""
+        kw.setdefault("simbolo", f"SINT_{perfil.simbolo_base}")
+        kw.setdefault("tick_pontos", perfil.tick_pontos)
+        kw.setdefault("preco_inicial", perfil.preco_sintetico_ref)
+        return cls(**kw)
 
 
 @dataclass(frozen=True)
@@ -74,12 +86,14 @@ class DadosSinteticos:
         return armazem.gravar(self.config.simbolo, self.ticks)
 
 
-def _arred(x: np.ndarray) -> np.ndarray:
-    return np.round(x / TICK_PTS) * TICK_PTS
+def _arred(x: np.ndarray, tick: float) -> np.ndarray:
+    return np.round(x / tick) * tick
 
 
 def gerar(cfg: ConfigSintetico | None = None) -> DadosSinteticos:
-    cfg = cfg or ConfigSintetico()
+    if cfg is None:
+        raise ValueError("gerar exige ConfigSintetico (use ConfigSintetico.do_perfil(perfil))")
+    tk = cfg.tick_pontos
     rng = np.random.default_rng(cfg.seed)
     n = cfg.n_ticks
     # --- instantes: processo de Poisson nao homogeneo com intensidade em U (abertura/fechamento mais ativos)
@@ -99,15 +113,15 @@ def gerar(cfg: ConfigSintetico | None = None) -> DadosSinteticos:
     s0 = 1.0 if rng.random() < 0.5 else -1.0
     sinal = s0 * np.cumprod(np.where(u < p_cont, 1.0, -1.0))
     passo = rng.poisson(cfg.passo_medio_ticks * vol_t)
-    delta = sinal * passo * TICK_PTS
+    delta = sinal * passo * tk
     # --- saltos (limit moves) e gap de abertura
     if cfg.n_saltos > 0 and n > 1:
         pos = rng.choice(np.arange(1, n), size=min(cfg.n_saltos, n - 1), replace=False)
         sgn = rng.choice([-1.0, 1.0], size=pos.size)
-        delta[pos] += sgn * cfg.salto_pts
-    bid = _arred(cfg.preco_inicial + cfg.gap_abertura_pts + np.cumsum(delta))
-    bid = np.maximum(bid, TICK_PTS)
-    spread = np.where(rng.random(n) < 0.1, 2 * TICK_PTS, TICK_PTS)
+        delta[pos] += sgn * (cfg.salto_pts if cfg.salto_pts is not None else SALTO_TICKS * tk)
+    bid = _arred(cfg.preco_inicial + cfg.gap_abertura_pts + np.cumsum(delta), tk)
+    bid = np.maximum(bid, tk)
+    spread = np.where(rng.random(n) < 0.1, 2 * tk, tk)
     ask = bid + spread
     last = np.where(sinal > 0, ask, bid)
     volume = np.clip(np.round(rng.lognormal(1.2, 0.8, n)), 1, 500)
@@ -132,9 +146,9 @@ def gerar(cfg: ConfigSintetico | None = None) -> DadosSinteticos:
     if cfg.livro_a_cada_ticks > 0:
         for i in np.flatnonzero(keep)[:: cfg.livro_a_cada_ticks]:
             vols = rng.integers(5, 200, size=2 * cfg.niveis_livro)
-            niv = [NivelBook(preco=float(bid[i] - TICK_PTS * k), volume=float(vols[k]), lado="compra")
+            niv = [NivelBook(preco=float(bid[i] - tk * k), volume=float(vols[k]), lado="compra")
                    for k in range(cfg.niveis_livro)]
-            niv += [NivelBook(preco=float(ask[i] + TICK_PTS * k), volume=float(vols[cfg.niveis_livro + k]),
+            niv += [NivelBook(preco=float(ask[i] + tk * k), volume=float(vols[cfg.niveis_livro + k]),
                               lado="venda") for k in range(cfg.niveis_livro)]
             livros.append(LivroSnapshot(t_utc_ns=int(utc_ms[i]) * 1_000_000, niveis=tuple(niv)))
     meta = {"sinal_forca": cfg.sinal_forca, "p_continuacao": p_cont,
