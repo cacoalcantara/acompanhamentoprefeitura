@@ -171,7 +171,7 @@ def _validar_origem_status(origem: str, status: str) -> None:
 
 
 def salvar_artefato(modelo: ModeloMicroestrutura, caminho: str | Path, *, versao: str, barreiras: Any = None,
-                    custos: Any = None) -> str:
+                    custos: Any = None, perfil_hash: str | None = None) -> str:
     """Grava o artefato completo de forma atomica. Devolve o sha256 do ARQUIVO (para o registro)."""
     if modelo.status == "nao_treinado":
         raise ErroArtefato("modelo nao treinado: nada a salvar")
@@ -191,6 +191,7 @@ def salvar_artefato(modelo: ModeloMicroestrutura, caminho: str | Path, *, versao
             "barreiras": _como_dict(barreiras or modelo.config_barreiras),
             "custos": _como_dict(custos or modelo.custos),
             "features": list(modelo.colunas),
+            "perfil_hash": perfil_hash,  # PerfilInstrumento.hash() do ativo no treino: perfil mudou => retreinar
         },
         "estado": {
             "payoff": {lado: _arr(modelo._payoff[lado]) for lado in LADOS},
@@ -241,12 +242,12 @@ def _ler(caminho: Path, sha_arquivo_esperado: str | None) -> dict[str, Any]:
 
 def carregar_artefato(caminho: str | Path, *, ativo: str, sha_arquivo: str | None = None,
                       entrada: Any = None, origem_registro: str | None = None, status_registro: str | None = None,
-                      conferir_codigo: bool = True) -> ModeloMicroestrutura:
+                      conferir_codigo: bool = True, perfil_hash: str | None = None) -> ModeloMicroestrutura:
     """Carrega e valida o artefato. `entrada` (EntradaRegistroModelo) e `origem_registro`/`status_registro`
     cruzam o arquivo com o registro. Levanta `ErroArtefato` ou `AtivoDivergente`; nunca devolve modelo duvidoso."""
     payload = _ler(Path(caminho), sha_arquivo)
     try:
-        return _montar(payload, ativo, entrada, origem_registro, status_registro, conferir_codigo)
+        return _montar(payload, ativo, entrada, origem_registro, status_registro, conferir_codigo, perfil_hash)
     except (ErroArtefato, AtivoDivergente):
         raise
     except Exception as e:  # estrutura inesperada: nunca uma excecao crua para o chamador
@@ -254,7 +255,7 @@ def carregar_artefato(caminho: str | Path, *, ativo: str, sha_arquivo: str | Non
 
 
 def _montar(payload: dict[str, Any], ativo: str, entrada: Any, origem_registro: str | None,
-            status_registro: str | None, conferir_codigo: bool) -> ModeloMicroestrutura:
+            status_registro: str | None, conferir_codigo: bool, perfil_hash: str | None = None) -> ModeloMicroestrutura:
     meta, est = payload["meta"], payload["estado"]
     exigir_mesmo_ativo(ativo, str(meta.get("ativo", "")), f"artefato {meta.get('nome')}@{meta.get('versao')}")
     origem, status = str(meta["origem_dados"]), str(meta["status"])
@@ -274,6 +275,8 @@ def _montar(payload: dict[str, Any], ativo: str, entrada: Any, origem_registro: 
     _validar_origem_status(origem, status)
     if conferir_codigo and meta["hash_codigo"] != hash_codigo():
         raise ErroArtefato("hash do codigo diverge do codigo atual: modelo treinado com outra versao do pipeline")
+    if perfil_hash is not None and meta.get("perfil_hash") != perfil_hash:  # artefato sem hash tambem e recusado
+        raise ErroArtefato("o perfil do ativo mudou desde o treino do modelo (perfil_hash diverge ou ausente): retreine")
     validar_nomes(meta["features"])
     tipo = str(meta["tipo"])
     if tipo not in ("lightgbm", "logistica"):
@@ -321,16 +324,17 @@ def _nome_arquivo(nome: str, versao: str) -> str:
 
 
 def registrar_e_salvar(reg: RegistroModelos, modelo: ModeloMicroestrutura, versao: str, *, barreiras: Any = None,
-                       custos: Any = None) -> Path:
+                       custos: Any = None, perfil_hash: str | None = None) -> Path:
     """Registra a versao (em_validacao) no registro do ativo e grava o artefato ao lado."""
     reg.registrar_modelo(modelo, versao)
     caminho = _dir_artefatos(reg) / _nome_arquivo(modelo.nome, versao)
-    sha = salvar_artefato(modelo, caminho, versao=versao, barreiras=barreiras, custos=custos)
+    sha = salvar_artefato(modelo, caminho, versao=versao, barreiras=barreiras, custos=custos, perfil_hash=perfil_hash)
     reg.registrar_artefato(modelo.nome, versao, caminho.name, sha)
     return caminho
 
 
-def carregar_versao(reg: RegistroModelos, nome: str, versao: str, ativo: str) -> ModeloMicroestrutura:
+def carregar_versao(reg: RegistroModelos, nome: str, versao: str, ativo: str,
+                    perfil_hash: str | None = None) -> ModeloMicroestrutura:
     """Carrega a versao do registro, cruzando ativo, hashes, origem e status. Levanta em qualquer divergencia."""
     entrada = reg.exigir_ativo(nome, versao, ativo)  # AtivoDivergente se de outro ativo
     info = reg.artefato(nome, versao)
@@ -338,7 +342,8 @@ def carregar_versao(reg: RegistroModelos, nome: str, versao: str, ativo: str) ->
         raise ErroArtefato(f"{nome}@{versao} sem artefato persistido")
     caminho = _dir_artefatos(reg) / Path(info["arquivo"]).name  # so o nome: sem sair da pasta
     m = carregar_artefato(caminho, ativo=ativo, sha_arquivo=info["sha256"], entrada=entrada,
-                          origem_registro=reg.origem(nome, versao), status_registro=entrada.status)
+                          origem_registro=reg.origem(nome, versao), status_registro=entrada.status,
+                          perfil_hash=perfil_hash)
     return m
 
 
@@ -365,7 +370,8 @@ class ResultadoCarga:
         return self.modelo is not None
 
 
-def carregar_para_ativo(reg: RegistroModelos | str | Path, nome: str, ativo: str) -> ResultadoCarga:
+def carregar_para_ativo(reg: RegistroModelos | str | Path, nome: str, ativo: str,
+                        perfil_hash: str | None = None) -> ResultadoCarga:
     """Ponto de carga do nucleo/simulacao. NUNCA levanta: sem artefato valido, `modelo=None` e o quant segue
     `nao_treinado` (e NAO opera). Reversao por ponteiro => recarrega o campeao anterior."""
     try:
@@ -377,7 +383,7 @@ def carregar_para_ativo(reg: RegistroModelos | str | Path, nome: str, ativo: str
         if alvo is None:
             return ResultadoCarga(None, motivo=f"nenhuma versao carregavel de {nome} (sem campeao nem em_validacao)")
         versao, papel = alvo
-        return ResultadoCarga(carregar_versao(reg, nome, versao, ativo), versao, papel)
+        return ResultadoCarga(carregar_versao(reg, nome, versao, ativo, perfil_hash), versao, papel)
     except (ErroArtefato, AtivoDivergente, ErroRegistro) as e:
         return ResultadoCarga(None, motivo=f"{e.__class__.__name__}: {e}")
     except Exception as e:  # registro corrompido etc.: recusa sem excecao nao tratada

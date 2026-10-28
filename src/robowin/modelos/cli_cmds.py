@@ -56,9 +56,9 @@ def _treinar(a) -> int:
     registro = a.registro or str(caminho_registro_ativo(perfil.simbolo_base))
     reg = RegistroModelos(registro)
     versao = f"s{a.seed}-{modelo.hash_dados[:8]}"
-    arq = registrar_e_salvar(reg, modelo, versao, barreiras=barreiras, custos=custos)
+    arq = registrar_e_salvar(reg, modelo, versao, barreiras=barreiras, custos=custos, perfil_hash=perfil.hash())
     reg.registrar_oos(modelo.nome, versao, "holdout-sintetico", m, inicio_segmento_ns=t_ini_hold, criterio=criterio)
-    recarregado = carregar_versao(reg, modelo.nome, versao, perfil.simbolo_base)  # ida e volta conferida
+    recarregado = carregar_versao(reg, modelo.nome, versao, perfil.simbolo_base, perfil.hash())  # ida e volta conferida
     if not modelo.prever_lote(hold.X).equals(recarregado.prever_lote(hold.X)):
         print("ERRO: o artefato recarregado nao reproduz as previsoes do modelo treinado")
         return 1

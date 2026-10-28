@@ -157,6 +157,19 @@ def test_arquivo_ausente_e_registro_corrompido(modelo, tmp_path):
     assert r.modelo is None and r.motivo
 
 
+def test_perfil_mudou_desde_o_treino_recusa_e_pede_retreino(modelo, tmp_path):
+    arq = tmp_path / "p.json"
+    salvar_artefato(modelo, arq, versao="v1", perfil_hash=WIN.hash())
+    assert carregar_artefato(arq, ativo="WIN", perfil_hash=WIN.hash()) is not None
+    mudou = WIN.model_copy(update={"ponto_valor_brl": WIN.ponto_valor_brl * 2})
+    with pytest.raises(ErroArtefato, match="retreine"):
+        carregar_artefato(arq, ativo="WIN", perfil_hash=mudou.hash())
+    sem = tmp_path / "sem.json"
+    salvar_artefato(modelo, sem, versao="v1")  # artefato antigo, sem hash do perfil
+    with pytest.raises(ErroArtefato, match="retreine"):
+        carregar_artefato(sem, ativo="WIN", perfil_hash=WIN.hash())
+
+
 def test_features_fora_do_registro_permitido_recusa(modelo, tmp_path):
     from robowin.modelos.persistencia import _canonico, _sha
     arq = tmp_path / "a.json"
@@ -279,7 +292,7 @@ def test_quant_sai_de_nao_treinado_para_exploratorio_com_artefato_sintetico(am, 
     from robowin.decisao.simulacao import ParamsSimulacao, executar_sessao, montar_sessao
     registro = tmp_path / "WIN" / "registro.json"
     reg = RegistroModelos(registro)
-    registrar_e_salvar(reg, treinar(am, "logistica"), "v1", barreiras=BARREIRAS, custos=CUSTOS)
+    registrar_e_salvar(reg, treinar(am, "logistica"), "v1", barreiras=BARREIRAS, custos=CUSTOS, perfil_hash=WIN.hash())
 
     def params(ativo, saida, rm):
         return ParamsSimulacao(seed=11, n_ticks=3000, saida=tmp_path / saida, registro_modelos=rm,

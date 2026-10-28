@@ -48,12 +48,12 @@ def _cmd_simular(a: argparse.Namespace) -> int:
     return 0
 
 
-def _modelo_do_ativo(ativo: str, tipo: str, registro: str | None) -> Any:
+def _modelo_do_ativo(ativo: str, tipo: str, registro: str | None, perfil_hash: str | None = None) -> Any:
     """Campeao do ATIVO (ou, sem campeao, a versao em_validacao mais recente: exploratoria, rotulada). Sem artefato
     valido (ausente, adulterado, de outro ativo...) devolve modelo `nao_treinado`: o braco quant NAO opera."""
     from robowin.modelos.microestrutura import ModeloMicroestrutura
     from robowin.modelos.persistencia import caminho_registro_ativo, carregar_para_ativo
-    res = carregar_para_ativo(registro or caminho_registro_ativo(ativo), f"microestrutura_{tipo}", ativo)
+    res = carregar_para_ativo(registro or caminho_registro_ativo(ativo), f"microestrutura_{tipo}", ativo, perfil_hash)
     if res.modelo is None:
         print(f"AVISO: sem modelo carregavel para {ativo} ({res.motivo}); braco quant 'nao_treinado' (nao opera).")
         m = ModeloMicroestrutura(tipo)
@@ -83,7 +83,7 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
         cfg_geral = carregar_toml(a.config) if Path(a.config).is_file() else {}
         perfil = perfil_da_config(cfg_geral, a.ativo)  # ao vivo: perfil a_confirmar BLOQUEIA (PerfilNaoConfirmado)
         banco, registro, caminho, dir_aud = abrir_banco(p.saida, rel, sessao_id)
-        modelo = _modelo_do_ativo(perfil.simbolo_base, a.tipo_modelo, a.registro_modelos)
+        modelo = _modelo_do_ativo(perfil.simbolo_base, a.tipo_modelo, a.registro_modelos, perfil.hash())
         m = construir_orquestrador(
             p, rel=rel, registro=registro, ins=perfil.instrumento(a.simbolo or perfil.simbolo_base),
             modelo=modelo, statarb=None, precos_aux=None, sintetico=False,

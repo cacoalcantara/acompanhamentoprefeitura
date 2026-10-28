@@ -193,3 +193,15 @@ def test_cli_gateway_painel_e_emergencia_usam_o_mesmo_caminho(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     assert main(["emergencia", "--config", str(toml), "--motivo", "teste"]) == 0
     assert (raiz / "dd" / "EMERGENCIA").exists() and not (tmp_path / "dados_locais").exists()
+
+
+def test_valores_monetarios_usam_a_moeda_do_perfil(tmp_path, monkeypatch):
+    from perfis_teste import WIN
+
+    from robowin.painel import app as mod
+    assert mod._fmt_brl(1234.5) == "R$ 1.234,50" and mod._fmt_brl(1234.5, "USD") == "US$ 1.234,50"
+    assert mod._fmt_brl(1.0, "CHF") == "CHF 1,00"
+    monkeypatch.setattr(mod, "perfil_da_config", lambda *a, **k: WIN.model_copy(update={"moeda": "USD"}))
+    c = TestClient(criar_app(banco=popular(tmp_path / "d.sqlite"), dir_dados=tmp_path / "dados", token="t"))
+    html = c.get("/").text
+    assert "US$" in html and "R$" not in html

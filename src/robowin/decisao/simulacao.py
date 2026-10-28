@@ -257,7 +257,7 @@ def _modelo_persistido(p: ParamsSimulacao, perfil: PerfilInstrumento) -> ModeloM
     if p.registro_modelos is None:
         return None
     from robowin.modelos.persistencia import carregar_para_ativo
-    res = carregar_para_ativo(p.registro_modelos, f"microestrutura_{p.tipo_modelo}", perfil.simbolo_base)
+    res = carregar_para_ativo(p.registro_modelos, f"microestrutura_{p.tipo_modelo}", perfil.simbolo_base, perfil.hash())
     if res.modelo is None:
         raise ErroConfig(f"modelo persistido recusado: {res.motivo}")
     return res.modelo

@@ -107,6 +107,9 @@ def _pid_vivo(pid: int) -> bool:
     return True
 
 
+IDADE_ILEGIVEL_S = 5.0  # trava vazia/ilegivel mais nova que isto e tratada como OCUPADA (criacao em andamento)
+
+
 class TravaEspelho:
     """Trava de arquivo (O_EXCL) com dono e pid. Trava de processo morto e retomada; de processo vivo, recusada."""
 
@@ -120,11 +123,27 @@ class TravaEspelho:
         except (OSError, ValueError):
             return None
 
+    def _idade_s(self) -> float:
+        try:
+            return max(0.0, time.time() - self.caminho.stat().st_mtime)
+        except OSError:
+            return float("inf")
+
+    def _criar_atomico(self, dono: str) -> None:
+        """Escreve num temporario e publica com `os.link` (falha com FileExistsError se a trava ja existe)."""
+        tmp = self.caminho.with_name(f"{self.caminho.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"dono": dono, "pid": os.getpid(), "t": time.time()}, f)
+        try:
+            os.link(tmp, self.caminho)
+        finally:
+            tmp.unlink(missing_ok=True)
+
     def adquirir(self, dono: str) -> None:
         self.caminho.parent.mkdir(parents=True, exist_ok=True)
         for _ in range(3):
             try:
-                fd = os.open(self.caminho, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                self._criar_atomico(dono)  # arquivo ja COMPLETO quando aparece: ninguem le uma trava vazia
             except FileExistsError:
                 a = self.atual()
                 if a is not None and int(a.get("pid", 0)) == os.getpid() and a.get("dono") == dono:
@@ -133,10 +152,10 @@ class TravaEspelho:
                 if a is not None and _pid_vivo(int(a.get("pid", 0))):
                     raise EspelhamentoNaoExclusivo(
                         f"'{a.get('dono')}' (pid {a.get('pid')}) ja espelha na conta demo: so um por vez") from None
-                self.caminho.unlink(missing_ok=True)  # trava orfa (processo morto) ou ilegivel
+                if a is None and self._idade_s() < IDADE_ILEGIVEL_S:  # vazia/ilegivel e RECENTE: outro esta criando
+                    raise EspelhamentoNaoExclusivo(f"trava {self.caminho} em criacao por outro processo: tente de novo") from None
+                self.caminho.unlink(missing_ok=True)  # trava orfa (processo morto) ou ilegivel ha tempo
                 continue
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"dono": dono, "pid": os.getpid(), "t": time.time()}, f)
             self.dono = dono
             return
         raise EspelhamentoNaoExclusivo(f"nao foi possivel adquirir {self.caminho}")

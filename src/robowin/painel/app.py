@@ -29,10 +29,14 @@ ESTADO_FLAG = "flag_gravada_aguardando_confirmacao_do_gateway"
 ROTULO_CANDIDATO = "candidato não validado"
 
 
-def _fmt_brl(v: Any) -> str:
+SIMBOLOS_MOEDA = {"BRL": "R$", "USD": "US$", "EUR": "€", "GBP": "£", "JPY": "¥"}
+
+
+def _fmt_brl(v: Any, moeda: str = "BRL") -> str:
+    """Valor monetario na moeda do perfil/instrumento (o nome `brl` do filtro e historico; o simbolo vem da moeda)."""
     if v is None:
         return "—"
-    return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return SIMBOLOS_MOEDA.get(moeda.upper(), moeda.upper()) + " " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def _fmt_num(v: Any, casas: int = 2) -> str:
@@ -68,7 +72,8 @@ def criar_app(
     app = FastAPI(title="robowin — painel", docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=AQUI / "static"), name="static")
     tpl = Jinja2Templates(directory=str(AQUI / "templates"))
-    tpl.env.filters.update(brl=_fmt_brl, num=_fmt_num, pct=_fmt_pct)
+    moeda = perfil.moeda if perfil is not None else "BRL"
+    tpl.env.filters.update(brl=lambda v: _fmt_brl(v, moeda), num=_fmt_num, pct=_fmt_pct)
     tpl.env.globals.update(ROTULO_CANDIDATO=ROTULO_CANDIDATO, N_MIN=N_MIN_AMOSTRA, CONTROLE=CONTROLE)
     app.state.banco = b
     app.state.dir_dados = dir_d
