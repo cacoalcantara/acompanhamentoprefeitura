@@ -48,6 +48,14 @@ Passo a passo e o que nunca é enviado: [docs/12-aceitacao-no-windows.md](docs/1
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (e de outros provedores), `ROBOWIN_MT5_SENHA`, `ROBOWIN_TOKEN`.
 Chaves nunca são gravadas em logs.
 
+## Qualquer IA (não só Claude e GPT)
+Gemini, DeepSeek, Grok, Mistral, Groq, OpenRouter, Qwen, Kimi, Cohere, Perplexity, Azure, Bedrock, Vertex e modelos
+locais (Ollama, LM Studio, vLLM, llama.cpp) já estão em `config/provedores.toml`; provedor novo é uma entrada lá.
+`setx DEEPSEEK_API_KEY "..."` → `uv run robowin ia adicionar-modelo deepseek:<modelo> --preco-entrada X --preco-saida Y
+--corte AAAA-MM-DD` → `uv run robowin ia testar --modelo deepseek:<modelo>` → braço em `[[bracos]]`. `uv run robowin ia
+listar` mostra chave presente/ausente (nunca o valor). Sem preço ou corte, só com declaração (teto de orçamento e
+contaminação). Os testes rodam sem chave e sem rede. Passo a passo: [docs/09-modelos-de-ia.md](docs/09-modelos-de-ia.md).
+
 ## Trocar o ativo ou a bolsa (só configuração)
 - **Ativo:** edite `[geral].simbolo_base` em `config/robowin.toml` (ex.: `"WDO"`, `"IND"`, `"DOL"`, `"PETR4"`,
   `"BOVA11"`) ou use `--ativo WDO` em `simular`, `backtest`, `treinar`, `mm demo`, `rl demo`, `avaliar`,

@@ -1,4 +1,9 @@
-# Catalogo de IAs. Modelo sem preco ou sem data de corte e recusado.
+# Catalogo de IAs. Modelo sem preco ou sem data de corte e recusado, salvo declaracao explicita:
+#   preco_desconhecido = true  -> teto conservador de orcamento por chamada (teto_chamada_usd) e rotulo no manifesto
+#   corte_desconhecido = true  -> braco CONTAMINADO em qualquer backtest historico (so avaliacao prospectiva)
+#   local = true               -> modelo local, custo de API zero
+# O provedor (antes do ':') precisa estar em config/provedores.toml. Para cadastrar sem editar a mao:
+#   robowin ia adicionar-modelo <provedor:modelo> [--preco-entrada X --preco-saida Y] [--corte AAAA-MM-DD] [--local]
 
 [[modelo]]
 provedor = "anthropic"

@@ -13,6 +13,7 @@ _PADROES = [
 _VARIAVEIS = (
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
     "OPENAI_COMPATIVEL_API_KEY", "OLLAMA_API_KEY", "ROBOWIN_MT5_SENHA", "ROBOWIN_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_VERTEX_ACCESS_TOKEN", "AZURE_OPENAI_AD_TOKEN",
 )
 _registrados: set[str] = set()
 
@@ -25,7 +26,8 @@ def registrar_segredo(valor: str | None) -> None:
 def redigir(texto: str) -> str:
     """Substitui qualquer segredo conhecido (registrado, em variavel de ambiente ou por padrao) por ***."""
     segredos = set(_registrados)
-    for v in _VARIAVEIS:
+    # qualquer *_API_KEY (todo provedor do registro usa esse padrao) e as credenciais de plataforma
+    for v in {*_VARIAVEIS, *(n for n in os.environ if n.endswith("_API_KEY"))}:
         val = os.environ.get(v)
         if val and len(val) >= 6:
             segredos.add(val)

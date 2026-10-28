@@ -85,7 +85,7 @@ class ClienteAnthropic:
         self.kw = kw
         c = self.c
         ctx = _CtxAsync(c, [SimpleNamespace(type="message_start"), SimpleNamespace(type="text")], None)
-        parsed = kw["output_format"].model_validate_json(c["texto"]) if c["parse_ok"] and not c["recusa"] and c["stop"] == "end_turn" else None
+        parsed = None  # o adaptador manda o schema em output_config.format e valida o texto na camada comum
         msg = SimpleNamespace(
             model=c["servido"], _request_id="req_123", stop_reason="refusal" if c["recusa"] else c["stop"],
             stop_details=SimpleNamespace(category="reasoning_extraction") if c["recusa"] else None,
@@ -110,7 +110,7 @@ class ClienteOpenAI:
         item = SimpleNamespace(content=[SimpleNamespace(type="refusal", refusal="nao posso")] if c["recusa"]
                                else [SimpleNamespace(type="output_text", text=c["texto"])])
         inc = SimpleNamespace(reason="max_output_tokens") if c["stop"] == "max_tokens" else None
-        parsed = kw["text_format"].model_validate_json(c["texto"]) if c["parse_ok"] and not c["recusa"] and c["stop"] == "end_turn" else None
+        parsed = None  # o adaptador manda o schema em text.format e valida o texto na camada comum
         resp = SimpleNamespace(
             model=c["servido"], id="resp_1", status="incomplete" if inc else "completed", incomplete_details=inc,
             output=[item], output_parsed=parsed,
@@ -334,7 +334,9 @@ async def test_anthropic_kwargs():
     p, cli = _prov("anthropic")
     await _chamar(p)
     kw = cli.kw
-    assert kw["model"] == "m" and kw["output_format"] is PropostaIA and kw["output_config"] == {"effort": "low"}
+    assert kw["model"] == "m" and "output_format" not in kw and kw["output_config"]["effort"] == "low"
+    fmt = kw["output_config"]["format"]
+    assert fmt["type"] == "json_schema" and set(fmt["schema"]["properties"]) == set(PropostaIA.model_json_schema()["properties"])
     assert kw["max_tokens"] == 1000
     for proibido in ("temperature", "top_p", "top_k", "thinking"):
         assert proibido not in kw
@@ -344,7 +346,9 @@ async def test_openai_kwargs():
     p, cli = _prov("openai")
     await _chamar(p)
     kw = cli.kw
-    assert kw["text_format"] is PropostaIA and kw["store"] is False and kw["reasoning"] == {"effort": "low"}
+    assert "text_format" not in kw and kw["store"] is False and kw["reasoning"] == {"effort": "low"}
+    fmt = kw["text"]["format"]
+    assert fmt["type"] == "json_schema" and fmt["strict"] is True and fmt["name"] == "PropostaIA"
     assert "temperature" not in kw
 
 

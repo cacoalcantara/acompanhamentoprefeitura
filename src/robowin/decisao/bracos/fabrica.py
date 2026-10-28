@@ -1,8 +1,11 @@
 """Fabrica de bracos de IA: papeis plugaveis e bracos extras declarados em ``[[bracos]]`` (plano 5.10).
 
 Trocar o modelo de um papel (``[ia.papeis.proponente]``) ou declarar um braco novo muda o experimento SEM
-tocar no codigo; o novo par proponente/revisor entra no manifesto, no painel e na correcao de Holm. Um modelo
-fora do catalogo (sem preco ou sem data de corte) e recusado (falha segura).
+tocar no codigo; o novo par proponente/revisor entra no manifesto, no painel e na correcao de Holm. Qualquer
+papel (inclusive papeis novos) e qualquer braco aceitam QUALQUER ``provedor:modelo`` do catalogo, de qualquer
+provedor do registro (config/provedores.toml: Gemini, DeepSeek, Grok, Mistral, Llama local, OpenRouter...).
+Modelo fora do catalogo e recusado (falha segura); preco/corte desconhecidos so com declaracao explicita
+(``robowin ia adicionar-modelo``), rotulada no manifesto.
 
 Exemplo::
 

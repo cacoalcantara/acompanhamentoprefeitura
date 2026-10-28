@@ -1,0 +1,280 @@
+# Registro de provedores de IA (src/robowin/ia/registro_provedores.py).
+#
+# Cada entrada [provedor.<nome>] liga o NOME usado em "provedor:modelo" (config/modelos.toml, [ia.papeis],
+# [[bracos]]) a um ADAPTADOR de codigo. Provedor novo qualquer = so adicionar uma entrada aqui (em geral com
+# adaptador = "openai_compativel" + base_url), cadastrar o modelo (`robowin ia adicionar-modelo`) e definir a
+# variavel de ambiente da chave. Nenhuma linha de codigo.
+#
+# Campos:
+#   adaptador          anthropic | anthropic_bedrock | anthropic_vertex | openai | azure_openai | google |
+#                      gemini_vertex | openai_compativel | ollama
+#   base_url           endpoint da API (vazio = o SDK calcula pela regiao/recurso; ver observacoes)
+#   base_url_env       variavel de ambiente que, se definida, substitui base_url (ex.: OLLAMA_HOST)
+#   chave_env          variaveis de ambiente aceitas para a chave (a primeira definida vale). O VALOR nunca
+#                      vai para arquivo, log ou tela: so se informa "presente"/"ausente".
+#   chave_obrigatoria  false para servidores locais sem autenticacao
+#   exige_env          outras variaveis necessarias (endpoint do recurso, projeto, regiao...)
+#   local              true = roda na sua maquina (custo de API zero; latencia e qualidade dependem do hardware)
+#   saida_estruturada  so openai_compativel: json_schema | json (json_object + schema no prompt) | texto (so o
+#                      schema no prompt). O catalogo (saida_estruturada do modelo) tem precedencia.
+#   envia_effort       so openai_compativel: envia reasoning_effort (muitos servidores recusam parametro extra)
+#   regiao, observacoes
+#   verificado         true SO se a base_url foi conferida em fonte oficial nesta sessao (fonte_verificacao).
+#                      false = valor da documentacao publica do provedor NAO conferido aqui: confira antes de
+#                      usar (os docs nao estavam acessiveis sem rede nesta sessao).
+#   parametros         tabela opcional repassada ao adaptador. Valor terminado em "_env" e o NOME de uma
+#                      variavel de ambiente (ex.: regiao_env = "AWS_REGION").
+
+# ------------------------------------------------------------------------------ provedores de origem
+[provedor.anthropic]
+adaptador = "anthropic"
+base_url = "https://api.anthropic.com"
+chave_env = ["ANTHROPIC_API_KEY"]
+regiao = "EUA (global)"
+observacoes = "Claude direto na Anthropic. Saida estruturada nativa (output_format)."
+verificado = true
+fonte_verificacao = "padrao do SDK oficial anthropic instalado (AsyncAnthropic.base_url)"
+
+[provedor.openai]
+adaptador = "openai"
+base_url = "https://api.openai.com/v1"
+chave_env = ["OPENAI_API_KEY"]
+regiao = "EUA (global)"
+observacoes = "GPT direto na OpenAI (Responses API, store=False)."
+verificado = true
+fonte_verificacao = "padrao do SDK oficial openai instalado (AsyncOpenAI.base_url)"
+
+[provedor.azure_openai]
+adaptador = "azure_openai"
+base_url = ""
+base_url_env = "AZURE_OPENAI_ENDPOINT"
+chave_env = ["AZURE_OPENAI_API_KEY"]
+exige_env = ["AZURE_OPENAI_ENDPOINT", "OPENAI_API_VERSION"]
+regiao = "a do seu recurso Azure"
+observacoes = """Modelos OpenAI hospedados no Azure. AZURE_OPENAI_ENDPOINT = https://<seu-recurso>.openai.azure.com
+(o SDK acrescenta /openai). O 'modelo' em provedor:modelo e o NOME DA IMPLANTACAO (deployment) no Azure.
+OPENAI_API_VERSION = versao da API indicada no portal do seu recurso."""
+verificado = true
+fonte_verificacao = "SDK oficial openai instalado (AsyncAzureOpenAI: azure_endpoint + /openai, api_version obrigatoria)"
+
+[provedor.google]
+adaptador = "google"
+base_url = "https://generativelanguage.googleapis.com"
+chave_env = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+regiao = "EUA (global)"
+observacoes = "Gemini API (Google AI Studio) pelo SDK google-genai: uv sync --extra google. base_url informativa (o SDK usa o padrao dele)."
+verificado = false
+
+[provedor.gemini_openai]
+adaptador = "openai_compativel"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+chave_env = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+saida_estruturada = "json_schema"
+regiao = "EUA (global)"
+observacoes = "Gemini pelo endpoint compativel com OpenAI (dispensa o extra google-genai)."
+verificado = false
+
+[provedor.gemini_vertex]
+adaptador = "gemini_vertex"
+base_url = ""
+chave_env = ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_API_KEY"]
+exige_env = ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
+regiao = "GOOGLE_CLOUD_LOCATION (ex.: southamerica-east1, us-central1)"
+observacoes = """Gemini no Vertex AI (google-genai com vertexai=True): uv sync --extra google. Credencial: arquivo de
+conta de servico em GOOGLE_APPLICATION_CREDENTIALS (ou chave do modo expresso em GOOGLE_API_KEY)."""
+verificado = false
+
+[provedor.aws_bedrock]
+adaptador = "anthropic_bedrock"
+base_url = ""
+chave_env = ["AWS_BEARER_TOKEN_BEDROCK"]
+exige_env = ["AWS_REGION"]
+regiao = "AWS_REGION (ex.: us-east-1, sa-east-1)"
+observacoes = """Claude no Amazon Bedrock (cliente de plataforma AsyncAnthropicBedrock do SDK anthropic, ja instalado).
+URL calculada pelo SDK: https://bedrock-runtime.<AWS_REGION>.amazonaws.com. Credencial: chave de API do Bedrock em
+AWS_BEARER_TOKEN_BEDROCK. IDs de modelo do Bedrock (ex.: anthropic.claude-...). Saida estruturada no Bedrock nao
+conferida nesta sessao: rode `robowin ia testar` antes de usar."""
+verificado = true
+fonte_verificacao = "SDK oficial anthropic instalado (lib/bedrock/_client.py)"
+[provedor.aws_bedrock.parametros]
+regiao_env = "AWS_REGION"
+
+[provedor.google_vertex]
+adaptador = "anthropic_vertex"
+base_url = ""
+chave_env = ["ANTHROPIC_VERTEX_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"]
+exige_env = ["ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION"]
+regiao = "CLOUD_ML_REGION (global, us, eu ou regiao como us-east5)"
+observacoes = """Claude no Google Vertex AI (cliente de plataforma AsyncAnthropicVertex do SDK anthropic). URL calculada
+pelo SDK: https://<regiao>-aiplatform.googleapis.com/v1 (global: https://aiplatform.googleapis.com/v1). Credencial: token
+de acesso em ANTHROPIC_VERTEX_ACCESS_TOKEN, ou GOOGLE_APPLICATION_CREDENTIALS (exige google-auth: uv sync --extra google)."""
+verificado = true
+fonte_verificacao = "SDK oficial anthropic instalado (lib/vertex/_client.py)"
+[provedor.google_vertex.parametros]
+regiao_env = "CLOUD_ML_REGION"
+projeto_env = "ANTHROPIC_VERTEX_PROJECT_ID"
+
+# ------------------------------------------------------------------------------ compativeis com OpenAI
+[provedor.mistral]
+adaptador = "openai_compativel"
+base_url = "https://api.mistral.ai/v1"
+chave_env = ["MISTRAL_API_KEY"]
+saida_estruturada = "json"
+regiao = "UE (Franca)"
+observacoes = "Mistral AI (La Plateforme)."
+verificado = false
+
+[provedor.deepseek]
+adaptador = "openai_compativel"
+base_url = "https://api.deepseek.com"
+chave_env = ["DEEPSEEK_API_KEY"]
+saida_estruturada = "json"
+regiao = "China"
+observacoes = "DeepSeek. Dados processados na China: avalie a politica de privacidade antes de enviar qualquer dado."
+verificado = false
+
+[provedor.xai]
+adaptador = "openai_compativel"
+base_url = "https://api.x.ai/v1"
+chave_env = ["XAI_API_KEY"]
+saida_estruturada = "json_schema"
+regiao = "EUA"
+observacoes = "xAI (Grok)."
+verificado = false
+
+[provedor.groq]
+adaptador = "openai_compativel"
+base_url = "https://api.groq.com/openai/v1"
+chave_env = ["GROQ_API_KEY"]
+saida_estruturada = "json"
+regiao = "EUA"
+observacoes = "Groq (inferencia rapida de modelos abertos: Llama, Qwen, etc.)."
+verificado = false
+
+[provedor.together]
+adaptador = "openai_compativel"
+base_url = "https://api.together.xyz/v1"
+chave_env = ["TOGETHER_API_KEY"]
+saida_estruturada = "json"
+regiao = "EUA"
+observacoes = "Together AI (modelos abertos)."
+verificado = false
+
+[provedor.fireworks]
+adaptador = "openai_compativel"
+base_url = "https://api.fireworks.ai/inference/v1"
+chave_env = ["FIREWORKS_API_KEY"]
+saida_estruturada = "json"
+regiao = "EUA"
+observacoes = "Fireworks AI (modelos abertos). IDs no formato accounts/fireworks/models/<modelo>."
+verificado = false
+
+[provedor.openrouter]
+adaptador = "openai_compativel"
+base_url = "https://openrouter.ai/api/v1"
+chave_env = ["OPENROUTER_API_KEY"]
+saida_estruturada = "json"
+regiao = "EUA (roteia para o provedor do modelo)"
+observacoes = """OpenRouter: uma chave para centenas de modelos (IDs no formato <autor>/<modelo>, ex.:
+meta-llama/<modelo>). O provedor final pode variar: o modelo servido e registrado em cada chamada."""
+verificado = false
+
+[provedor.perplexity]
+adaptador = "openai_compativel"
+base_url = "https://api.perplexity.ai"
+chave_env = ["PERPLEXITY_API_KEY"]
+saida_estruturada = "json_schema"
+regiao = "EUA"
+observacoes = "Perplexity (Sonar). ATENCAO: os modelos pesquisam na internet; o dossie e anonimizado, mas a resposta pode usar informacao externa."
+verificado = false
+
+[provedor.cohere]
+adaptador = "openai_compativel"
+base_url = "https://api.cohere.ai/compatibility/v1"
+chave_env = ["COHERE_API_KEY", "CO_API_KEY"]
+saida_estruturada = "json"
+regiao = "Canada/EUA"
+observacoes = "Cohere pela API de compatibilidade com OpenAI."
+verificado = false
+
+[provedor.cerebras]
+adaptador = "openai_compativel"
+base_url = "https://api.cerebras.ai/v1"
+chave_env = ["CEREBRAS_API_KEY"]
+saida_estruturada = "json"
+regiao = "EUA"
+observacoes = "Cerebras (inferencia rapida de modelos abertos)."
+verificado = false
+
+[provedor.dashscope]
+adaptador = "openai_compativel"
+base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+chave_env = ["DASHSCOPE_API_KEY"]
+saida_estruturada = "json"
+regiao = "Singapura (internacional); na China continental use https://dashscope.aliyuncs.com/compatible-mode/v1"
+observacoes = "Alibaba Cloud Model Studio (Qwen)."
+verificado = false
+
+[provedor.moonshot]
+adaptador = "openai_compativel"
+base_url = "https://api.moonshot.ai/v1"
+chave_env = ["MOONSHOT_API_KEY"]
+saida_estruturada = "json"
+regiao = "internacional; na China continental use https://api.moonshot.cn/v1"
+observacoes = "Moonshot AI (Kimi)."
+verificado = false
+
+[provedor.openai_compativel]
+adaptador = "openai_compativel"
+base_url = ""
+base_url_env = "OPENAI_COMPATIVEL_BASE_URL"
+chave_env = ["OPENAI_COMPATIVEL_API_KEY"]
+chave_obrigatoria = false
+exige_env = ["OPENAI_COMPATIVEL_BASE_URL"]
+saida_estruturada = "json"
+envia_effort = true
+regiao = "a do servidor"
+observacoes = "Generico: qualquer servidor compativel com OpenAI apontado por OPENAI_COMPATIVEL_BASE_URL."
+verificado = false
+
+# ------------------------------------------------------------------------------ locais (sem chave)
+[provedor.ollama]
+adaptador = "ollama"
+base_url = "http://localhost:11434"
+base_url_env = "OLLAMA_HOST"
+chave_obrigatoria = false
+local = true
+regiao = "local"
+observacoes = "Ollama na sua maquina (uv sync --extra ollama). Modelo: ollama pull <modelo>. Versao fixa = digest."
+verificado = false
+
+[provedor.lmstudio]
+adaptador = "openai_compativel"
+base_url = "http://localhost:1234/v1"
+chave_obrigatoria = false
+local = true
+saida_estruturada = "json_schema"
+regiao = "local"
+observacoes = "LM Studio com o servidor local ligado (aba Developer)."
+verificado = false
+
+[provedor.vllm]
+adaptador = "openai_compativel"
+base_url = "http://localhost:8000/v1"
+chave_env = ["VLLM_API_KEY"]
+chave_obrigatoria = false
+local = true
+saida_estruturada = "json_schema"
+regiao = "local"
+observacoes = "vLLM (vllm serve <modelo>); chave so se o servidor foi iniciado com --api-key."
+verificado = false
+
+[provedor.llamacpp]
+adaptador = "openai_compativel"
+base_url = "http://localhost:8080/v1"
+chave_obrigatoria = false
+local = true
+saida_estruturada = "texto"
+regiao = "local"
+observacoes = "llama.cpp server (llama-server -m <arquivo.gguf>)."
+verificado = false

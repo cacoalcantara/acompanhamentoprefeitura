@@ -20,10 +20,15 @@ class ProvedorOllama(ProvedorBase):
         self._host = host or os.environ.get("OLLAMA_HOST")
         self._cliente = cliente
 
+    def parametros_cliente(self) -> dict[str, Any]:
+        """Argumentos de ``ollama.AsyncClient`` (sem rede)."""
+        return {"host": self._host} if self._host else {}
+
     def _get_cliente(self) -> Any:
         if self._cliente is None:
+            params = self.parametros_cliente()
             sdk = exigir_pacote("ollama", "ollama")
-            self._cliente = sdk.AsyncClient(host=self._host) if self._host else sdk.AsyncClient()
+            self._cliente = sdk.AsyncClient(**params)
         return self._cliente
 
     async def digest(self, modelo: str) -> str:

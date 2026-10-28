@@ -1,7 +1,9 @@
 """Adaptador para qualquer servidor com API OpenAI Chat Completions (vLLM, LM Studio, terceiros).
 
-``response_format`` json_schema so quando o catalogo declara ``saida_estruturada == 'json_schema'``;
-senao, JSON simples (ou pedido no prompt) + validacao Pydantic. URL base obrigatoria.
+Serve a QUALQUER provedor do registro com adaptador ``openai_compativel`` (DeepSeek, Mistral, Groq, OpenRouter,
+LM Studio, vLLM...): o ``nome`` e a ``base_url`` vem de config/provedores.toml. Modo de saida: o do catalogo
+(``saida_estruturada`` json_schema/json) ou, se ele nao declarar, o padrao do provedor no registro; ``json`` usa
+``json_object`` e ``texto`` so pede o schema no prompt. Sempre validacao Pydantic. URL base obrigatoria.
 """
 from __future__ import annotations
 
@@ -20,32 +22,49 @@ from robowin.ia.provedores.base import (
 )
 from robowin.ia.segredos import registrar_segredo
 
+MODOS_SAIDA = ("json_schema", "json", "texto")
+
 
 class ProvedorOpenAICompativel(ProvedorBase):
     nome = "openai_compativel"
 
-    def __init__(self, *, base_url: str | None = None, api_key: str | None = None, cliente: Any = None, **kw: Any):
+    def __init__(self, *, base_url: str | None = None, api_key: str | None = None, cliente: Any = None,
+                 http_client: Any = None, saida_padrao: str = "json", envia_effort: bool = True, **kw: Any):
+        """``saida_padrao``: modo de saida estruturada do PROVEDOR (registro) quando o catalogo nao declara
+        ``json_schema``/``json``: json_schema | json | texto. ``envia_effort``: manda ``reasoning_effort``."""
         super().__init__(**kw)
         self._base_url = base_url or os.environ.get("OPENAI_COMPATIVEL_BASE_URL")
         self._api_key = api_key or os.environ.get("OPENAI_COMPATIVEL_API_KEY") or "sem-chave"
         registrar_segredo(self._api_key)
         self._cliente = cliente
+        self._http_client = http_client
+        self._saida_padrao = saida_padrao if saida_padrao in MODOS_SAIDA else "json"
+        self._envia_effort = envia_effort
+
+    def parametros_cliente(self) -> dict[str, Any]:
+        if not self._base_url:
+            raise ErroProvedor(f"{self.nome} exige base_url (config/provedores.toml ou OPENAI_COMPATIVEL_BASE_URL)")
+        kw: dict[str, Any] = {"api_key": self._api_key, "base_url": self._base_url, "max_retries": 0}
+        if self._http_client is not None:
+            kw["http_client"] = self._http_client
+        return kw
 
     def _get_cliente(self) -> Any:
         if self._cliente is None:
-            if not self._base_url:
-                raise ErroProvedor("openai_compativel exige base_url (ou OPENAI_COMPATIVEL_BASE_URL)")
+            params = self.parametros_cliente()
             sdk = exigir_pacote("openai", "")
-            self._cliente = sdk.AsyncOpenAI(api_key=self._api_key, base_url=self._base_url, max_retries=0)
+            self._cliente = sdk.AsyncOpenAI(**params)
         return self._cliente
 
     def _modo_saida(self, modelo: str) -> str:
         if self._catalogo is not None:
             try:
-                return str(self._catalogo.obter(f"{self.nome}:{modelo}").saida_estruturada)
+                declarado = str(self._catalogo.obter(f"{self.nome}:{modelo}").saida_estruturada)
             except Exception:
-                return "json"
-        return "json"
+                declarado = "nativa"
+            if declarado in MODOS_SAIDA:
+                return declarado
+        return self._saida_padrao
 
     async def _executar(
         self, *, modelo: str, sistema: str, mensagem: str, schema: type[BaseModel],
@@ -61,11 +80,12 @@ class ProvedorOpenAICompativel(ProvedorBase):
             kw["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": schema.__name__, "schema": schema.model_json_schema(), "strict": False}}
         else:
-            kw["response_format"] = {"type": "json_object"}
+            if modo == "json":
+                kw["response_format"] = {"type": "json_object"}
             sis += "\n\nResponda SOMENTE com um objeto JSON que siga este schema:\n" + json.dumps(
                 schema.model_json_schema(), ensure_ascii=False)
         kw["messages"] = [{"role": "system", "content": sis}, {"role": "user", "content": mensagem}]
-        if effort:
+        if effort and self._envia_effort:
             kw["reasoning_effort"] = effort
         fluxo = await self._get_cliente().chat.completions.create(**kw)
         partes: list[str] = []

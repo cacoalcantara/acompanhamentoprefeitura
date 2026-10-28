@@ -68,6 +68,38 @@ demo_mm = false   # ponte do market making para a conta demo (mm/ponte_demo.py);
 # revisor = "openai:gpt-6.1-sol"
 # modo = "condicional"
 
+# Bracos com QUALQUER IA (desligados por padrao). Qualquer provedor de config/provedores.toml serve, e qualquer papel
+# de [ia.papeis] tambem aceita 'provedor:modelo' de qualquer provedor. Antes de descomentar, cadastre o modelo:
+#   robowin ia adicionar-modelo <provedor:modelo> --preco-entrada X --preco-saida Y --corte AAAA-MM-DD
+# (sem preco: --preco-desconhecido; sem --corte o braco fica contaminado em qualquer backtest historico) e defina a
+# chave (Windows: setx DEEPSEEK_API_KEY "..."). IDs abaixo sao EXEMPLOS: confira o id atual na documentacao do provedor.
+# [[bracos]]
+# id = "D_gemini"
+# proponente = "google:gemini-2.5-pro"             # Gemini API (uv sync --extra google) ou "gemini_openai:..."
+# revisor = "revisor"                              # papel de [ia.papeis] (padrao: GPT)
+# modo = "condicional"
+# [[bracos]]
+# id = "D_deepseek"
+# proponente = "deepseek:deepseek-chat"
+# modo = "imediato"
+# [[bracos]]
+# id = "D_grok"
+# proponente = "xai:grok-4"
+# revisor = "anthropic:claude-sonnet-5-5"
+# modo = "condicional"
+# [[bracos]]
+# id = "D_mistral"
+# proponente = "mistral:mistral-large-latest"
+# modo = "imediato"
+# [[bracos]]
+# id = "D_llama_local"
+# proponente = "ollama:llama3.1:8b"                # Llama local via Ollama (sem chave; ollama pull llama3.1:8b)
+# modo = "condicional"
+# [[bracos]]
+# id = "D_openrouter"
+# proponente = "openrouter:meta-llama/llama-3.3-70b-instruct"   # uma chave, centenas de modelos
+# modo = "condicional"
+
 # Braco EXPERIMENTAL de debate (pesquisadores altista/baixista + debate de risco + sintetizador). Desligado por
 # padrao; so existe no modo condicional (latencia). A saida e uma proposta comum: mesmos validadores, revisor
 # (se houver) e o MESMO veto final do motor de risco. Entra no manifesto e na correcao de Holm como qualquer braco.

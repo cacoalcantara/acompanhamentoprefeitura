@@ -1,4 +1,5 @@
-"""Papeis (proponente, revisor, classificador_nlp, ...) ligados a 'provedor:modelo' pela configuracao."""
+"""Papeis (proponente, revisor, classificador_nlp, debate, reflexao e qualquer papel novo) ligados a
+'provedor:modelo' pela configuracao. Qualquer provedor do registro (config/provedores.toml) serve."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,7 +30,8 @@ def resolver(papeis: dict[str, Papel], nome: str) -> tuple[str, str]:
 
 
 def validar_papeis(papeis: dict[str, Papel], catalogo: Catalogo) -> None:
-    """Falha segura: todo papel precisa apontar para modelo do catalogo (com preco e corte)."""
+    """Falha segura: todo papel precisa apontar para modelo do catalogo (com preco e corte, ou com a lacuna
+    declarada: preco_desconhecido / corte_desconhecido)."""
     catalogo.exigir(p.modelo for p in papeis.values())
 
 
