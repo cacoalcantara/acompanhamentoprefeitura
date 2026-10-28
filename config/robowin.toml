@@ -63,6 +63,7 @@ plataforma = "mt5"      # "mt5" (B3, conta netting, livro L2, ticks em ms) | "mt
 # servidor = ""
 # caminho_terminal = "C:/MT5/terminal64.exe"
 # offset_fixo_s = 0      # use se a calibracao automatica nao for confiavel fora do pregao
+# sufixo_simbolo = ""   # sufixo dos simbolos na corretora (ex.: ".m" => EURUSD.m) para `robowin perfil importar-do-terminal`
 
 [mm]
 demo_mm = false   # ponte do market making para a conta demo (mm/ponte_demo.py); EXCLUSIVA com [geral].espelhar

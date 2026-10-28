@@ -87,11 +87,13 @@ def resolver_contrato(
     hoje: dt.date,
     perfil: PerfilInstrumento,
     selecionar: bool = True,
+    exigir_confirmado: bool = True,
 ) -> ResolucaoContrato:
     """Resolve o contrato vigente do ATIVO do perfil em `hoje` e valida as especificacoes da corretora CONTRA o perfil.
 
     Levanta `PerfilNaoConfirmado` se o perfil tem valores a_confirmar e `ContratoRecusado` se a corretora divergir."""
-    perfil.exigir_confirmado()
+    if exigir_confirmado:  # False so no DIAGNOSTICO (que reporta o bloqueio a_confirmar a parte, sem operar)
+        perfil.exigir_confirmado()
     codigo = calendario_b3.contrato_vigente(perfil, hoje)
     simbolos = terminal.symbols_get(f"*{perfil.simbolo_base}*")
     if not simbolos:
@@ -99,7 +101,11 @@ def resolver_contrato(
     if not simbolos:
         raise ContratoRecusado(["symbols_get vazio ou indisponivel"])
     nomes = [str(s.name) for s in simbolos]
-    cand = escolher_simbolo(nomes, codigo, perfil)
+    if perfil.simbolo_corretora and perfil.simbolo_corretora in nomes:  # nome exato do perfil (ex.: EURUSD.m)
+        cand = Candidato(perfil.simbolo_corretora, "", perfil.simbolo_corretora[len(codigo):]
+                         if perfil.simbolo_corretora.startswith(codigo) else "", codigo)
+    else:
+        cand = escolher_simbolo(nomes, codigo, perfil)
     if selecionar and not terminal.symbol_select(cand.nome, True):
         raise ContratoRecusado([f"symbol_select falhou para {cand.nome}"])
     info = terminal.symbol_info(cand.nome)
