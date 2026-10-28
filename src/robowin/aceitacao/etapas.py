@@ -502,7 +502,14 @@ def a4_coleta(ctx: Contexto) -> list[ResultadoEtapa]:
 
     # A4.1 ticks e flags
     c41 = "ticks recebidos; (MT5) ticks de negocio com flags BUY/SELL e last > 0"
-    if ctx.caps.ticks_de_negocio:
+    if ctx.caps.ticks_de_negocio and not ctx.perfil.tem_negocios:
+        # forex/CFD/cripto na corretora: sem negocios publicos; o "volume" e de tick (contagem de cotacoes)
+        ok = n > 0
+        out.append((aprovada if ok else reprovada)(
+            "A4.1", f"{nome}: ticks e flags", c41 + f" ({ctx.perfil.classe}: so cotacoes bid/ask por natureza do mercado)",
+            f"{n} ticks de bid/ask (volume de tick; fluxo do agressor desligado por capacidade do instrumento)",
+            n_ticks=n))
+    elif ctx.caps.ticks_de_negocio:
         if comp + vend == 0 or negocios == 0:
             out.append(reprovada("A4.1", f"{nome}: ticks e flags", c41,
                                  f"{n} ticks mas nenhum de negocio com flag BUY/SELL (compra={comp}, venda={vend}, negocios={negocios}): "
@@ -532,7 +539,11 @@ def a4_coleta(ctx: Contexto) -> list[ResultadoEtapa]:
 
     # A4.3 livro
     c43 = "(MT5) market_book_add ok, snapshots recebidos e profundidade observada >= 1"
-    if not ctx.caps.livro:
+    if ctx.caps.livro and not ctx.perfil.aceita_book:
+        out.append(nao_verificavel("A4.3", f"{nome}: livro de ofertas", c43,
+                                   f"perfil {ctx.perfil.simbolo_base} sem livro (aceita_book = false; {ctx.perfil.classe}): "
+                                   "features de livro desligadas", aplicavel=False))
+    elif not ctx.caps.livro:
         out.append(nao_verificavel("A4.3", f"{nome}: livro de ofertas", c43,
                                    f"{ctx.plataforma.upper()} nao tem livro de ofertas (capacidade declarada): features de livro desligadas",
                                    aplicavel=False))

@@ -181,7 +181,8 @@ class PerfilInstrumento(Base):
         return pontos / self.tick_pontos
 
     def arredondar(self, preco: float) -> float:
-        return round(preco / self.tick_pontos) * self.tick_pontos
+        # round final: sem ruido de ponto flutuante na grade fina (forex: 1.0928600000000002 -> 1.09286)
+        return round(round(preco / self.tick_pontos) * self.tick_pontos, 10)
 
     @property
     def tick_valor_brl(self) -> float:

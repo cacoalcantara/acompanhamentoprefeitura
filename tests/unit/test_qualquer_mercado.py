@@ -483,3 +483,44 @@ def test_armazem_aceita_ticks_bid_ask_sem_negocios(tmp_path):
     a = ArmazenamentoTicks(tmp_path)
     assert a.gravar("EURUSD", tks) == 50
     assert not verificar(tks, sintetico=True).criticos
+
+
+# ------------------------------------------------------------------------------------------------- aceitacao
+@pytest.mark.parametrize("plataforma,moeda_conta", [("mt5", "USD"), ("mt5", "BRL"), ("mt4", "USD")])
+def test_aceitacao_eurusd_confirmado_no_duble_sem_reprovacoes(tmp_path, monkeypatch, plataforma, moeda_conta):
+    """Com o perfil EURUSD e a sessao FOREX CONFIRMADOS (copia temporaria; o repositorio segue a_confirmar), a
+    aceitacao inteira roda no duble: lote 0.01, so cotacoes (A4.1), sem livro (A4.3 nao aplicavel), conta em BRL
+    convertida pelo USDBRL do instante (A2.4)."""
+    import argparse
+    import json
+    from pathlib import Path
+
+    import robowin.core.bolsas as B
+    import robowin.core.instrumentos as I
+    from robowin.aceitacao import cli_cmds as K
+    from robowin.perfil.edicao_toml import atualizar_secao
+    for v in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "ROBOWIN_MT5_SENHA"):
+        monkeypatch.delenv(v, raising=False)
+    ti, tb = tmp_path / "instrumentos.toml", tmp_path / "bolsas.toml"
+    ti.write_text(atualizar_secao(Path(I.CAMINHO_PADRAO).read_text(encoding="utf-8"), "EURUSD", {"a_confirmar": False}),
+                  encoding="utf-8")
+    tb.write_text(atualizar_secao(Path(B.CAMINHO_PADRAO).read_text(encoding="utf-8"), "FOREX", {"a_confirmar": False}),
+                  encoding="utf-8")
+    monkeypatch.setattr(I, "CAMINHO_PADRAO", ti)
+    monkeypatch.setattr(B, "CAMINHO_PADRAO", tb)
+    p = argparse.ArgumentParser()
+    K.registrar(p.add_subparsers(dest="cmd"))
+    a = p.parse_args(["aceitacao", "--saida", str(tmp_path / "out"), "--duble", "--plataforma", plataforma,
+                      "--ativo", "EURUSD", "--minutos-coleta", "1", "--repeticoes", "4", "--confirmo-conta-demo",
+                      "--pular-ia"])
+    rel = RelogioSimulado(int(K.INICIO_DUBLE.timestamp() * 1e9))
+    term = K.criar_duble_sim(plataforma, rel, K._n_ticks_duble(1, 4, 3.0), moeda_conta=moeda_conta)
+    rc = K.rodar(a, terminal=term, relogio=rel)
+    r = json.loads(sorted((tmp_path / "out").glob("aceitacao-*.json"))[-1].read_text(encoding="utf-8"))
+    est = {e["etapa"]: e for e in r["etapas"]}
+    assert rc == 0 and not [e for e in r["etapas"] if e["estado"] == "REPROVADO"]
+    for cod in ("A2.4", "A3.1", "A3.2", "A4.1", "A5.1", "A5.2", "A5.3", "A5.4", "A7", "A8.1", "A9"):
+        assert est[cod]["estado"] == "APROVADO", (cod, est[cod]["detalhe"])
+    assert "volume=0.01 (esperado 0.01)=True" in est["A5.2"]["detalhe"]
+    if moeda_conta == "BRL":
+        assert "USDBRL" in est["A2.4"]["detalhe"]
