@@ -42,7 +42,8 @@ def carregar_politica(caminho: str | Path, aprovacao: str | Path | None, *, ao_v
     return validar_coerencia(carregar_risco(caminho, aprovacao, ao_vivo=ao_vivo))
 
 
-ERRO_APROVACAO_PENDENTE = "aprovacao com responsavel pendente (risco_nao_aprovado): preencha o responsavel e regenere o hash"
+ERRO_APROVACAO_PENDENTE = ("aprovacao com responsavel pendente (risco_nao_aprovado): aprove com "
+                           "`robowin risco aprovar --responsavel \"<seu nome>\"`")
 
 
 def hash_politica(caminho: str | Path) -> str:
@@ -98,7 +99,7 @@ def risco_do_ativo(perfil: PerfilInstrumento, caminho: str | Path, aprovacao: st
     if perfil.risco_aprovado_padrao:
         try:
             cfg = carregar_politica(caminho, aprovacao, ao_vivo=ao_vivo)
-            return cfg, (ERRO_APROVACAO_PENDENTE if aprovacao_pendente(aprovacao) else None)
+            return cfg, (ERRO_APROVACAO_PENDENTE if aprovacao_pendente(aprovacao, caminho) else None)
         except Exception as e:
             erro = f"{type(e).__name__}: {e}"
             fallback = ConfigRisco()
@@ -108,7 +109,7 @@ def risco_do_ativo(perfil: PerfilInstrumento, caminho: str | Path, aprovacao: st
             try:
                 apr_ok = apr if apr is not None and apr.is_file() else None
                 cfg = carregar_politica(arq, apr_ok, ao_vivo=ao_vivo)
-                return cfg, (ERRO_APROVACAO_PENDENTE if aprovacao_pendente(apr_ok) else None)
+                return cfg, (ERRO_APROVACAO_PENDENTE if aprovacao_pendente(apr_ok, arq) else None)
             except Exception as e:
                 erro = f"{type(e).__name__}: {e}"
         else:

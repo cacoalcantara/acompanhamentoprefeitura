@@ -3,7 +3,9 @@
 # (`bolsa = "B3"` por padrao). Trocar de bolsa = apontar o ativo para outra secao daqui.
 #
 # So a B3 esta preenchida e confirmada. As demais sao MODELOS a_confirmar = true: bloqueiam a operacao (e a
-# conexao ao MT5) ate o usuario conferir TODOS os itens e por a_confirmar = false. Hoje a simulacao sintetica
+# conexao ao MT5) ate o usuario conferir TODOS os itens e confirmar com
+#   uv run robowin perfil confirmar bolsa:<CODIGO> --responsavel "<seu nome>" --fonte "<fonte>"
+# (campos opcionais fonte, fonte_data, confirmado_por e confirmado_em registram a proveniencia). Hoje a simulacao sintetica
 # usa o fuso/calendario da B3 para o relogio interno; ver docs/03 para esse limite.
 #
 # regime_tributario: brasil_day_trade (IR 20% + IRRF 1%, implementado em avaliacao/impostos.py) | nao_calculado

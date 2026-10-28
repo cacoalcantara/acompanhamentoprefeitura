@@ -5,7 +5,10 @@
 # a_confirmar = true  -> valor SEM fonte confirmada (suposicao ou placeholder). FALHA SEGURA: o perfil BLOQUEIA
 #   gateway, nucleo ao vivo, conexao ao MT5 e qualquer ordem. So a SIMULACAO sobre dados SINTETICOS roda, e o
 #   resultado e rotulado `ativo_a_confirmar`. Depois de conferir TODOS os itens de `a_confirmar_itens` na
-#   especificacao da B3 e da corretora, troque para a_confirmar = false (e esvazie a lista).
+#   especificacao da B3 e da corretora, confirme com o comando guiado (mostra os valores, compara com o terminal,
+#   exige digitar o simbolo, troca a_confirmar = false, esvazia a lista e audita):
+#     uv run robowin perfil confirmar <ATIVO> --responsavel "<seu nome>" --fonte "<fonte>" --comparar-terminal
+#   `uv run robowin perfil listar` mostra o estado de todos os perfis.
 #
 # Campos:
 #   bolsa: chave de config/bolsas.toml (padrao B3); moeda, fuso, calendario e sessoes vem de la
@@ -16,6 +19,8 @@
 #   stop_max_ticks / slippage_folga_ticks / stop_padrao_ticks / alvo_padrao_ticks: limites em TICKS (nunca em pontos)
 #   risco_aprovado_padrao: true so quando config/risco.toml (travado por hash) foi aprovado PARA este ativo
 #   preco_sintetico_ref: nivel de preco dos dados sinteticos (nao e dado de mercado)
+#   fonte / fonte_data (opcionais): de onde vieram os valores e a data (AAAA-MM-DD) da fonte consultada
+#   confirmado_por / confirmado_em (opcionais): gravados por `robowin perfil confirmar`; nao edite a mao
 
 # Grade de sessao padrao (usada quando o perfil nao declara a sua).
 [[sessao_padrao]]

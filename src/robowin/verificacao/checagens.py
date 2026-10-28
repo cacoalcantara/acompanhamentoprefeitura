@@ -173,7 +173,8 @@ def perfis_ativo_bolsa(ctx: Contexto) -> Resultado:
                     bloqueados.append(a)
             else:
                 confirmados.append(a)
-        bolsas_ok, bolsas_bloq = [], []
+        bolsas_ok: list[str] = []
+        bolsas_bloq: list[str] = []
         for b in bolsas_disponiveis(bols):
             pb = carregar_bolsa(b, bols)
             (bolsas_bloq if pb.a_confirmar else bolsas_ok).append(b)
@@ -190,17 +191,22 @@ def politica_risco(ctx: Contexto) -> Resultado:
     nome = "Politica de risco (hash x config/aprovacoes)"
     if ctx.raiz is None:
         return nao_verificavel(nome, "raiz do repositorio nao encontrada")
-    from robowin.core.config import ErroConfig, carregar_toml, responsavel_pendente
+    from robowin.core.config import ErroConfig, carregar_toml, resolver_aprovacao, responsavel_pendente
     from robowin.risco.politica import carregar_politica
-    risco, apr = ctx.arq("config/risco.toml"), ctx.arq("config/aprovacoes/risco-v1.toml")
+    risco = ctx.arq("config/risco.toml")
+    apr = resolver_aprovacao(ctx.arq("config/aprovacoes/risco-v1.toml"), risco)  # versao mais recente valida
     try:
         carregar_politica(risco, apr)  # hash + coerencia
     except (ErroConfig, OSError, ValueError) as e:
-        return reprovado(nome, str(e))
-    if responsavel_pendente(carregar_toml(apr)):
-        return nao_verificavel(nome, "hash confere, mas o responsavel da aprovacao esta 'pendente': risco nao aprovado para o vivo "
-                               "(o modo vivo recusa; a simulacao roda rotulada risco_nao_aprovado)")
-    return aprovado(nome, "hash confere e ha responsavel pela aprovacao")
+        return reprovado(nome, f"{e}. Reaprove: robowin risco aprovar --responsavel \"<seu nome>\"")
+    assert apr is not None
+    reg = carregar_toml(apr)
+    if responsavel_pendente(reg):
+        return nao_verificavel(nome, f"hash confere ({apr.name}), mas o responsavel da aprovacao esta 'pendente': risco nao "
+                               "aprovado para o vivo (o modo vivo recusa; a simulacao roda rotulada risco_nao_aprovado). "
+                               "Para aprovar: robowin risco aprovar --responsavel \"<seu nome>\"")
+    return aprovado(nome, f"hash confere ({apr.name}) e ha responsavel pela aprovacao ({reg.get('responsavel')}, "
+                    f"{reg.get('data', '?')})")
 
 
 def _chamadas_order_send(arvore: ast.AST) -> list[int]:
