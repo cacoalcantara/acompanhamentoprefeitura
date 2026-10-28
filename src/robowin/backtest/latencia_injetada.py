@@ -47,7 +47,8 @@ class DistribuicaoLatencia:
     @classmethod
     def de_banco(cls, banco: Banco, etapa: str, *, modelo: str | None = None, suave: bool = False) -> DistribuicaoLatencia:
         """Amostras MEDIDAS (injetado=0) da tabela `latencias` para uma etapa."""
-        sql, params = "SELECT dur_ms FROM latencias WHERE etapa=? AND injetado=0", (etapa,)
+        sql = "SELECT dur_ms FROM latencias WHERE etapa=? AND injetado=0"
+        params: tuple[str, ...] = (etapa,)
         if modelo is not None:
             sql, params = sql + " AND modelo=?", (etapa, modelo)
         linhas = banco.consultar(sql + " ORDER BY id", params)

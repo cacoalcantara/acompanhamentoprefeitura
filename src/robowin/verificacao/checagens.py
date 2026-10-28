@@ -173,7 +173,8 @@ def perfis_ativo_bolsa(ctx: Contexto) -> Resultado:
                     bloqueados.append(a)
             else:
                 confirmados.append(a)
-        bolsas_ok, bolsas_bloq = [], []
+        bolsas_ok: list[str] = []
+        bolsas_bloq: list[str] = []
         for b in bolsas_disponiveis(bols):
             pb = carregar_bolsa(b, bols)
             (bolsas_bloq if pb.a_confirmar else bolsas_ok).append(b)

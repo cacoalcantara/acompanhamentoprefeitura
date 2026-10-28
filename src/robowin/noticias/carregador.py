@@ -17,10 +17,9 @@ log = logging.getLogger("robowin.noticias")
 
 def carregar_fontes(cfg: dict[str, Any] | str | Path = "config/fontes.toml", *, relogio: Relogio | None = None,
                     transporte: Transporte | None = None, permitir_nao_verificadas: bool = False) -> list[FonteNoticias]:
-    if not isinstance(cfg, dict):
-        cfg = carregar_toml(cfg)
+    dados: dict[str, Any] = cfg if isinstance(cfg, dict) else carregar_toml(cfg)
     out: list[FonteNoticias] = []
-    for f in cfg.get("fonte", []):
+    for f in dados.get("fonte", []):
         verificado = bool(f.get("verificado", False))
         if not verificado and not permitir_nao_verificadas:
             log.info("fonte %s nao verificada: ignorada", f.get("nome"))

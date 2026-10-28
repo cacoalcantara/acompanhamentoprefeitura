@@ -61,8 +61,9 @@ class ProvedorGoogle(ProvedorBase):
             if getattr(ch, "usage_metadata", None) is not None:
                 usage = ch.usage_metadata
             pf = getattr(ch, "prompt_feedback", None)
-            if getattr(pf, "block_reason", None):
-                bloqueio = _nome(pf.block_reason)
+            motivo_bloqueio = getattr(pf, "block_reason", None)
+            if motivo_bloqueio:
+                bloqueio = _nome(motivo_bloqueio)
             for c in getattr(ch, "candidates", None) or []:
                 if getattr(c, "finish_reason", None):
                     fim = _nome(c.finish_reason)

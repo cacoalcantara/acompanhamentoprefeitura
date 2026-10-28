@@ -138,7 +138,7 @@ def bootstrap_por_pregao(pnl: Sequence[float], dias: Sequence[str], n_boot: int 
     exp_b = np.empty(n_boot)
     fl_b = np.empty(n_boot)
     for b in range(n_boot):
-        sel = rng.integers(m, size=m) if m else []
+        sel: Sequence[int] = rng.integers(m, size=m).tolist() if m else []
         y = np.concatenate([grupos[i] for i in sel]) if m else np.array([])
         exp_b[b] = y.mean() if y.size else math.nan
         fl_b[b] = _fl(y)
@@ -187,7 +187,7 @@ def deflated_sharpe(retornos: Sequence[float], n_tentativas: int,
     n = a.size
     if n < 3 or a.std(ddof=1) == 0:
         return {"sr": 0.0, "sr0": 0.0, "dsr": math.nan, "n": n, "n_tentativas": n_tentativas}
-    sr = sharpe(a)
+    sr = sharpe(a.tolist())
     g3 = float(stats.skew(a, bias=True))
     g4 = float(stats.kurtosis(a, fisher=False, bias=True))
     var_aprox = var_sr_tentativas is None

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 from ..core.tipos import Instrumento
 
@@ -29,7 +30,7 @@ class ParamsAS:
     afastamento_max_ticks: int = 2
 
     @classmethod
-    def do_instrumento(cls, ins: Instrumento, **kw: float) -> ParamsAS:
+    def do_instrumento(cls, ins: Instrumento, **kw: Any) -> ParamsAS:
         return cls(tick=ins.tick_pontos, **kw)
 
     def __post_init__(self) -> None:

@@ -586,7 +586,7 @@ class DubleMT5:
         if not c.trade_allowed:
             return C.RET_TRADE_DESABILITADO, "negociacao desabilitada na conta"
         acao = req.get("action")
-        sym = req.get("symbol")
+        sym = str(req.get("symbol") or "")
         if acao in (C.ACAO_DEAL, C.ACAO_PENDING):
             esp = self._especs.get(sym)
             if esp is None:
@@ -681,7 +681,7 @@ class DubleMT5:
         if ret != 0:
             return self._resultado(ret, req, com)
         c = self._conta
-        acao, sym = req["action"], req.get("symbol")
+        acao, sym = req["action"], str(req.get("symbol") or "")
         magic = int(req.get("magic", 0))
         if acao == C.ACAO_DEAL:
             vol = float(req["volume"])
@@ -689,7 +689,7 @@ class DubleMT5:
             parcial = falha is not None and falha.retcode == C.RET_PARCIAL
             if parcial:
                 step = self._especs[sym].volume_step
-                vol_exec = falha.volume if falha.volume is not None else max(step, float(int(vol / 2 / step)) * step)
+                vol_exec = falha.volume if falha is not None and falha.volume is not None else max(step, float(int(vol / 2 / step)) * step)
                 vol_exec = min(vol_exec, vol)
             else:
                 vol_exec = vol

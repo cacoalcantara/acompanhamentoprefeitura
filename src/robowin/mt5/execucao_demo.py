@@ -385,7 +385,7 @@ class ExecucaoDemo:
         if saida:
             if cmd.position_ticket is None:
                 raise self._recusa("saida exige position_ticket")
-            if pos is None or ticket != cmd.position_ticket:
+            if pos is None or ticket is None or ticket != cmd.position_ticket:
                 raise self._recusa("ticket inexistente: posicao ja encerrada (saida duplicada nao e enviada)")
             if (antes > 0) == compra:
                 raise self._recusa("lado da saida igual ao da posicao: aumentaria/inverteria a posicao")
@@ -472,17 +472,17 @@ class ExecucaoDemo:
         self.envios += 1
         res = self.t.order_send(req)
         t1 = self._agora_ms()
-        rc = None if res is None else int(res.retcode)
-        if estado_do_retcode(rc) == EstadoOrdem.INCERTA:
+        rc_envio: int | None = None if res is None else int(res.retcode)
+        if estado_do_retcode(rc_envio) == EstadoOrdem.INCERTA:
             self.estados[intencao_id] = EstadoOrdem.INCERTA
             self._incertas[intencao_id] = {
-                "t_ns": t_ns, "t_srv_ms": self.rs.utc_ns_para_servidor_ms(t_ns), "retcode": rc,
+                "t_ns": t_ns, "t_srv_ms": self.rs.utc_ns_para_servidor_ms(t_ns), "retcode": rc_envio,
                 "tipo": (meta or {}).get("tipo", req.get("action")), "lado": (meta or {}).get("lado"),
                 "magic": req.get("magic", 0), "ticket": (meta or {}).get("ticket"), "acao": req["action"],
             }
-            self._alerta("ordem_incerta", {"intencao_id": intencao_id, "retcode": rc})
+            self._alerta("ordem_incerta", {"intencao_id": intencao_id, "retcode": rc_envio})
         else:
-            self._tratar_retcode(rc, intencao_id)
+            self._tratar_retcode(rc_envio, intencao_id)
         return res, t0, t1
 
     def _tratar_retcode(self, rc: int | None, intencao_id: str) -> None:

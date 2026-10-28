@@ -120,7 +120,7 @@ class CanalComandosZMQ:
     def __init__(self, endereco: str, token: str | None = None) -> None:
         exigir_bind_seguro(endereco, token_do_ambiente() if token is None else token)
         import zmq
-        self._ctx = zmq.Context.instance()
+        self._ctx: zmq.Context[Any] = zmq.Context.instance()
         self._s = self._ctx.socket(zmq.ROUTER)
         self._s.bind(endereco)
 
@@ -145,7 +145,7 @@ class ClienteComandosZMQ:
 
     def __init__(self, endereco: str) -> None:
         import zmq
-        self._ctx = zmq.Context.instance()
+        self._ctx: zmq.Context[Any] = zmq.Context.instance()
         self._s = self._ctx.socket(zmq.DEALER)
         self._s.connect(endereco)
 

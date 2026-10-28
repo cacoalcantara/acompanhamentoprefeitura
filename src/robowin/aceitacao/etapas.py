@@ -701,14 +701,14 @@ def a5_ordens(ctx: Contexto) -> list[ResultadoEtapa]:
     finally:
         limpou = _limpar(ctx)
     # --- A5.4 estado final
-    ps, os_ = _estado_simbolo(ctx)
-    nossos_p = [p for p in (ps or ()) if int(p.magic) == MAGIC_ACEITACAO]
+    ps_fim, os_ = _estado_simbolo(ctx)
+    nossos_p = [p for p in (ps_fim or ()) if int(p.magic) == MAGIC_ACEITACAO]
     nossas_o = [o for o in (os_ or ()) if int(o.magic) == MAGIC_ACEITACAO]
-    if ps is None or os_ is None:
+    if ps_fim is None or os_ is None:
         out.append(reprovada("A5.4", f"{nome}: estado final", c4, "terminal sem resposta ao conferir o estado final"))
-    elif limpou or nossos_p or nossas_o or ps or os_:
+    elif limpou or nossos_p or nossas_o or ps_fim or os_:
         out.append(reprovada("A5.4", f"{nome}: estado final", c4,
-                             f"residuos: limpeza fez {limpou or 'nada'}; restam posicoes={len(ps)}, ordens={len(os_)}"))
+                             f"residuos: limpeza fez {limpou or 'nada'}; restam posicoes={len(ps_fim)}, ordens={len(os_)}"))
     else:
         out.append(aprovada("A5.4", f"{nome}: estado final", c4, "posicao zero e nenhuma ordem pendente", ordens_enviadas=ex.envios))
     return out

@@ -80,10 +80,9 @@ def bls_emprego(ano: int, mes: int, verificado: bool = False) -> EventoAgendado:
 
 
 def carregar_calendario(cfg: dict[str, Any] | str | Path = "config/fontes.toml") -> CalendarioEventos:
-    if not isinstance(cfg, dict):
-        cfg = carregar_toml(cfg)
+    dados: dict[str, Any] = cfg if isinstance(cfg, dict) else carregar_toml(cfg)
     evs = []
-    for c in cfg.get("calendario", []):
+    for c in dados.get("calendario", []):
         if c["orgao"] not in ORGAOS:
             raise ValueError(f"orgao desconhecido no calendario: {c['orgao']}")
         h, m = (int(x) for x in c["hora"].split(":"))

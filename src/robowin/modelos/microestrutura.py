@@ -14,6 +14,7 @@ import json
 import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -33,7 +34,7 @@ STATUS = ("nao_treinado", "em_validacao", "validado_oos", "reprovado")
 ORIGENS_SEM_SELO = ("sintetico", "contaminado")
 NS = 1_000_000_000
 
-PARAMS_LIGHTGBM = {  # FIXOS: nenhuma busca na v1
+PARAMS_LIGHTGBM: dict[str, Any] = {  # FIXOS: nenhuma busca na v1
     "objective": "multiclass", "n_estimators": 60, "learning_rate": 0.05, "num_leaves": 7,
     "min_child_samples": 150, "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8,
     "reg_lambda": 5.0, "n_jobs": 1, "verbose": -1, "deterministic": True, "force_row_wise": True,

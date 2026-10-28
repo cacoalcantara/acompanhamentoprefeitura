@@ -32,7 +32,7 @@ class PublicadorZMQ:
     """PUB com numero de sequencia; o assinante detecta lacunas."""
     def __init__(self, endereco: str) -> None:
         import zmq
-        self._ctx = zmq.Context.instance()
+        self._ctx: zmq.Context[Any] = zmq.Context.instance()
         self._s = self._ctx.socket(zmq.PUB)
         self._s.bind(endereco)
         self.seq = 0
@@ -49,7 +49,7 @@ class PublicadorZMQ:
 class AssinanteZMQ:
     def __init__(self, endereco: str, topicos: list[str]) -> None:
         import zmq
-        self._ctx = zmq.Context.instance()
+        self._ctx: zmq.Context[Any] = zmq.Context.instance()
         self._s = self._ctx.socket(zmq.SUB)
         self._s.connect(endereco)
         for t in topicos:

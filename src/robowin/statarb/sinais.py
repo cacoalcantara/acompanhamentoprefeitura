@@ -7,6 +7,7 @@ A atualizacao e incremental e causal: `sinal(t, precos)` so usa precos ate t.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -25,7 +26,7 @@ class SinalStatArbPadrao:
         self.z_entrada = z_entrada
         self.alfa = alfa
         self.meia_vida_max = meia_vida_max
-        self._cfg = dict(delta=delta, var_obs=var_obs, halflife_z=halflife_z, min_obs=min_obs)
+        self._cfg: dict[str, Any] = dict(delta=delta, var_obs=var_obs, halflife_z=halflife_z, min_obs=min_obs)
         self.status = "nao_treinado"
         self.ativas: tuple[str, ...] = ()
         self.t_ns = 0

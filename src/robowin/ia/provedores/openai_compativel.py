@@ -81,9 +81,10 @@ class ProvedorOpenAICompativel(ProvedorBase):
                 delta = getattr(esc, "delta", None)
                 if getattr(delta, "refusal", None):
                     recusa = True
-                if getattr(delta, "content", None):
+                conteudo = getattr(delta, "content", None)
+                if conteudo:
                     medidor.primeiro_token()
-                    partes.append(delta.content)
+                    partes.append(conteudo)
                 stop = getattr(esc, "finish_reason", None) or stop
         det = getattr(usage, "prompt_tokens_details", None)
         cache = int(getattr(det, "cached_tokens", 0) or 0)
