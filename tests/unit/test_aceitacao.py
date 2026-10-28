@@ -261,3 +261,29 @@ def test_higienizar_mascara_login_usuario_e_chaves(monkeypatch):
     t = M.higienizar(r"login 7654321 em C:\Users\Maria Silva\AppData\x e /home/joao/robowin; sk-proj-ABCDEFGHIJ123456", (7654321,))
     assert "7654321" not in t and "****21" in t and "Maria" not in t and "joao" not in t and "sk-proj" not in t
     assert M.mascarar_login(None) == "(nao informado)" and M.mascarar_login(900001) == "****01"
+
+
+# ---------------------------------------------------------------------------------------------- scripts e docs
+RAIZ = Path(__file__).resolve().parents[2]
+
+
+def test_scripts_windows_existem_sao_ascii_e_avisam_que_nao_foram_executados():
+    comp = (RAIZ / "scripts" / "windows" / "compilar_ea.ps1")
+    tudo = (RAIZ / "scripts" / "windows" / "validar_tudo.ps1")
+    for p in (comp, tudo):
+        txt = p.read_bytes().decode("ascii")  # ASCII puro: PowerShell 5.1 sem BOM nao corrompe acentos
+        assert "SEM PODER SER EXECUTADO" in txt.upper()
+    c = comp.read_text(encoding="ascii")
+    assert "/compile:" in c and "/log:" in c and "metaeditor.exe" in c and "RobowinBridge.mq4" in c and ".ex4" in c
+    t = tudo.read_text(encoding="ascii")
+    for trecho in ("pytest", "conferir_constantes_mt5.py", "lint_mql4.py", "robowin verificar", "--confirmo-conta-demo",
+                   "ConfirmoContaDemo", "Compress-Archive", ".env", "ROBOWIN_MT5_SENHA", "MANIFESTO"):
+        assert trecho in t, trecho
+    assert "compilar_ea.ps1" in t
+
+
+def test_docs_definem_o_cem_por_cento_como_aceitacao_no_windows():
+    doc = (RAIZ / "docs" / "12-aceitacao-no-windows.md").read_text(encoding="utf-8")
+    assert "sem nenhuma etapa REPROVADA" in doc and "NUNCA" in doc and "--confirmo-conta-demo" in doc
+    assert "aceitação rodada no Windows" in (RAIZ / "docs" / "ENTREGA.md").read_text(encoding="utf-8")
+    assert "docs/12-aceitacao-no-windows.md" in (RAIZ / "README.md").read_text(encoding="utf-8")

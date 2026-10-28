@@ -20,6 +20,13 @@ sem `--duble`); **compilar** `mql4/RobowinBridge.mq4` no MetaEditor (o linter n�
 (`config/aprovacoes/risco-v1.toml` está com `responsavel = "pendente"`); regras da corretora; conectividade com os
 hosts críticos (o `verificar` não usa rede).
 
+**O que passa a significar "100%".** Como o que falta provar só existe no Windows do usuário, o "100%" **não** é mais
+"tudo verde aqui": é **aceitação rodada no Windows do usuário** (`robowin aceitacao --confirmo-conta-demo`, passo a passo
+em `docs/12-aceitacao-no-windows.md`), com **relatório sem nenhuma etapa REPROVADA e com as etapas aplicáveis
+APROVADAS**. Etapa sem pré-requisito (pregão fechado, sem chave de API, perfil `a_confirmar`, plataforma errada) é
+**NÃO VERIFICÁVEL** com o motivo e nunca conta como aprovada. Contra o dublê (`--duble`) o comando só prova que o
+roteiro funciona e **não vale como aceitação**. Enquanto o relatório real não existir, os itens **DU** abaixo seguem **DU**.
+
 **Lucratividade nunca é provada.** Dados sintéticos e dublês não são mercado; resultado de simulação não prova ganho
 futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido de "meta de acerto" é tratado como
 **hipótese a testar** com amostra e incerteza declaradas (item 1), jamais como promessa.
@@ -33,6 +40,7 @@ futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido d
 |---|---|
 | Autoverificação rápida (matriz APROVADO / REPROVADO / NÃO VERIFICÁVEL AQUI) | `uv run robowin verificar` (`--json` para máquina) |
 | Suíte completa (~10 min) | `uv run --extra dev pytest -q` |
+| Aceitação no terminal DEMO (Windows do usuário) | `uv run robowin aceitacao --confirmo-conta-demo` (ou `scripts/windows/validar_tudo.ps1 -ConfirmoContaDemo`); ensaio sem terminal: `uv run robowin aceitacao --duble --confirmo-conta-demo` |
 | Lint | `uv run ruff check .` e `uv run python scripts/lint_mql4.py mql4/RobowinBridge.mq4` |
 | Sessão completa sintética | `uv run robowin simular --n-ticks 3000` e `uv run robowin auditoria --dir <saida>/auditoria` |
 | Painel | `uv run robowin painel-demo` e `uv run robowin painel` (capturas: `docs/capturas/README.md`) |
@@ -151,6 +159,17 @@ futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido d
 | Espelhamento na demo | `src/robowin/decisao/espelho.py` | `tests/unit/test_espelho_demo.py`, `tests/unit/test_trava_espelho.py`, `tests/integracao/test_e2e_espelho.py` | VD; **DU** (conta demo real) |
 | Modelo persistente | `src/robowin/modelos/persistencia.py`, `uv run robowin treinar` | `tests/unit/test_modelos_persistencia.py` | VA (artefato com hash, recusa de outro ativo) |
 | IA plugável | `src/robowin/ia/provedores/` (Anthropic, OpenAI, Google, Ollama, OpenAI-compatível, falso), `config/robowin.toml` | `tests/unit/test_ia_provedores.py`, `tests/unit/test_ia_catalogo.py` | VD (rede/chaves: DU) |
+
+## Aceitação no Windows do usuário (Fase 5)
+
+| Item | Onde está | Evidência | Status |
+|---|---|---|---|
+| Comando `robowin aceitacao` (A1–A11, somente DEMO, relatório `aceitacao-<data>.md/.json`) | `src/robowin/aceitacao/` (`etapas.py`, `matriz.py`, `relatorio.py`, `cli_cmds.py`) | `tests/unit/test_aceitacao.py` (roda inteira contra `DubleMT5` e `DubleMT4`; sem a flag 0 ordens; conta real/contest/servidor sem DEMO/login errado recusados com 0 envios; perfil `a_confirmar` bloqueia ordens; nenhum segredo no relatório; REPROVADO muda o código de saída) | VD |
+| Toda ordem da aceitação passa por `ExecucaoDemo` | `src/robowin/mt5/execucao_demo.py` | `tests/unit/test_mt5_ast.py` (continua verde com o módulo novo) | VA |
+| Compilar o EA no MetaEditor | `scripts/windows/compilar_ea.ps1` | — (escrito **sem poder ser executado** aqui) | **DU** |
+| Validação completa + zip sem segredos | `scripts/windows/validar_tudo.ps1` | — (idem) | **DU** |
+| Passo a passo para o usuário | `docs/12-aceitacao-no-windows.md` | revisão humana | VA |
+| **Aceitação real** (terminal, conta demo, latência de ordens e de IA, kill switch no terminal real) | `docs/12-aceitacao-no-windows.md` | relatório do usuário, sem REPROVADO | **DU** (é o que fecha o "100%") |
 
 ## O que continua não verificado (de `docs/10-pendencias.md` e `docs/11-validacao-sandbox.md`)
 

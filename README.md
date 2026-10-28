@@ -29,6 +29,13 @@ Autoverificação rápida (< 60 s, sem rede, sem ordens): `uv run robowin verifi
 Windows (MT5 real, conta **DEMO**): `scripts/windows/instalar.ps1`, depois `uv run robowin diagnostico` e
 `docs/07-risco-e-operacao.md`.
 
+**Aceitação no seu Windows (é o que fecha o "100%").** O que só existe na sua máquina (terminal MT5/MT4, conta demo,
+compilação do EA, latência real de ordens e de IA) é provado por `uv run robowin aceitacao --confirmo-conta-demo`
+(ou `scripts\windows\validar_tudo.ps1 -ConfirmoContaDemo`), que roda as etapas A1–A11 **somente em conta DEMO**, grava
+`aceitacao-<data>.md/.json` e sai com código != 0 se houver REPROVADO. Sem a flag, nenhuma ordem é enviada. Aqui, "100%"
+significa: **aceitação rodada no Windows do usuário, com relatório sem REPROVADO e com as etapas aplicáveis APROVADAS**.
+Passo a passo e o que nunca é enviado: [docs/12-aceitacao-no-windows.md](docs/12-aceitacao-no-windows.md).
+
 ## Variáveis de ambiente
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (e de outros provedores), `ROBOWIN_MT5_SENHA`, `ROBOWIN_TOKEN`.
 Chaves nunca são gravadas em logs.
