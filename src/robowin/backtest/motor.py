@@ -12,13 +12,22 @@ Divergencias deliberadas em relacao ao ao-vivo: (1) o kill switch e rearmado a c
 rearme e manual, com motivo e responsavel); (2) o tempo-limite da intencao e imposto pelo motor de backtest
 (no real, pelo orquestrador); (3) posicao ainda aberta no fim dos dados e apenas marcada a mercado e
 reportada (`posicoes_abertas_fim` + evento de risco critico), nunca liquidada com preco inventado.
+
+Memoria reflexiva (``ia/reflexao.py``; ``[reflexao] ativo = false`` por padrao): com ``ConfigBacktest.reflexao``
+ligada e um ``servico_reflexao``, cada trade de braco com IA (``braco.ia``) vira PENDENTE; no inicio de cada rodada de
+decisao (como o ``_ciclo`` do Orquestrador) as pendentes cujo atraso de liquidacao venceu sao liquidadas pela MESMA
+``liquidar_pendentes`` e a licao so entra no dossie a partir de ``t_disponivel = t_liquidacao + latencia da IA``. A
+latencia da IA no backtest e INJETADA (``ConfigReflexaoBacktest.latencia``, deterministica) e nunca menor que a
+medida na chamada: o resultado continua reprodutivel e a licao nunca aparece antes de existir.
 """
 from __future__ import annotations
 
+import asyncio
 import bisect
 import json
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -42,6 +51,7 @@ from robowin.execucao.simulador import EventoSim
 from robowin.features.pipeline import PipelineFeatures
 from robowin.features.registro import nomes_permitidos
 from robowin.ia.dossie import ErroDossie, hash_dossie, montar_dossie
+from robowin.ia.reflexao import MemoriaReflexiva, liquidar_pendentes
 from robowin.risco.kill_switch import EventoKill
 from robowin.risco.motor import EstadoMercado, EventoAgenda
 from robowin.risco.tempo import dia_sp, hhmm_para_s, segundos_do_dia
@@ -52,9 +62,64 @@ from .latencia_injetada import DistribuicaoLatencia, carimbo_injetado, linha_lat
 from .replay import EventoReplay, FonteArmazem, FonteEventos, tick_no_instante
 
 NS = 1_000_000_000
+LATENCIA_REFLEXAO_PADRAO_MS = 5000.0  # conservador; troque por amostras medidas (chamadas_llm.total_ms, papel reflexao)
 
 
 # ============================================================================================ configuracao
+@dataclass(frozen=True)
+class ConfigReflexaoBacktest:
+    """``[reflexao]`` no backtest (mesmos campos do Orquestrador + latencia injetada da IA)."""
+    ativo: bool = False  # DESLIGADA por padrao
+    atraso_liquidacao_s: float = 300.0
+    max_reflexoes: int = 3
+    max_tentativas: int = 3
+    prazo_s: float = 30.0
+    latencia: DistribuicaoLatencia = field(
+        default_factory=lambda: DistribuicaoLatencia.fixa(LATENCIA_REFLEXAO_PADRAO_MS))
+
+    def memoria(self) -> MemoriaReflexiva:
+        return MemoriaReflexiva(self.atraso_liquidacao_s, self.max_reflexoes, self.max_tentativas)
+
+
+def reflexao_de_config(cfg: Mapping[str, Any] | None, latencia: DistribuicaoLatencia | None = None
+                       ) -> ConfigReflexaoBacktest:
+    """Le ``[reflexao]`` de config/robowin.toml (chaves ausentes => padroes; ``ativo = false``)."""
+    sec = dict((cfg or {}).get("reflexao", {}) or {})
+    b = ConfigReflexaoBacktest()
+    return ConfigReflexaoBacktest(
+        ativo=bool(sec.get("ativo", b.ativo)),
+        atraso_liquidacao_s=float(sec.get("atraso_liquidacao_s", b.atraso_liquidacao_s)),
+        max_reflexoes=int(sec.get("max_reflexoes", b.max_reflexoes)), prazo_s=float(sec.get("prazo_s", b.prazo_s)),
+        latencia=latencia or b.latencia)
+
+
+class _ServicoLatenciaInjetada:
+    """Envolve o servico de reflexao: a latencia usada para ``t_disponivel`` e max(medida, injetada)."""
+
+    def __init__(self, servico: Any, amostrar_ms: Callable[[], float]) -> None:
+        self.servico, self.amostrar_ms = servico, amostrar_ms
+        self.latencias_ms: list[float] = []
+
+    async def chamar(self, mensagem: str, prazo_s: float, hash_dossie: str) -> Any:
+        inj = float(self.amostrar_ms())  # amostra SEMPRE (sequencia deterministica, mesmo se a chamada falhar)
+        obj, ch, motivo = await self.servico.chamar(mensagem, prazo_s, hash_dossie)
+        lat = max(float(ch.total_ms), inj)
+        self.latencias_ms.append(lat)
+        return obj, ch.model_copy(update={"total_ms": lat}), motivo
+
+
+def _rodar(coro: Coroutine[Any, Any, Any], loop: asyncio.AbstractEventLoop | None) -> Any:
+    """Roda a corrotina de forma sincrona (o motor e sincrono). Dentro de um loop ja em execucao, usa uma thread."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        if loop is not None:
+            return loop.run_until_complete(coro)
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
+
+
 @dataclass(frozen=True)
 class ConfigBacktest:
     instrumento: Instrumento  # obrigatorio: vem do perfil do ativo (core.instrumentos)
@@ -76,6 +141,7 @@ class ConfigBacktest:
     rearmar_kill_por_dia: bool = True
     id_experimento: str = "backtest"
     extras_dossie: Callable[[int, dict[str, float]], dict[str, Any]] | None = None
+    reflexao: ConfigReflexaoBacktest = field(default_factory=ConfigReflexaoBacktest)  # desligada por padrao
 
     def custos_efetivos(self) -> Custos:
         return self.custos or Custos.do_instrumento(self.instrumento)
@@ -104,6 +170,8 @@ class ResultadoBacktest:
     posicoes: list[dict[str, Any]]
     posicoes_abertas_fim: dict[str, int]
     motivos_saida: dict[str, dict[str, int]] = field(default_factory=dict)
+    reflexoes: list[dict[str, Any]] = field(default_factory=list)  # memoria reflexiva exportada (se ligada)
+    custo_reflexao_usd: dict[str, float] = field(default_factory=dict)
 
     def trades_por_braco(self) -> dict[str, list[Trade]]:
         return {b: list(self.trades.get(b, [])) for b in self.bracos}
@@ -113,7 +181,11 @@ class ResultadoBacktest:
 
     def conteudo_normalizado(self) -> dict[str, Any]:
         """Conteudo que entra no hash: sem ids gerados por contador global nem relogio de parede."""
-        return {
+        extra: dict[str, Any] = {}
+        if self.reflexoes:  # so com a memoria reflexiva ligada (o hash de quem nao a usa nao muda)
+            extra["reflexoes"] = [[r["trade_id"], r["braco"], r["estado"], r["t_saida_ns"], r["t_liquidacao_ns"],
+                                   r["t_disponivel_ns"], r["licao"]] for r in self.reflexoes]
+        return {**extra,
             "cenario": self.cenario, "seed": self.seed, "n_eventos": self.n_eventos, "bracos": self.bracos,
             "decisoes": [[d["t_ns"], d["braco"], d["gatilho"], d["acao"], d["resultado"], d["motivos"],
                           d["hash_dossie"], d["intencao_json"], d["risco_json"]] for d in self.decisoes],
@@ -178,7 +250,7 @@ class MotorBacktest:
     """Executa UM cenario sobre uma fonte de eventos com N bracos. Uso unico (`executar()` so uma vez)."""
 
     def __init__(self, fonte: FonteEventos, bracos: Sequence[Braco], cfg: ConfigBacktest | None = None,
-                 banco: Banco | None = None) -> None:
+                 banco: Banco | None = None, *, servico_reflexao: Any = None) -> None:
         if cfg is None:
             raise ValueError("backtest exige ConfigBacktest com o instrumento do ativo (perfil)")
         if not bracos:
@@ -187,6 +259,9 @@ class MotorBacktest:
         if len(set(ids)) != len(ids):
             raise ValueError("ids de bracos duplicados")
         self.fonte, self.bracos, self.cfg, self.banco = fonte, list(bracos), cfg, banco
+        self.servico_reflexao = servico_reflexao  # ServicoLLM (papel reflexao) ou duble com ``chamar``
+        self.memoria_reflexiva: MemoriaReflexiva | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._usado = False
 
     @classmethod
@@ -201,9 +276,14 @@ class MotorBacktest:
         self._usado = True
         eventos = self.fonte.eventos()
         self._iniciar(eventos)
-        for ev in eventos:
-            self._processar(ev)
-        return self._finalizar()
+        try:
+            for ev in eventos:
+                self._processar(ev)
+            return self._finalizar()
+        finally:
+            if self._loop is not None:
+                self._loop.close()
+                self._loop = None
 
     # ------------------------------------------------------------------------------------ preparo
     def _iniciar(self, eventos: Sequence[EventoReplay]) -> None:
@@ -243,6 +323,7 @@ class MotorBacktest:
         self._n_trd = {b: 0 for b in self.ids}
         self._n_auto = 0
         self._t_ult = self.rel.agora_ns()
+        self._iniciar_reflexao(eventos)
         self.grav.add("experimentos", {
             "id": cfg.id_experimento, "criado_ns": self.rel.agora_ns(), "status": "backtest_" + cfg.cenario,
             "manifesto_json": {
@@ -252,7 +333,36 @@ class MotorBacktest:
                 "latencia": {"origem": cfg.latencia.origem, "injetada": True, **cfg.latencia.quantis()},
                 "custos": {"corretagem_ida_volta_brl": cfg.custos_efetivos().corretagem_ida_volta_brl},
                 "slippage": {"minimo_ticks": cfg.slippage.minimo_ticks, "alpha": cfg.slippage.alpha},
-                "intervalo_decisao_s": cfg.intervalo_decisao_s}})
+                "intervalo_decisao_s": cfg.intervalo_decisao_s,
+                **({"reflexao": {"atraso_liquidacao_s": cfg.reflexao.atraso_liquidacao_s,
+                                 "max_reflexoes": cfg.reflexao.max_reflexoes,
+                                 "latencia": {"origem": cfg.reflexao.latencia.origem, "injetada": True,
+                                              **cfg.reflexao.latencia.quantis()}}}
+                   if self.memoria_reflexiva is not None else {})}})
+
+    def _iniciar_reflexao(self, eventos: Sequence[EventoReplay]) -> None:
+        """Memoria reflexiva NOVA por execucao (uso unico, sem estado entre cenarios)."""
+        rc = self.cfg.reflexao
+        self._serv_ref: _ServicoLatenciaInjetada | None = None
+        self._ia = {b.id: bool(getattr(b, "ia", False)) for b in self.bracos}
+        self._resumo_entrada: dict[str, dict[str, Any]] = {b: {} for b in self.ids}
+        self._custo_ref: dict[str, float] = {}
+        self._n_ref = 0
+        if not rc.ativo:
+            return
+        t0 = eventos[0].t_disp_ns if eventos else 0
+        if self.servico_reflexao is None:
+            self._incidente(t0, "reflexao", "info", "[reflexao] ativo sem servico de reflexao: memoria reflexiva desligada")
+            return
+        if not any(self._ia.values()):
+            self._incidente(t0, "reflexao", "info", "[reflexao] ativo, mas nenhum braco com IA: nada a refletir")
+        self.memoria_reflexiva = rc.memoria()
+        self._serv_ref = _ServicoLatenciaInjetada(
+            self.servico_reflexao, rc.latencia.amostrador(self.cfg.seed + 11).amostrar_ms)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = asyncio.new_event_loop()
 
     # ------------------------------------------------------------------------------------ callbacks
     def _ao_ordem(self, o: OrdemOMS) -> None:
@@ -376,11 +486,19 @@ class MotorBacktest:
         self.motivos_saida[b][motivo] += 1
         self._limite_tempo[b] = None
         sinal = 1.0 if tr.lado == Lado.COMPRA else -1.0
-        self._memoria[b].append({
+        entrada_mem = {
             "acao": "COMPRAR" if tr.lado == Lado.COMPRA else "VENDER",
             "resultado_pontos": sinal * (tr.saida - tr.entrada), "duracao_s": (tr.t_saida_ns - tr.t_entrada_ns) // NS,
-            "motivo_saida": motivo})
+            "motivo_saida": motivo, "trade_id": f"{b}:{self._n_trd[b]}"}  # trade_id nao entra no dossie
+        self._memoria[b].append(entrada_mem)
         self._memoria[b] = self._memoria[b][-self.cfg.memoria_trades:]
+        if self.memoria_reflexiva is not None and self._ia.get(b):
+            # PENDENTE: a reflexao so nasce depois do atraso de liquidacao (mesma regra do Orquestrador)
+            self.memoria_reflexiva.registrar_trade(
+                trade_id=str(entrada_mem["trade_id"]), braco=b, t_saida_ns=tr.t_saida_ns,
+                acao=str(entrada_mem["acao"]), resultado_pontos=float(entrada_mem["resultado_pontos"]),
+                duracao_s=int(entrada_mem["duracao_s"]), motivo_saida=motivo,
+                resumo_decisao=self._resumo_entrada.get(b) or {})
         self.grav.add("trades", {
             "id": tr.id, "braco": b, "lado": tr.lado.value, "entrada": tr.entrada, "saida": tr.saida,
             "t_entrada_ns": tr.t_entrada_ns, "t_saida_ns": tr.t_saida_ns, "bruto_brl": tr.bruto_brl,
@@ -459,11 +577,48 @@ class MotorBacktest:
                 limites={"perda_restante_dia_brl": cfg.cfg_risco.perda_max_dia_brl + est.pnl_dia_total,
                          "operacoes_restantes": float(cfg.cfg_risco.operacoes_dia_max - est.operacoes_dia),
                          "perdas_seguidas": float(est.perdas_seguidas), "drawdown_brl": est.drawdown},
-                memoria=self._memoria[braco], minutos_desde_abertura=int((s - hhmm_para_s(g.abertura)) // 60),
+                memoria=self._memoria_do_dossie(braco, t), minutos_desde_abertura=int((s - hhmm_para_s(g.abertura)) // 60),
                 minutos_para_zeragem=int((hhmm_para_s(g.zeragem) - s) // 60), tick_pontos=ins.tick_pontos,
                 regime="normal" if self._feed_ok else "feed_instavel", **extras)
 
+    def _memoria_do_dossie(self, braco: str, t: int) -> list[dict[str, Any]]:
+        """Memoria de operacoes; com memoria reflexiva, anexa SO as licoes ja disponiveis em ``t``."""
+        mem = self._memoria[braco]
+        if self.memoria_reflexiva is None:
+            return mem
+        return self.memoria_reflexiva.enriquecer(mem, braco, t)
+
+    def _liquidar_reflexoes(self, t: int) -> None:
+        """Pede (e custeia) as reflexoes cujo atraso venceu em ``t``. Opcional e a prova de falha."""
+        mem, serv = self.memoria_reflexiva, self._serv_ref
+        if mem is None or serv is None:
+            return
+        try:
+            niveis = [p for _, p in self._ring]
+            n_lat = len(serv.latencias_ms)
+            chamadas = _rodar(liquidar_pendentes(mem, t, serv, prazo_s=self.cfg.reflexao.prazo_s,
+                                                 niveis_absolutos=niveis), self._loop)
+            for ms in serv.latencias_ms[n_lat:]:
+                linha = linha_latencia(carimbo_injetado("reflexao_ia", "", t, ms))
+                self.r_lat.append(linha)
+                self.grav.add("latencias", linha)
+            for braco_id, ch in chamadas:
+                self._n_ref += 1
+                self._custo_ref[braco_id] = self._custo_ref.get(braco_id, 0.0) + float(ch.custo_usd)
+                self.grav.add("chamadas_llm", {
+                    "id": f"llm-ref-{self._n_ref:06d}", "t_ns": t, "braco": braco_id, "papel": ch.papel,
+                    "modelo_pedido": ch.modelo_pedido, "modelo_servido": ch.modelo_servido,
+                    "request_id": ch.request_id, "versao_api": ch.versao_api, "hash_prompt": ch.hash_prompt,
+                    "hash_dossie": ch.hash_dossie, "stop_reason": ch.stop_reason,
+                    "categoria_recusa": ch.categoria_recusa, "tokens_entrada": ch.tokens_entrada,
+                    "tokens_cache": ch.tokens_cache, "tokens_saida": ch.tokens_saida, "custo_usd": ch.custo_usd,
+                    "ttft_ms": ch.ttft_ms, "total_ms": ch.total_ms, "valida": int(ch.valida), "erro": ch.erro,
+                    "resposta_bruta": ch.resposta_bruta})
+        except Exception as exc:  # defensivo: reflexao e opcional, nunca derruba a rodada
+            self._incidente(t, "reflexao", "aviso", f"{type(exc).__name__}: {exc}"[:300])
+
     def _rodada_decisao(self, t: int) -> None:
+        self._liquidar_reflexoes(t)  # como o _ciclo do Orquestrador: antes de montar os dossies
         assert self._pipe is not None
         tk = self.exec.ultimo_tick
         assert tk is not None
@@ -515,6 +670,9 @@ class MotorBacktest:
             if it.acao in (Acao.COMPRAR, Acao.VENDER) and res.envio.ordem.estado.value not in (
                     "REJEITADA", "CANCELADA", "EXPIRADA"):
                 self._limite_tempo[b] = it.tempo_max_s
+                if self.memoria_reflexiva is not None:  # base da reflexao (so a geometria; sem niveis absolutos)
+                    self._resumo_entrada[b] = {"stop_pontos": it.stop_pontos, "alvo_pontos": it.alvo_pontos,
+                                               "tempo_max_s": it.tempo_max_s}
             if it.acao == Acao.ENCERRAR:
                 self._causa_saida[b] = "encerrar_braco"
         self._registrar_decisao(b, t, "periodico", it, h, dec.model_dump_json(), resultado, motivos)
@@ -547,13 +705,16 @@ class MotorBacktest:
             bracos=self.ids, decisoes=self.r_decisoes, ordens=ordens, execucoes=self.r_execucoes,
             trades=self.r_trades, equity=self.r_equity, eventos_risco=self.r_risco, latencias=self.r_lat,
             posicoes=self.r_pos, posicoes_abertas_fim=abertas,
-            motivos_saida={b: dict(c) for b, c in self.motivos_saida.items()})
+            motivos_saida={b: dict(c) for b, c in self.motivos_saida.items()},
+            reflexoes=self.memoria_reflexiva.exportar() if self.memoria_reflexiva is not None else [],
+            custo_reflexao_usd=dict(self._custo_ref))
 
 
 # ============================================================================================ cenarios
 def executar_cenarios(
     fonte: FonteEventos, fabrica_bracos: Callable[[], Sequence[Braco]], cfg: ConfigBacktest,
     fabrica_banco: Callable[[str], Banco | None] | None = None, cenarios: Sequence[str] = ("base", "estresse"),
+    *, servico_reflexao: Any = None,
 ) -> dict[str, ResultadoBacktest]:
     """Roda custos-base e estresse (slippage/corretagem agravados) com bracos NOVOS por cenario."""
     out: dict[str, ResultadoBacktest] = {}
@@ -565,6 +726,6 @@ def executar_cenarios(
         else:
             raise ValueError(f"cenario desconhecido: {nome}")
         banco = fabrica_banco(nome) if fabrica_banco else None
-        out[nome] = MotorBacktest(fonte, fabrica_bracos(), c, banco).executar()
+        out[nome] = MotorBacktest(fonte, fabrica_bracos(), c, banco, servico_reflexao=servico_reflexao).executar()
     return out
 
