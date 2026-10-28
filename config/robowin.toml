@@ -1,6 +1,7 @@
 [geral]
 modo = "simulacao"          # nunca "real" nesta etapa
 conta = "demo_mt5"          # interno | demo_mt5
+# moeda_conta = "BRL"       # opcional: moeda da conta (limites de risco nela); diferente da de lucro do simbolo sem cotacao de conversao no nucleo => entradas bloqueadas
 dados = "dados_locais"
 simbolo_base = "WIN"
 # Espelha UM braco (id) na conta DEMO via gateway (decisao/espelho.py). Vazio = desligado (padrao).

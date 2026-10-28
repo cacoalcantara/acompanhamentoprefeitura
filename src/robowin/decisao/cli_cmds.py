@@ -100,7 +100,11 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
         # Maquina do Tempo: so sessoes ANTERIORES ao pregao corrente, do mesmo ativo; sem base => sem avaliador
         odds = piscina_odds_nucleo(cfg_geral, perfil, data_sp(rel.agora_ns()), config_path=a.config)
         m = construir_orquestrador(
-            p, rel=rel, registro=registro, ins=perfil.instrumento(a.simbolo or perfil.simbolo_base),
+            p, rel=rel, registro=registro,
+            # [geral].moeda_conta (opcional): conta em moeda diferente da de lucro do simbolo SEM cotacao de conversao
+            # no nucleo => entradas vetadas (falha segura; o gateway ainda nao publica o par de conversao)
+            ins=perfil.instrumento(a.simbolo or perfil.simbolo_base,
+                                   moeda_conta=str(cfg_geral.get("geral", {}).get("moeda_conta") or "").upper()),
             modelo=modelo, statarb=None, precos_aux=None, sintetico=False,
             modo_tempo="real", sessao_id=sessao_id, t_ref_ns=rel.agora_ns(), piscina_odds=odds.piscina)
         odds.registrar(registro, rel.agora_ns())
