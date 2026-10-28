@@ -20,7 +20,7 @@ def _params(a: argparse.Namespace) -> Any:
         seed=a.seed, n_ticks=a.n_ticks, sinal_forca=a.sinal_forca, saida=Path(a.saida), provedor=a.provedor,
         config=Path(a.config), catalogo=Path(a.catalogo), risco=Path(a.risco), aprovacao=Path(a.aprovacao),
         theta_brl=a.theta, com_condicional=not a.sem_condicional, p_timeout=a.p_timeout, p_http=a.p_http,
-        passo_s=a.passo_s, checagem_s=a.checagem_s, ativo=a.ativo,
+        passo_s=a.passo_s, checagem_s=a.checagem_s, ativo=a.ativo, odds_sessoes=getattr(a, "odds_sessoes", 0),
         registro_modelos=Path(a.registro_modelos) if a.registro_modelos else None, tipo_modelo=a.tipo_modelo,
         idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 60.0)
 
@@ -175,6 +175,9 @@ def registrar(sub: Any) -> None:
     s.add_argument("--seed", type=int, default=7)
     s.add_argument("--n-ticks", type=int, default=12_000, help="ticks por pregao sintetico (treino + sessao)")
     s.add_argument("--sinal-forca", type=float, default=0.05)
+    s.add_argument("--odds-sessoes", type=int, default=0,
+                   help="N > 0: gera N pregoes sinteticos anteriores e liga a Maquina do Tempo (probabilidades do "
+                        "plano como evidencia ao revisor; veto so com [decisao].veto_por_odds = true)")
     s.add_argument("--saida", default=f"dados_locais/simulacao/sessao-{int(time.time())}")
     s.add_argument("--registro-modelos", default=None,
                    help="registro de modelos do ativo: usa o artefato persistido em vez de treinar na hora")

@@ -18,6 +18,13 @@ effort = "low"
 [ia.papeis.classificador_nlp]
 modelo = "anthropic:claude-haiku-5-5"
 
+[decisao]
+# Maquina do Tempo (avaliacao/maquina_do_tempo.py): probabilidades do plano proposto entregues ao REVISOR como
+# evidencia (simulacao de bootstrap das sessoes anteriores; NAO e previsao). O veto por odds e opcional e DESLIGADO.
+veto_por_odds = false      # true: bloqueia a entrada se a fracao de alvos entre os desfechos resolvidos ficar
+                           # abaixo do equilibrio liquido de custos + margem (motivo rotulado "veto_por_odds")
+margem_veto_odds = 0.05    # margem somada ao equilibrio liquido (fracao: 0.05 = 5 pontos percentuais)
+
 [prazos]
 imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_ticks = 4 }
 condicional = { expira_min_max = 10 }

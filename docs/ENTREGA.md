@@ -6,7 +6,7 @@
 
 ## Resumo honesto (leia primeiro)
 
-**100% verificável em software, aqui (Linux, sem terminal):** código importável (181 módulos), estilo (ruff), linter
+**100% verificável em software, aqui (Linux, sem terminal):** código importável (184 módulos), estilo (ruff), linter
 estático do `.mq4`, cadeia de auditoria com detecção de adulteração, catálogo de modelos, perfis de ativo/bolsa
 (só o WIN confirmado; os demais **bloqueiam** a operação), política de risco travada por hash, `order_send` único
 (AST), ausência de números de ativo no código, `diagnostico` e gateway/cliente contra o **dublê** MT5 e MT4, painel
@@ -148,6 +148,8 @@ futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido d
 | Microestrutura | `src/robowin/modelos/microestrutura.py`, `src/robowin/features/` | `tests/unit/test_modelos_sinal.py`, `tests/unit/test_feat_pipeline.py` | VA (sintético) |
 | StatArb | `src/robowin/statarb/`, `uv run robowin statarb demo` | `tests/unit/test_statarb_m6.py` | VA (sintético) |
 | NLP/LLM de notícias | `src/robowin/noticias/`, `config/prompts/nlp_v1.md`, `config/fontes.toml` | `tests/unit/test_noticias_calendario_classificador.py`, `tests/unit/test_noticias_fontes_dedup.py` | VD; **DU** (fontes e chaves) |
+| Máquina do Tempo (probabilidades do plano por bootstrap das sessões anteriores; `uv run robowin maquina-do-tempo --ativo WIN --sintetico --lado compra --stop-pontos 100 --alvo-pontos 200`; ideia inspirada no Time Machine do day-trader-skill, MIT, reimplementação independente: `THIRD_PARTY_NOTICES.md`, `docs/13-inspiracoes.md`) | `src/robowin/avaliacao/maquina_do_tempo.py`, `src/robowin/avaliacao/cli_maquina.py` | `tests/unit/test_maquina_do_tempo.py` | VA (sintético; **simulação, NÃO é previsão**) |
+| Probabilidades do plano como evidência ao revisor e veto opcional por odds (`[decisao].veto_por_odds = false` por padrão; indisponível nunca bloqueia nem aprova) | `src/robowin/decisao/odds.py`, `src/robowin/decisao/bracos/llm.py`, `src/robowin/decisao/orquestrador.py`, `config/prompts/revisor_v1.md`, `config/robowin.toml` | `tests/unit/test_maquina_do_tempo_integracao.py` | VD (provedor falso) |
 
 ## MT4, ativos/bolsas, espelhamento, modelo persistente, IA plugável
 

@@ -146,3 +146,5 @@ def registrar(sub):
     p.add_argument("--ativo", default=None, help="simbolo_base do perfil (padrao: o ativo do manifesto do banco)")
     p.add_argument("--config", default="config/robowin.toml")
     p.set_defaults(func=_avaliar)
+    from .cli_maquina import registrar_comando
+    registrar_comando(sub)

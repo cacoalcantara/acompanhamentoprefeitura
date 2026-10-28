@@ -24,6 +24,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from robowin.avaliacao.estatistica import n_expectativa
+from robowin.avaliacao.maquina_do_tempo import PiscinaSessoes, barras_de_ticks
 from robowin.core.config import ErroConfig, carregar_toml
 from robowin.core.instrumentos import PerfilInstrumento, perfil_da_config, perfil_de_instrumento
 from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
@@ -62,6 +63,7 @@ from .bracos.controles import BracoAleatorio, BracoNaoOperar
 from .bracos.fabrica import FabricaBracos, extras_de_config
 from .bracos.quant import BracoQuant
 from .gatilhos import ConfigGatilhos
+from .odds import AvaliadorOdds, config_odds
 from .orquestrador import ConfigOrquestrador, Orquestrador, geometria_de
 from .registro import Registro
 from .validade import BloqueioDados, prazos_de_config
@@ -223,6 +225,7 @@ class ParamsSimulacao:
     mde_brl: float = 5.0  # menor efeito de interesse na expectativa por operacao (R$)
     ativo: str | None = None  # simbolo_base do perfil (config/instrumentos.toml); None => [geral].simbolo_base
     registro_modelos: Path | None = None  # registro de modelos do ativo: carrega o artefato em vez de treinar
+    odds_sessoes: int = 0  # > 0: gera N pregoes sinteticos ANTERIORES e liga a Maquina do Tempo (evidencia ao revisor)
 
 
 @dataclass
@@ -349,6 +352,7 @@ def construir_orquestrador(
     p: ParamsSimulacao, *, rel: Any, registro: Registro, ins: Instrumento, modelo: ModeloPreditivo,
     statarb: SinalStatArb | None, precos_aux: Any, sintetico: bool, modo_tempo: str, sessao_id: str,
     t_ref_ns: int, cfg: dict[str, Any] | None = None, catalogo: Catalogo | None = None,
+    piscina_odds: PiscinaSessoes | None = None,
 ) -> Montagem:
     """Bracos (A, B, C, controles e extras de ``[[bracos]]``), provedores com orcamento e orquestrador."""
     if cfg is None or catalogo is None:
@@ -400,7 +404,9 @@ def construir_orquestrador(
         gatilhos=ConfigGatilhos(periodo_s=p.periodo_ia_s, e_brl_min=1.0, z_statarb_min=2.0))
     orq = Orquestrador(cfg_orq, relogio=rel, registro=registro, bracos=bracos, pipeline=PipelineFeatures(),
                        modelos={modelo.nome: modelo}, statarb=statarb, precos_aux=precos_aux, orcamento=orc,
-                       bloqueio=BloqueioDados(idade_max_dado_s=p.idade_max_dado_s))
+                       bloqueio=BloqueioDados(idade_max_dado_s=p.idade_max_dado_s),
+                       avaliador_odds=(AvaliadorOdds(perfil, piscina_odds, config_odds(cfg))
+                                       if piscina_odds is not None else None))
     if erro_risco is not None:
         registro.incidente(t_ns=t_ref_ns, origem="simulacao", severidade="critico",
                            detalhe=f"risco_nao_aprovado: politica de risco nao aprovada ({erro_risco}); "
@@ -427,8 +433,12 @@ def montar_sessao(p: ParamsSimulacao) -> Sessao:
     perfil = perfil_da_config(cfg, p.ativo, permitir_a_confirmar=True)  # sintetico: a_confirmar roda, rotulado
     cfg_s = ConfigSintetico.do_perfil(perfil, seed=p.seed, n_ticks=p.n_ticks, sinal_forca=p.sinal_forca, n_saltos=0)
     ins = perfil.instrumento(cfg_s.simbolo)
-    dias = gerar_dias(cfg_s, 2)
-    treino, dados = dias[0], dias[1]
+    dias = gerar_dias(cfg_s, 2 + max(0, p.odds_sessoes))
+    treino, dados = dias[-2], dias[-1]
+    piscina_odds = None
+    if p.odds_sessoes > 0:  # pregoes ANTERIORES a sessao: nenhum dado do dia da sessao entra na piscina
+        piscina_odds = barras_de_ticks([t for d in dias[:-2] for t in d.ticks], perfil, sintetico=True,
+                                       origem="sintetico")
     modelo = _modelo_persistido(p, perfil) or treinar_modelo(treino, perfil, p.tipo_modelo)
     statarb = treinar_statarb(treino, perfil, p.seed)
     sessao_id = f"sim-{p.seed}"
@@ -437,7 +447,7 @@ def montar_sessao(p: ParamsSimulacao) -> Sessao:
     m = construir_orquestrador(
         p, rel=rel, registro=registro, ins=ins, modelo=modelo, statarb=statarb, precos_aux=VistaSintetica(p.seed, nome_referencia(perfil), fator_vista(perfil.preco_sintetico_ref)),
         sintetico=True, modo_tempo="simulado", sessao_id=sessao_id, t_ref_ns=rel.agora_ns(), cfg=cfg,
-        catalogo=catalogo)
+        catalogo=catalogo, piscina_odds=piscina_odds)
     return Sessao(m.orq, banco, list(dados.ticks), list(dados.livros), m.manifesto, dados, caminho, dir_aud,
                   modelo, "real" if m.real else "falso")
 

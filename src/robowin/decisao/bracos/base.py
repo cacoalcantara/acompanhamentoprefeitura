@@ -46,6 +46,8 @@ class ContextoDecisao:
     ciclo_id: str
     tick_pontos: float  # do perfil do ativo
     gatilhos: tuple[str, ...] = ()
+    # Maquina do Tempo (decisao/odds.py): callable (ctx, lado, stop_pontos, alvo_pontos) -> AvaliacaoOdds | None
+    odds: Any = None
 
 
 @dataclass
