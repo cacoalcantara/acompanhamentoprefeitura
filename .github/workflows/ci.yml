@@ -12,6 +12,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy src/robowin/risco src/robowin/execucao
       - run: uv run pytest
+      - run: uv run python scripts/lint_mql4.py mql4/RobowinBridge.mq4
   windows:
     runs-on: windows-latest
     steps:
