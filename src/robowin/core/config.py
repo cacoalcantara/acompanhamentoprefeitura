@@ -21,7 +21,10 @@ def carregar_toml(caminho: str | Path) -> dict[str, Any]:
 
 
 def sha256_arquivo(caminho: str | Path) -> str:
-    return hashlib.sha256(Path(caminho).read_bytes()).hexdigest()
+    """sha256 do conteudo com quebras de linha normalizadas (CRLF/CR -> LF): o mesmo arquivo gera o mesmo hash
+    no Linux e no Windows (git com autocrlf, editor que salva CRLF). Qualquer outra mudanca altera o hash."""
+    dados = Path(caminho).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(dados).hexdigest()
 
 
 def responsavel_pendente(reg: dict[str, Any]) -> bool:

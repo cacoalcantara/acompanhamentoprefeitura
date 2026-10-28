@@ -343,28 +343,31 @@ def gateway_cliente_local(ctx: Contexto) -> Resultado:
         cfg = ConfigGateway(perfil=perfil, login=900001, servidor="XPMT5-DEMO", hoje=ini.date(), dir_log=Path(dl),
                             inicio_coleta_ns=t0 - 1_000_000_000, espera_emergencia_s=0)
         gw = Gateway(d, cfg, rel, BarramentoLocal(), canal, dormir=lambda s: rel.avancar(int(s * 1e9)))
-        gw.iniciar()
-        cli = canal.cliente("nucleo")
-        cli.enviar_sem_resposta({"tipo": "heartbeat", "origem": "nucleo"})
-        for _ in range(5):
-            rel.avancar(200_000_000)
-            gw.passo()
-        simb = gw.resolucao.simbolo_corretora if gw.resolucao else ""
-        bid = d.symbol_info_tick(simb).bid
-        stop = bid - perfil.stop_padrao_pontos
-        cmd = ComandoOrdem(intencao_id="verificar-0001", magic=7, lado=Lado.COMPRA, tipo="mercado", quantidade=1, sl=stop)
-        r = cli.enviar({"tipo": "ordem", "cmd": cmd.model_dump(mode="json")}, bombear=gw.passo)
-        if not r or r.get("estado") != "EXECUTADA" or d.posicao_liquida(simb) != 1.0:
-            return reprovado(nome, f"ordem demo nao foi aceita: {r}")
-        n_envios = len(d.envios)
-        d.trocar_conta(4242, "XPMT5-DEMO", "real")
-        cmd2 = ComandoOrdem(intencao_id="verificar-0002", magic=7, lado=Lado.VENDA, tipo="mercado", quantidade=1,
-                            sl=d.symbol_info_tick(simb).ask + perfil.stop_padrao_pontos)
-        r2 = cli.enviar({"tipo": "ordem", "cmd": cmd2.model_dump(mode="json")}, bombear=gw.passo)
-        if len(d.envios) != n_envios:
-            return reprovado(nome, "ordem foi ENVIADA em conta real (guarda demo quebrada)")
-        if not r2 or r2["ack"]["retcode"] != C.RET_LOCAL_RECUSADO or not gw.parado:
-            return reprovado(nome, f"conta real nao foi recusada/parada: {r2}")
+        try:
+            gw.iniciar()
+            cli = canal.cliente("nucleo")
+            cli.enviar_sem_resposta({"tipo": "heartbeat", "origem": "nucleo"})
+            for _ in range(5):
+                rel.avancar(200_000_000)
+                gw.passo()
+            simb = gw.resolucao.simbolo_corretora if gw.resolucao else ""
+            bid = d.symbol_info_tick(simb).bid
+            stop = bid - perfil.stop_padrao_pontos
+            cmd = ComandoOrdem(intencao_id="verificar-0001", magic=7, lado=Lado.COMPRA, tipo="mercado", quantidade=1, sl=stop)
+            r = cli.enviar({"tipo": "ordem", "cmd": cmd.model_dump(mode="json")}, bombear=gw.passo)
+            if not r or r.get("estado") != "EXECUTADA" or d.posicao_liquida(simb) != 1.0:
+                return reprovado(nome, f"ordem demo nao foi aceita: {r}")
+            n_envios = len(d.envios)
+            d.trocar_conta(4242, "XPMT5-DEMO", "real")
+            cmd2 = ComandoOrdem(intencao_id="verificar-0002", magic=7, lado=Lado.VENDA, tipo="mercado", quantidade=1,
+                                sl=d.symbol_info_tick(simb).ask + perfil.stop_padrao_pontos)
+            r2 = cli.enviar({"tipo": "ordem", "cmd": cmd2.model_dump(mode="json")}, bombear=gw.passo)
+            if len(d.envios) != n_envios:
+                return reprovado(nome, "ordem foi ENVIADA em conta real (guarda demo quebrada)")
+            if not r2 or r2["ack"]["retcode"] != C.RET_LOCAL_RECUSADO or not gw.parado:
+                return reprovado(nome, f"conta real nao foi recusada/parada: {r2}")
+        finally:
+            gw.encerrar()
     # inicio com conta real tambem recusa
     rel2 = RelogioSimulado(t0)
     d2 = criar_duble_padrao(rel2, inicio_utc_ms=t0 // 1_000_000 - 1000, n_ticks=300, login=900001, servidor="XPMT5-DEMO",

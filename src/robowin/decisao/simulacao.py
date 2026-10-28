@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from robowin.avaliacao.estatistica import n_expectativa
 from robowin.avaliacao.maquina_do_tempo import PiscinaSessoes, barras_de_ticks
-from robowin.core.config import ErroConfig, carregar_toml
+from robowin.core.config import ErroConfig, carregar_toml, sha256_arquivo
 from robowin.core.instrumentos import PerfilInstrumento, perfil_da_config, perfil_de_instrumento
 from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
 from robowin.core.relogio import RelogioSimulado
@@ -515,7 +515,7 @@ def montar_sessao(p: ParamsSimulacao) -> Sessao:
 
 def _hash_arquivo(p: Path) -> str:
     try:
-        return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+        return sha256_arquivo(p)
     except OSError:
         return ""
 

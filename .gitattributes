@@ -1,0 +1,10 @@
+# Quebras de linha fixas (LF) para que hashes de configuracao/prompt sejam iguais no Linux e no Windows.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.ex4 binary
+*.ex5 binary
+*.parquet binary
