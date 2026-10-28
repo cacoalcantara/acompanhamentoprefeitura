@@ -91,3 +91,14 @@ Resultados:
 
 NAO coberto: terminal MT5/MT4 instalado, conexao a servidor de corretora, `order_send` real, `.mq4` compilado.
 O job `windows` da CI roda a suite completa e a conferencia de constantes em Windows nativo com numpy 2.
+
+## CI Windows nativo (GitHub Actions) — 28/10/2026
+
+- Execuções 1 a 26 do job `windows` falharam. Causas encontradas e corrigidas (bugs reais, não do ambiente):
+  1. `execucao/ponte_gateway.py::_pid_vivo` usava `os.kill(pid, 0)`; no Windows o sinal 0 é `CTRL_C_EVENT` e
+     interrompia o processo (KeyboardInterrupt). Agora usa `OpenProcess`/`GetExitCodeProcess` no Windows; teste
+     estático proíbe `os.kill` fora do helper.
+  2. O git no Windows converte LF→CRLF; o sha256 de `config/risco.toml` deixava de conferir com a aprovação.
+     `core.config.sha256_arquivo` normaliza quebras de linha e `.gitattributes` fixa LF.
+  3. A checagem do gateway em `robowin verificar` não fechava o log antes de apagar o diretório temporário.
+- Execução 27: **os 3 jobs verdes** (linux 3.12, linux 3.13, windows com o wheel oficial `MetaTrader5`).
