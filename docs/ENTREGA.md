@@ -68,6 +68,7 @@ futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido d
 | Braços A (sem LLM) / B (Claude) / C (Claude+GPT) e controles | `src/robowin/decisao/bracos/quant.py`, `src/robowin/decisao/bracos/claude.py`, `src/robowin/decisao/bracos/claude_gpt.py`, `src/robowin/decisao/bracos/controles.py`, `src/robowin/decisao/orquestrador.py` | `tests/unit/test_decisao_bracos.py`, `tests/unit/test_decisao_orquestrador.py`, `tests/unit/test_decisao_e2e.py` | VD |
 | Justificativa pelo benefício líquido de custo e latência | `src/robowin/avaliacao/comparacao.py` (`beneficio_liquido_llm`), `src/robowin/ia/orcamento.py` | `tests/unit/test_aval_metricas_comparacao.py`, `tests/unit/test_ia_orcamento_cache.py` | VA (cálculo); **DU** (custos e ganho reais exigem chaves) |
 | Comportamento real dos modelos (qualidade, variância, latência) | `uv run robowin ia testar`, `uv run robowin ia latencia` | `tests/unit/test_ia_prompts_regressao_cli.py` (só com provedor falso) | **DU** (chaves) |
+| Qualquer IA e qualquer modelo (Gemini, DeepSeek, Grok, Mistral, OpenRouter, locais...), só configuração | `config/provedores.toml`, `src/robowin/ia/registro_provedores.py`, `robowin ia listar / adicionar-modelo`, exemplos em `config/robowin.toml` | `tests/unit/test_ia_qualquer_provedor.py` (contrato com transporte falso em todo provedor, sem chave e sem rede); `robowin verificar` (registro) | VA (contrato); **DU** (chaves; `base_url` com `verificado=false` a conferir) |
 
 ## Pedido 3 — Latência, separação de responsabilidades e falha segura
 
