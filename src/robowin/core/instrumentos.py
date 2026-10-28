@@ -3,6 +3,13 @@
 Trocar o ativo e editar ``[geral].simbolo_base`` (ou usar ``--ativo``): o codigo le o perfil em
 ``config/instrumentos.toml`` e nao tem nenhum numero de ativo embutido. Valor sem fonte confirmada fica
 ``a_confirmar = true`` e BLOQUEIA a operacao (falha segura): so a simulacao sobre dados sinteticos roda, rotulada.
+
+Qualquer mercado do MT4/MT5 (forex, metais, indices e acoes CFD, commodities, cripto, futuros e acoes de outras
+bolsas) usa o MESMO perfil, com campos opcionais do modelo generico (tamanho do contrato, lote min/passo/max em
+volume fracionario, digitos/ponto/pip, valor do tick na moeda de LUCRO, moedas base/cotacao/lucro/margem, modo de
+calculo, swap, spread tipico, comissao por lote). `robowin perfil importar-do-terminal` gera o perfil a partir do
+symbol_info do terminal (sempre `a_confirmar`). A unidade de quantidade do robo e o `volume_unidade` (lote minimo
+em volume fracionario, ou `lote` nos perfis B3): o volume enviado = quantidade x volume_unidade.
 """
 from __future__ import annotations
 
@@ -13,14 +20,24 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .config import ErroConfig, carregar_toml
 from .tipos import Base, Instrumento, SessaoPregao
 
 CAMINHO_PADRAO = Path(__file__).resolve().parents[3] / "config" / "instrumentos.toml"
-Classe = Literal["futuro_indice", "futuro_cambio", "acao", "etf"]
+Classe = Literal["futuro_indice", "futuro_cambio", "futuro", "acao", "etf",
+                 "forex", "cfd_indice", "cfd_acao", "metal", "commodity", "cripto"]
+ModoCalculo = Literal["", "forex", "cfd", "futuros", "bolsa"]
 RegraVencimento = Literal["quarta_dia15_meses_pares", "primeiro_dia_util_mes", "nenhum"]
+# Classes negociadas NA CORRETORA (balcao/CFD): sem tarifa de bolsa, sem negocios publicos (o "volume" do tick e
+# contagem de cotacoes, nao volume negociado), volume fracionario por padrao.
+CLASSES_CORRETORA = frozenset({"forex", "cfd_indice", "cfd_acao", "metal", "commodity", "cripto"})
+MODO_DA_CLASSE: dict[str, str] = {
+    "futuro_indice": "futuros", "futuro_cambio": "futuros", "futuro": "futuros", "acao": "bolsa", "etf": "bolsa",
+    "forex": "forex", "cfd_indice": "cfd", "cfd_acao": "cfd", "metal": "cfd", "commodity": "cfd", "cripto": "cfd"}
+DIAS_SEMANA = ("segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo")
+SwapModo = Literal["", "pontos", "moeda_lucro", "moeda_conta"]
 RESERVADAS = frozenset({"sessao_padrao"})
 LETRAS_MES = "FGHJKMNQUVXZ"
 ROTULO_A_CONFIRMAR = "ativo_a_confirmar"
@@ -43,11 +60,11 @@ class PerfilInstrumento(Base):
     simbolo_base: str
     classe: Classe
     descricao: str = ""
-    vencimento: RegraVencimento
-    ponto_valor_brl: float = Field(gt=0)
+    vencimento: RegraVencimento = "nenhum"
+    ponto_valor_brl: float = Field(gt=0)  # moeda de LUCRO por 1,0 de preco por unidade do robo (nome historico)
     tick_pontos: float = Field(gt=0)
-    lote: int = Field(ge=1)
-    tarifas: tuple[TarifaB3, ...] = Field(min_length=1)
+    lote: int = Field(ge=1, default=1)
+    tarifas: tuple[TarifaB3, ...] = ()  # obrigatorio (>= 1) fora das classes de corretora
     margem_day_trade_brl: float | None = None
     stop_max_ticks: int = Field(ge=1)
     slippage_folga_ticks: int = Field(ge=0)
@@ -67,6 +84,94 @@ class PerfilInstrumento(Base):
     fonte_data: str = ""  # AAAA-MM-DD da fonte consultada
     confirmado_por: str = ""
     confirmado_em: str = ""  # AAAA-MM-DD da confirmacao
+    # --- modelo generico (qualquer mercado do MT4/MT5); todos opcionais: perfis B3 antigos nao mudam (nem o hash)
+    modo_calculo: ModoCalculo = ""  # forex | cfd | futuros | bolsa (vazio = o da classe)
+    tamanho_contrato: float | None = None  # trade_contract_size (ex.: unidades da moeda base por 1,0 lote)
+    volume_min: float | None = None  # lote minimo (volume do terminal); define a unidade do robo
+    volume_step: float | None = None
+    volume_max: float | None = None
+    digitos: int | None = None
+    ponto: float | None = None  # `point` do terminal
+    pip: float | None = None  # convencao de mercado (ex.: 10 pontos em pares de 5 digitos); so exibicao
+    tick_valor_lucro: float | None = None  # valor de 1 tick por 1,0 lote NA MOEDA DE LUCRO
+    moeda_base: str = ""
+    moeda_cotacao: str = ""
+    moeda_lucro: str = ""  # vazio = moeda da bolsa (perfis B3)
+    moeda_margem: str = ""
+    swap_long: float | None = None
+    swap_short: float | None = None
+    swap_modo: SwapModo = ""
+    swap_dia_triplo: str = ""  # segunda..domingo (swap_rollover3days do terminal)
+    spread_tipico_pontos: float | None = None
+    comissao_lote_lado: float | None = None  # por 1,0 lote e por lado, na moeda de lucro (a confirmar com a corretora)
+    simbolo_corretora: str = ""  # nome exato no terminal (ex.: com sufixo da corretora); vazio = resolver
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derivar(cls, dados: Any) -> Any:
+        """Modelo generico: `ponto_valor_brl` deriva de tick_valor_lucro/tick_pontos x volume_min se omitido."""
+        if isinstance(dados, dict) and "ponto_valor_brl" not in dados:
+            tv, tk, vm = dados.get("tick_valor_lucro"), dados.get("tick_pontos"), dados.get("volume_min")
+            if tv and tk and vm:
+                dados = {**dados, "ponto_valor_brl": float(f"{float(tv) / float(tk) * float(vm):.12g}")}
+        return dados
+
+    @model_validator(mode="after")
+    def _coerencia(self) -> PerfilInstrumento:
+        if not self.tarifas and self.classe not in CLASSES_CORRETORA:
+            raise ValueError(f"classe {self.classe} exige ao menos uma vigencia em `tarifas`")
+        if self.volume_min is not None and self.volume_min <= 0:
+            raise ValueError("volume_min deve ser positivo")
+        if self.volume_step is not None and self.volume_step <= 0:
+            raise ValueError("volume_step deve ser positivo")
+        if self.volume_min is not None and self.volume_step:
+            r = self.volume_min / self.volume_step
+            if abs(r - round(r)) > 1e-6:
+                raise ValueError("volume_min deve ser multiplo de volume_step (a unidade do robo e o lote minimo)")
+        if self.tick_valor_lucro is not None and self.volume_min is not None:
+            esperado = self.tick_valor_lucro / self.tick_pontos * self.volume_min
+            if abs(esperado - self.ponto_valor_brl) > 1e-9 * max(1.0, abs(esperado)):
+                raise ValueError(f"ponto_valor_brl {self.ponto_valor_brl} incoerente com tick_valor_lucro/tick_pontos x "
+                                 f"volume_min = {esperado}")
+        if self.swap_dia_triplo and self.swap_dia_triplo not in DIAS_SEMANA:
+            raise ValueError(f"swap_dia_triplo invalido: use {', '.join(DIAS_SEMANA)}")
+        return self
+
+    # --- modelo generico
+    @property
+    def modo_calculo_efetivo(self) -> str:
+        return self.modo_calculo or MODO_DA_CLASSE[self.classe]
+
+    @property
+    def de_corretora(self) -> bool:
+        """Negociado na corretora (forex/CFD/metal/commodity/cripto): sem tarifa de bolsa e sem negocios publicos."""
+        return self.classe in CLASSES_CORRETORA
+
+    @property
+    def volume_unidade(self) -> float:
+        """Volume do terminal por unidade de quantidade do robo (lote minimo; `lote` nos perfis B3)."""
+        return float(self.volume_min) if self.volume_min is not None else float(self.lote)
+
+    @property
+    def tem_negocios(self) -> bool:
+        """Ticks de NEGOCIO (last/volume/agressor) existem? Em mercados de corretora o volume e so 'volume de tick'."""
+        return not self.de_corretora
+
+    def tick_valor_por_lote(self) -> float:
+        """Valor de 1 tick por 1,0 lote do terminal, na moeda de lucro."""
+        if self.tick_valor_lucro is not None:
+            return self.tick_valor_lucro
+        return self.tick_valor_brl / self.volume_unidade
+
+    def volume_de(self, quantidade: float) -> float:
+        """Volume a enviar ao terminal para `quantidade` unidades do robo (arredondado ao passo)."""
+        v = quantidade * self.volume_unidade
+        passo = self.volume_step or self.volume_unidade
+        return round(round(v / passo) * passo, 8)
+
+    def unidades_de(self, volume: float) -> int:
+        """Unidades do robo em `volume` do terminal (arredondamento ao inteiro mais proximo, sem erro de float)."""
+        return int(round(volume / self.volume_unidade))
 
     # --- conversoes ticks <-> pontos (o unico lugar onde isso acontece)
     def pontos(self, ticks: float) -> float:
@@ -121,8 +226,13 @@ class PerfilInstrumento(Base):
 
     # --- derivados
     def hash(self) -> str:
-        """Identidade dos VALORES do perfil (a proveniencia - fonte, quem/quando confirmou - nao entra)."""
-        return hashlib.sha256(json.dumps(self.model_dump(mode="json", exclude=set(CAMPOS_PROVENIENCIA)),
+        """Identidade dos VALORES do perfil (a proveniencia - fonte, quem/quando confirmou - nao entra). Campos do
+        modelo generico no valor padrao nao entram: o hash dos perfis antigos nao muda."""
+        fora = set(CAMPOS_PROVENIENCIA) | {k for k in CAMPOS_GENERICOS
+                                           if getattr(self, k) == type(self).model_fields[k].default}
+        if not self.tarifas:
+            fora.add("tarifas")
+        return hashlib.sha256(json.dumps(self.model_dump(mode="json", exclude=fora),
                                          sort_keys=True).encode()).hexdigest()
 
     def sessao_em(self, d: dt.date) -> SessaoPregao:
@@ -140,9 +250,11 @@ class PerfilInstrumento(Base):
 
     def instrumento(self, simbolo: str | None = None, vencimento: dt.date | str | None = None, **extra: Any) -> Instrumento:
         """`Instrumento` operacional deste perfil (``simbolo`` da corretora; por padrao o proprio simbolo_base)."""
+        if self.volume_min is not None:
+            extra.setdefault("volume_unidade", float(self.volume_min))
         return Instrumento(
-            simbolo=simbolo or self.simbolo_base, ativo=self.simbolo_base, moeda=self.moeda, ponto_valor_brl=self.ponto_valor_brl,
-            tick_pontos=self.tick_pontos, lote=self.lote,
+            simbolo=simbolo or self.simbolo_corretora or self.simbolo_base, ativo=self.simbolo_base, moeda=self.moeda,
+            ponto_valor_brl=self.ponto_valor_brl, tick_pontos=self.tick_pontos, lote=self.lote,
             vencimento=vencimento.isoformat() if isinstance(vencimento, dt.date) else vencimento, **extra)
 
     def codigo_pertence(self, simbolo: str) -> bool:
@@ -150,6 +262,12 @@ class PerfilInstrumento(Base):
         if not self.tem_vencimento:
             return simbolo == self.simbolo_base
         return re.fullmatch(rf"{re.escape(self.simbolo_base)}[{LETRAS_MES}]\d{{2}}", simbolo) is not None
+
+
+CAMPOS_GENERICOS = frozenset({
+    "modo_calculo", "tamanho_contrato", "volume_min", "volume_step", "volume_max", "digitos", "ponto", "pip",
+    "tick_valor_lucro", "moeda_base", "moeda_cotacao", "moeda_lucro", "moeda_margem", "swap_long", "swap_short",
+    "swap_modo", "swap_dia_triplo", "spread_tipico_pontos", "comissao_lote_lado", "simbolo_corretora"})
 
 
 def _bruto(caminho: str | Path | None = None) -> dict[str, Any]:
@@ -191,8 +309,12 @@ def _aplicar_bolsa(perfil: PerfilInstrumento) -> PerfilInstrumento:
     from .bolsas import carregar_bolsa
     b = carregar_bolsa(perfil.bolsa)
     itens = tuple(perfil.a_confirmar_itens) + tuple(f"bolsa {b.codigo}: {i}" for i in b.a_confirmar_itens)
+    moeda = (perfil.moeda_lucro or b.moeda).strip().upper()
+    if not moeda:
+        raise ErroConfig(f"perfil {perfil.simbolo_base}: a bolsa/corretora {b.codigo} nao tem moeda unica; declare "
+                         "`moeda_lucro` no perfil (moeda em que o terminal apura o lucro do simbolo)")
     return perfil.model_copy(update={
-        "moeda": b.moeda, "sessoes": perfil.sessoes or b.sessoes,
+        "moeda": moeda, "sessoes": perfil.sessoes or b.sessoes,
         "a_confirmar": perfil.a_confirmar or b.a_confirmar, "a_confirmar_itens": itens})
 
 

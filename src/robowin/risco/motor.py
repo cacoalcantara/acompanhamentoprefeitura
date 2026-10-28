@@ -12,7 +12,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from ..core import calendario_b3
+from ..core.moedas import motivo_sem_cotacao
 from ..core.protocolos import RegistroAuditoria
+from ..core.sessoes import SessaoInstrumento, sessao_especifica
 from ..core.tipos import (
     Acao,
     Base,
@@ -26,7 +28,7 @@ from ..core.tipos import (
 )
 from .invariantes import stop_so_aperta
 from .kill_switch import KillSwitch
-from .politica import perda_pior_caso_brl, validar_coerencia
+from .politica import perda_pior_caso_brl, unidades_maximas, validar_coerencia
 from .sessao import ContabilidadeSessao, EstadoBraco
 from .tempo import dia_sp, hhmm_para_s, segundos_do_dia
 
@@ -44,6 +46,15 @@ class EstadoMercado(Base):
 class EventoAgenda(Base):
     t_ns: int
     nome: str = "evento"
+
+
+def _sessao_auto(ins: Instrumento) -> SessaoInstrumento | None:
+    """Sessao do perfil do instrumento quando difere do legado B3 (forex 24x5, cripto 24x7, outro fuso)."""
+    try:
+        from ..core.instrumentos import perfil_de_instrumento
+        return sessao_especifica(perfil_de_instrumento(ins))
+    except Exception:  # noqa: BLE001 - instrumento sem perfil (testes) => relogio legado
+        return None
 
 
 @dataclass
@@ -67,17 +78,50 @@ class MotorRiscoPadrao:
         eventos: Iterable[EventoAgenda] = (),
         grade: Callable[[dt.date], SessaoPregao] = calendario_b3.sessao_em,
         eh_pregao: Callable[[dt.date], bool] = calendario_b3.eh_pregao,
+        sessao: SessaoInstrumento | None | str = "auto",
+        conversor: Callable[[int], float | None] | None = None,
     ) -> None:
+        """`sessao` = relogio de sessao do instrumento ("auto": o do perfil quando difere do legado B3, ex.: forex
+        24x5, cripto 24x7, bolsa em outro fuso; None = legado `grade`/`eh_pregao` em Sao Paulo). `conversor(t_ns)` =
+        fator moeda de lucro -> moeda da conta NO INSTANTE (None/ausente com moedas diferentes => entradas vetadas)."""
         self.cfg = validar_coerencia(cfg)
         self.instrumento = instrumento
         self.kill = kill_switch or KillSwitch()
-        self.contab = contabilidade or ContabilidadeSessao()
+        self.sessao: SessaoInstrumento | None = _sessao_auto(instrumento) if sessao == "auto" else (
+            sessao if isinstance(sessao, SessaoInstrumento) else None)
+        self.contab = contabilidade or ContabilidadeSessao(
+            dia_de=self.sessao.dia_negociacao if self.sessao is not None else dia_sp)
         self.auditoria = auditoria
         self.eventos: list[EventoAgenda] = list(eventos)
         self.mercado = EstadoMercado()
         self._grade = grade
         self._eh_pregao = eh_pregao
         self._pendentes: dict[str, _Pendente] = {}
+        self.conversor = conversor
+        self.unidades_max = unidades_maximas(self.cfg, instrumento.volume_por_unidade)
+
+    def definir_conversor(self, conversor: Callable[[int], float | None] | None) -> None:
+        self.conversor = conversor
+
+    def fator_conversao(self, t_ns: int) -> float | None:
+        """Unidades da moeda da conta por 1 da moeda de lucro do simbolo, no instante (1.0 se mesma moeda)."""
+        if not self.instrumento.precisa_conversao:
+            return 1.0
+        if self.conversor is None:
+            return None
+        try:
+            f = self.conversor(t_ns)
+        except Exception:  # noqa: BLE001 - falha segura: sem cotacao
+            return None
+        return f if f is not None and math.isfinite(f) and f > 0 else None
+
+    def _dia(self, t_ns: int) -> dt.date:
+        return self.sessao.dia_negociacao(t_ns) if self.sessao is not None else dia_sp(t_ns)
+
+    def _aberto(self, t_ns: int) -> bool:
+        if self.sessao is not None:
+            return self.sessao.aberto(t_ns)[0]
+        return self._eh_pregao(dia_sp(t_ns))
 
     # ------------------------------------------------------------------ estado externo -------------
     def definir_eventos(self, eventos: Iterable[EventoAgenda]) -> None:
@@ -125,6 +169,8 @@ class MotorRiscoPadrao:
         return de, ate, zer
 
     def dentro_da_janela(self, t_ns: int) -> bool:
+        if self.sessao is not None:
+            return self.sessao.estado(t_ns, self.cfg.entradas_de, self.cfg.entradas_ate, self.cfg.zeragem).entradas
         d = dia_sp(t_ns)
         if not self._eh_pregao(d):
             return False
@@ -136,7 +182,7 @@ class MotorRiscoPadrao:
         if self.mercado.rolagem:
             return True
         v = self.instrumento.vencimento
-        return bool(v) and dia_sp(t_ns) >= dt.date.fromisoformat(v)  # type: ignore[arg-type]
+        return bool(v) and self._dia(t_ns) >= dt.date.fromisoformat(v)  # type: ignore[arg-type]
 
     def precisa_zerar(self, posicao: Posicao, t_ns: int) -> tuple[bool, str]:
         """Politica de zeragem forcada: o chamador deve emitir saida se (True, motivo)."""
@@ -144,6 +190,17 @@ class MotorRiscoPadrao:
             return False, ""
         if self.kill.ativo:
             return True, "kill_switch"
+        if self.sessao is not None:
+            st = self.sessao.estado(t_ns, self.cfg.entradas_de, self.cfg.entradas_ate, self.cfg.zeragem)
+            if not st.aberto:
+                return True, "fora_do_pregao"
+            if st.zerar:
+                return True, "zeragem"
+            if self.em_rolagem(t_ns):
+                return True, "rolagem"
+            if self.mercado.limite_oscilacao:
+                return True, "limite_oscilacao"
+            return False, ""
         d = dia_sp(t_ns)
         if not self._eh_pregao(d):
             return True, "fora_do_pregao"
@@ -207,7 +264,7 @@ class MotorRiscoPadrao:
         # kill switch / regime / janela
         if self.kill.ativo:
             m.append("kill_switch_ativo")
-        if not self._eh_pregao(dia_sp(t_ns)):
+        if not self._aberto(t_ns):
             m.append("fora_do_pregao")
         elif not self.dentro_da_janela(t_ns):
             m.append("fora_da_janela_de_entradas")
@@ -232,9 +289,10 @@ class MotorRiscoPadrao:
 
         # tamanho e exposicao
         q = it.quantidade
+        umax = self.unidades_max  # contratos_max ou lotes minimos que cabem em volume_max_lotes
         if q < 1:
             m.append("quantidade_invalida")
-        if q > cfg.contratos_max:
+        if q > umax:
             m.append("contratos_acima_do_maximo")
         if pos.quantidade > 0:
             if pos.lado == lado:
@@ -244,10 +302,19 @@ class MotorRiscoPadrao:
         pend = self.pendentes_braco(it.braco)
         if pend > 0:
             m.append("ordem_de_entrada_pendente")
-        if pos.quantidade + pend + max(q, 0) > cfg.contratos_max:
+        if pos.quantidade + pend + max(q, 0) > umax:
             m.append("exposicao_acima_do_maximo")
         if est.ultima_foi_perda and q > est.ultimo_tamanho > 0:
             m.append("martingale_proibido")
+
+        # moeda: limites estao na MOEDA DA CONTA; P&L do simbolo convertido pela cotacao do instante
+        fator = self.fator_conversao(t_ns)
+        if fator is None:
+            m.append(motivo_sem_cotacao(ins.moeda, ins.moeda_conta))
+        if cfg.nocional_max_conta > 0 and fator is not None and it.preco_referencia > 0:
+            nocional = it.preco_referencia * ins.ponto_valor_brl * max(q, 1) * fator
+            if nocional > cfg.nocional_max_conta + 1e-9:
+                m.append("nocional_acima_do_maximo")
 
         # stop e perda por operacao
         sp = it.stop_pontos
@@ -257,9 +324,12 @@ class MotorRiscoPadrao:
         else:
             if sp > cfg.stop_max_pontos:
                 m.append("stop_acima_do_maximo")
-            pior = perda_pior_caso_brl(cfg, sp, max(q, 1), ins.ponto_valor_brl)
-            if pior > cfg.perda_max_operacao_brl + 1e-9:
-                m.append("perda_por_operacao_acima_do_maximo")
+            if fator is None:
+                pior = cfg.perda_max_operacao_brl  # sem cotacao: pior caso desconhecido (ja vetado acima)
+            else:
+                pior = perda_pior_caso_brl(cfg, sp, max(q, 1), ins.ponto_valor_brl * fator)
+                if pior > cfg.perda_max_operacao_brl + 1e-9:
+                    m.append("perda_por_operacao_acima_do_maximo")
         if it.alvo_pontos is not None and (not math.isfinite(it.alvo_pontos) or it.alvo_pontos <= 0):
             m.append("alvo_invalido")
         if not (it.preco_referencia > 0 and math.isfinite(it.preco_referencia)):

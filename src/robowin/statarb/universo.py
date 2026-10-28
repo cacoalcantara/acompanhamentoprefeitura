@@ -10,9 +10,12 @@ log = logging.getLogger(__name__)
 
 
 def padrao(alvo: str | None = None) -> tuple[str, ...]:
-    """Universo candidato: todos os ativos de config/instrumentos.toml mais o indice de referencia."""
-    from robowin.core.instrumentos import ativos_disponiveis
-    return (*(a for a in ativos_disponiveis() if a != alvo), "IBOV")
+    """Universo candidato: os ativos de BOLSA de config/instrumentos.toml mais o indice de referencia (forex/CFD/cripto
+    da corretora ficam fora do universo padrao do statarb; passe-os explicitamente em `simbolos`)."""
+    from robowin.core.instrumentos import CLASSES_CORRETORA, _bruto, ativos_disponiveis
+    bruto = _bruto()
+    return (*(a for a in ativos_disponiveis() if a != alvo and bruto[a].get("classe") not in CLASSES_CORRETORA),
+            "IBOV")
 
 
 def _nome(s: Any) -> str:

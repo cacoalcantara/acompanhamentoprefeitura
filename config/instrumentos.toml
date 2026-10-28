@@ -191,3 +191,199 @@ vigente_desde = "2025-01-01"
 tarifa_lado_brl = 0.25
 taxa_zeragem_brl = 0.0
 fonte = "PLACEHOLDER copiado do WIN - a confirmar"
+
+# ======================================================================================================================
+# QUALQUER MERCADO DO MT4/MT5 (forex, metais, indices e acoes CFD, commodities, cripto): MODELOS de exemplo, todos
+# a_confirmar = true (valores tipicos de mercado, NAO lidos da sua corretora). O caminho certo e gerar o perfil a partir
+# do SEU terminal e depois confirmar:
+#   uv run robowin perfil importar-do-terminal EURUSD [--plataforma mt4|mt5]   (le symbol_info; grava a_confirmar)
+#   uv run robowin perfil confirmar EURUSD --responsavel "<seu nome>" --fonte "<fonte>" --comparar-terminal
+# Campos do modelo generico (opcionais; os perfis B3 acima nao os usam):
+#   classe: forex | cfd_indice | cfd_acao | metal | commodity | cripto | futuro (alem das da B3)
+#   bolsa: FOREX | CFD | CRIPTO (config/bolsas.toml: sessao 24x5/24x7, rollover, pausas, dias fechados)
+#   modo_calculo: forex | cfd | futuros | bolsa (trade_calc_mode do terminal; vazio = o da classe)
+#   tamanho_contrato (trade_contract_size), volume_min / volume_step / volume_max (lotes do terminal; a UNIDADE do robo
+#   e o lote minimo: quantidade 1 = volume_min), digitos, ponto, pip (so exibicao), tick_pontos (trade_tick_size)
+#   tick_valor_lucro: valor de 1 tick por 1,0 lote NA MOEDA DE LUCRO (com conta na mesma moeda = trade_tick_value;
+#     com conta em outra moeda o terminal informa o valor JA convertido: o importador usa tick_size x contract_size)
+#   ponto_valor_brl: omitido => derivado (tick_valor_lucro / tick_pontos x volume_min), na moeda de lucro
+#   moeda_base / moeda_cotacao / moeda_lucro / moeda_margem; P&L e risco sao convertidos para a MOEDA DA CONTA pela
+#     cotacao do par de conversao lida no mesmo instante (sem cotacao => entradas bloqueadas)
+#   swap_long / swap_short (convencao do MT: positivo = credito), swap_modo (pontos | moeda_lucro | moeda_conta),
+#   swap_dia_triplo (segunda..domingo), spread_tipico_pontos, comissao_lote_lado (por 1,0 lote por lado, na moeda de
+#   lucro; a confirmar com a corretora), simbolo_corretora (nome exato no terminal, ex.: com sufixo ".m")
+#   tarifas: dispensadas nas classes de corretora (sem tarifa de bolsa)
+
+[EURUSD]
+classe = "forex"
+bolsa = "FOREX"
+descricao = "MODELO forex: euro x dolar (5 digitos)"
+modo_calculo = "forex"
+tamanho_contrato = 100000.0
+volume_min = 0.01
+volume_step = 0.01
+volume_max = 100.0
+digitos = 5
+ponto = 0.00001
+pip = 0.0001
+tick_pontos = 0.00001
+tick_valor_lucro = 1.0        # 100000 x 0,00001 = USD 1 por tick por lote
+moeda_base = "EUR"
+moeda_cotacao = "USD"
+moeda_lucro = "USD"
+moeda_margem = "EUR"
+swap_dia_triplo = "quarta"
+stop_max_ticks = 300
+slippage_folga_ticks = 20
+stop_padrao_ticks = 100
+alvo_padrao_ticks = 100
+aceita_book = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 1.10
+a_confirmar = true
+a_confirmar_itens = ["especificacao da SUA corretora (importe com `robowin perfil importar-do-terminal EURUSD`)",
+                     "swap_long/swap_short e modo (nao informados aqui)", "comissao por lote (nao informada)",
+                     "spread tipico", "volume_max", "limites em ticks", "sufixo do simbolo na corretora"]
+
+[USDJPY]
+classe = "forex"
+bolsa = "FOREX"
+descricao = "MODELO forex: dolar x iene (3 digitos)"
+modo_calculo = "forex"
+tamanho_contrato = 100000.0
+volume_min = 0.01
+volume_step = 0.01
+volume_max = 100.0
+digitos = 3
+ponto = 0.001
+pip = 0.01
+tick_pontos = 0.001
+tick_valor_lucro = 100.0      # 100000 x 0,001 = JPY 100 por tick por lote (lucro em iene)
+moeda_base = "USD"
+moeda_cotacao = "JPY"
+moeda_lucro = "JPY"
+moeda_margem = "USD"
+swap_dia_triplo = "quarta"
+stop_max_ticks = 300
+slippage_folga_ticks = 20
+stop_padrao_ticks = 100
+alvo_padrao_ticks = 100
+aceita_book = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 150.0
+a_confirmar = true
+a_confirmar_itens = ["especificacao da SUA corretora (importe do terminal)", "swap e modo", "comissao por lote",
+                     "spread tipico", "limites em ticks", "lucro em JPY: conta em outra moeda exige par de conversao"]
+
+[USDBRL]
+classe = "forex"
+bolsa = "FOREX"
+descricao = "MODELO forex: dolar x real (par de conversao de contas em BRL; exotico, raro nas corretoras)"
+modo_calculo = "forex"
+tamanho_contrato = 100000.0
+volume_min = 0.01
+volume_step = 0.01
+volume_max = 10.0
+digitos = 4
+ponto = 0.0001
+pip = 0.0001
+tick_pontos = 0.0001
+tick_valor_lucro = 10.0
+moeda_base = "USD"
+moeda_cotacao = "BRL"
+moeda_lucro = "BRL"
+moeda_margem = "USD"
+swap_dia_triplo = "quarta"
+stop_max_ticks = 300
+slippage_folga_ticks = 30
+stop_padrao_ticks = 100
+alvo_padrao_ticks = 100
+aceita_book = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 5.40
+a_confirmar = true
+a_confirmar_itens = ["oferta do par na corretora", "especificacao (importe do terminal)", "swap", "comissao",
+                     "limites em ticks"]
+
+[XAUUSD]
+classe = "metal"
+bolsa = "CFD"
+descricao = "MODELO metal: ouro x dolar (100 oncas por lote)"
+modo_calculo = "cfd"
+tamanho_contrato = 100.0
+volume_min = 0.01
+volume_step = 0.01
+volume_max = 50.0
+digitos = 2
+ponto = 0.01
+tick_pontos = 0.01
+tick_valor_lucro = 1.0        # 100 x 0,01 = USD 1 por tick por lote
+moeda_base = "XAU"
+moeda_cotacao = "USD"
+moeda_lucro = "USD"
+moeda_margem = "USD"
+swap_dia_triplo = "quarta"
+stop_max_ticks = 500
+slippage_folga_ticks = 50
+stop_padrao_ticks = 150
+alvo_padrao_ticks = 150
+aceita_book = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 2400.0
+a_confirmar = true
+a_confirmar_itens = ["especificacao da corretora (alguns usam modo forex e 3 digitos)", "swap e modo",
+                     "comissao por lote", "sessao/pausa diaria do simbolo", "limites em ticks"]
+
+[US500]
+classe = "cfd_indice"
+bolsa = "CFD"
+descricao = "MODELO CFD de indice: S&P 500 (USD 1 por ponto por lote)"
+modo_calculo = "cfd"
+tamanho_contrato = 1.0
+volume_min = 0.1
+volume_step = 0.1
+volume_max = 100.0
+digitos = 2
+ponto = 0.01
+tick_pontos = 0.01
+tick_valor_lucro = 0.01
+moeda_lucro = "USD"
+moeda_margem = "USD"
+stop_max_ticks = 1000
+slippage_folga_ticks = 100
+stop_padrao_ticks = 300
+alvo_padrao_ticks = 300
+aceita_book = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 5500.0
+a_confirmar = true
+a_confirmar_itens = ["nome do simbolo na corretora (US500, SPX500, US500Cash...)", "tamanho do contrato e tick",
+                     "swap/dividendos", "comissao", "sessao do simbolo", "limites em ticks"]
+
+[BTCUSD]
+classe = "cripto"
+bolsa = "CRIPTO"
+descricao = "MODELO cripto: bitcoin x dolar (CFD 24x7, 1 BTC por lote)"
+modo_calculo = "cfd"
+tamanho_contrato = 1.0
+volume_min = 0.01
+volume_step = 0.01
+volume_max = 10.0
+digitos = 2
+ponto = 0.01
+tick_pontos = 0.01
+tick_valor_lucro = 0.01
+moeda_base = "BTC"
+moeda_cotacao = "USD"
+moeda_lucro = "USD"
+moeda_margem = "USD"
+stop_max_ticks = 50000
+slippage_folga_ticks = 5000
+stop_padrao_ticks = 15000
+alvo_padrao_ticks = 15000
+aceita_book = false
+risco_aprovado_padrao = false
+preco_sintetico_ref = 65000.0
+a_confirmar = true
+a_confirmar_itens = ["especificacao da corretora", "swap diario (financiamento) e modo", "comissao",
+                     "horario de manutencao", "limites em ticks"]

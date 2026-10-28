@@ -10,10 +10,11 @@ from collections.abc import Iterable, Sequence
 
 from robowin.core.tipos import LivroSnapshot, Tick, VetorFeatures
 
+from ._janela import JanelaSoma
 from .contexto import Contexto
 from .fluxo import FluxoAgressor
 from .livro import FeaturesLivro
-from .registro import validar_vetor
+from .registro import validar_nomes, validar_vetor
 from .retornos import HistoricoMeio
 from .volatilidade import VolRealizada
 
@@ -24,8 +25,13 @@ AQUECIMENTO_PADRAO_NS = 600 * NS  # maior janela de retorno
 
 class PipelineFeatures:
     def __init__(self, usar_recebido: bool = False, har_rv_dia: float = NAN,
-                 abertura: str = "09:00", fechamento: str = "18:25"):
-        """usar_recebido=True usa t_recebido_ns (momento em que o dado ficou disponivel) como tempo do evento."""
+                 abertura: str = "09:00", fechamento: str = "18:25", desligadas: Iterable[str] = ()):
+        """usar_recebido=True usa t_recebido_ns (momento em que o dado ficou disponivel) como tempo do evento.
+        `desligadas`: features que o instrumento/plataforma nao alimenta (saem NaN; ver
+        `registro.features_desligadas_instrumento`)."""
+        self.desligadas = frozenset(desligadas)
+        validar_nomes(self.desligadas)
+        self._cotacoes = JanelaSoma(30 * NS, 1)
         self.usar_recebido = usar_recebido
         self.har_rv_dia = har_rv_dia
         self._fluxo = FluxoAgressor()
@@ -56,6 +62,7 @@ class PipelineFeatures:
         self._avancar(t)
         if tick.bid > 0 and tick.ask > 0 and tick.ask >= tick.bid:
             self._spread = tick.ask - tick.bid
+            self._cotacoes.adicionar(t, 1.0)
         meio = tick.meio
         if meio > 0:
             self._ret.atualizar(t, meio)
@@ -80,6 +87,9 @@ class PipelineFeatures:
         v.update(self._vol.valores(t_ns))
         v["har_rv_dia"] = self.har_rv_dia
         v.update(self._ctx.valores(t_ns))
+        v["volume_tick_30s"] = self._cotacoes.somas(t_ns)[0] / 30.0
+        for n in self.desligadas:
+            v[n] = NAN
         validar_vetor(v)
         return VetorFeatures(t_ns=t_ns, valores=v)
 

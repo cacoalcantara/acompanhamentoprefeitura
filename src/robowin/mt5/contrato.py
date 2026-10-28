@@ -11,7 +11,7 @@ from robowin.core import calendario_b3
 from robowin.core.instrumentos import LETRAS_MES, PerfilInstrumento
 from robowin.core.tipos import Instrumento
 
-from .specs import EspecEsperada, instrumento_de, validar_especificacoes
+from .specs import EspecEsperada, instrumento_de, instrumento_generico_de, validar_especificacoes
 
 
 class ContratoRecusado(Exception):
@@ -109,6 +109,10 @@ def resolver_contrato(
     erros = validar_especificacoes(info, EspecEsperada.do_perfil(perfil), venc, moeda_conta=moeda_conta)
     if erros:
         raise ContratoRecusado([f"{cand.nome}: {e}" for e in erros])
-    inst = instrumento_de(cand.nome, info, venc, ativo=perfil.simbolo_base)
+    if perfil.volume_min is not None:  # qualquer mercado (lote fracionario): valores do perfil, moeda da conta
+        inst = instrumento_generico_de(cand.nome, info, venc, ativo=perfil.simbolo_base, perfil=perfil,
+                                       moeda_conta=moeda_conta)
+    else:
+        inst = instrumento_de(cand.nome, info, venc, ativo=perfil.simbolo_base)
     outros = sorted(c.nome for c in listar_contratos(nomes, perfil) if c.nome != cand.nome)
     return ResolucaoContrato(inst, codigo, cand.nome, cand.prefixo, cand.sufixo, venc, outros)
