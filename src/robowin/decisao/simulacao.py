@@ -402,7 +402,7 @@ def construir_orquestrador(
     if erro_risco is not None:
         registro.incidente(t_ns=t_ref_ns, origem="simulacao", severidade="critico",
                            detalhe=f"risco_nao_aprovado: politica de risco nao aprovada ({erro_risco}); "
-                                   "usando ConfigRisco() padrao. Resultado NAO e comparavel.")
+                                   "limites aplicados SEM aprovacao valida (padrao/minimos ou aprovacao pendente). Resultado NAO e comparavel.")
         for conta in orq.contas.values():
             conta.rotulos.add("risco_nao_aprovado")
     return Montagem(orq, manifesto, bracos, orc, provedores, real)

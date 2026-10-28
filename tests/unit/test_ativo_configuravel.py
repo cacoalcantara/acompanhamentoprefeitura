@@ -147,7 +147,10 @@ def test_ativo_diferente_do_aprovado_usa_limites_minimos_e_rotula(tmp_path):
     with pytest.raises(ErroConfig):
         risco_do_ativo(WDO, "config/risco.toml", "config/aprovacoes/risco-v1.toml", ao_vivo=True)
     cfg_win, erro_win = risco_do_ativo(WIN, "config/risco.toml", "config/aprovacoes/risco-v1.toml")
-    assert erro_win is None and cfg_win.stop_max_pontos == 300.0
+    # config/aprovacoes/risco-v1.toml traz responsavel 'pendente': carrega (simulacao) mas fica rotulado risco_nao_aprovado
+    assert erro_win and "pendente" in erro_win and cfg_win.stop_max_pontos == 300.0
+    with pytest.raises(ErroConfig, match="pendente"):
+        risco_do_ativo(WIN, "config/risco.toml", "config/aprovacoes/risco-v1.toml", ao_vivo=True)
 
 
 def test_manifesto_inclui_ativo_e_hash_do_perfil():

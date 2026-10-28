@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..core.config import ErroConfig, carregar_risco, carregar_toml, sha256_arquivo
+from ..core.config import ErroConfig, aprovacao_pendente, carregar_risco, carregar_toml, sha256_arquivo
 from ..core.instrumentos import PerfilInstrumento
 from ..core.tipos import ConfigRisco
 from .tempo import hhmm_para_s
@@ -36,9 +36,13 @@ def validar_coerencia(cfg: ConfigRisco) -> ConfigRisco:
     return cfg
 
 
-def carregar_politica(caminho: str | Path, aprovacao: str | Path | None) -> ConfigRisco:
-    """Recusa iniciar se o hash divergir da aprovacao (core.config.carregar_risco) ou se for incoerente."""
-    return validar_coerencia(carregar_risco(caminho, aprovacao))
+def carregar_politica(caminho: str | Path, aprovacao: str | Path | None, *, ao_vivo: bool = False) -> ConfigRisco:
+    """Recusa iniciar se o hash divergir da aprovacao (core.config.carregar_risco) ou se for incoerente.
+    Ao vivo, tambem recusa aprovacao com responsavel pendente."""
+    return validar_coerencia(carregar_risco(caminho, aprovacao, ao_vivo=ao_vivo))
+
+
+ERRO_APROVACAO_PENDENTE = "aprovacao com responsavel pendente (risco_nao_aprovado): preencha o responsavel e regenere o hash"
 
 
 def hash_politica(caminho: str | Path) -> str:
@@ -93,7 +97,8 @@ def risco_do_ativo(perfil: PerfilInstrumento, caminho: str | Path, aprovacao: st
     erro: str | None = None
     if perfil.risco_aprovado_padrao:
         try:
-            return carregar_politica(caminho, aprovacao), None
+            cfg = carregar_politica(caminho, aprovacao, ao_vivo=ao_vivo)
+            return cfg, (ERRO_APROVACAO_PENDENTE if aprovacao_pendente(aprovacao) else None)
         except Exception as e:
             erro = f"{type(e).__name__}: {e}"
             fallback = ConfigRisco()
@@ -101,7 +106,9 @@ def risco_do_ativo(perfil: PerfilInstrumento, caminho: str | Path, aprovacao: st
         arq, apr = arquivos_de_risco_do_ativo(perfil, caminho, aprovacao)
         if arq.is_file():
             try:
-                return carregar_politica(arq, apr if apr is not None and apr.is_file() else None), None
+                apr_ok = apr if apr is not None and apr.is_file() else None
+                cfg = carregar_politica(arq, apr_ok, ao_vivo=ao_vivo)
+                return cfg, (ERRO_APROVACAO_PENDENTE if aprovacao_pendente(apr_ok) else None)
             except Exception as e:
                 erro = f"{type(e).__name__}: {e}"
         else:

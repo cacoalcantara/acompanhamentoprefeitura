@@ -23,14 +23,36 @@ def sha256_arquivo(caminho: str | Path) -> str:
     return hashlib.sha256(Path(caminho).read_bytes()).hexdigest()
 
 
-def carregar_risco(caminho: str | Path, aprovacao: str | Path | None) -> ConfigRisco:
-    """Recusa iniciar se o hash do arquivo de risco diferir do ultimo registro de aprovacao."""
+def responsavel_pendente(reg: dict[str, Any]) -> bool:
+    """O registro de aprovacao ainda nao foi assumido por uma pessoa (responsavel vazio ou 'pendente...')."""
+    resp = str(reg.get("responsavel", "")).strip().lower()
+    return not resp or resp.startswith("pendente")
+
+
+def aprovacao_pendente(aprovacao: str | Path | None) -> bool:
+    """True se o arquivo de aprovacao existe mas o responsavel e 'pendente'/vazio (ilegivel conta como pendente)."""
+    if aprovacao is None:
+        return False
+    try:
+        return responsavel_pendente(carregar_toml(aprovacao))
+    except (OSError, ValueError):
+        return True
+
+
+def carregar_risco(caminho: str | Path, aprovacao: str | Path | None, *, ao_vivo: bool = False) -> ConfigRisco:
+    """Recusa iniciar se o hash do arquivo de risco diferir do ultimo registro de aprovacao.
+
+    Ao vivo (`ao_vivo=True`) recusa tambem aprovacao cujo `responsavel` esteja 'pendente' (ninguem assumiu o risco);
+    na simulacao isso e permitido, mas o chamador deve rotular `risco_nao_aprovado` (ver `risco.politica`)."""
     cfg = ConfigRisco(**carregar_toml(caminho))
     if aprovacao is None:
         raise ErroConfig("sem registro de aprovacao da politica de risco")
     reg = carregar_toml(aprovacao)
     if reg.get("sha256") != sha256_arquivo(caminho):
         raise ErroConfig("hash da politica de risco difere do registro de aprovacao")
+    if ao_vivo and responsavel_pendente(reg):
+        raise ErroConfig(f"aprovacao da politica de risco com responsavel pendente ('{reg.get('responsavel', '')}'): "
+                         "preencha o responsavel em config/aprovacoes/ e regenere o hash (docs/07-risco-e-operacao.md)")
     return cfg
 
 

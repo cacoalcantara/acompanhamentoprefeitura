@@ -72,3 +72,23 @@ def test_risco_exige_hash(tmp_path):
     rk.write_text("contratos_max = 5\n")
     with pytest.raises(ErroConfig):
         carregar_risco(rk, ap)
+
+
+def test_risco_ao_vivo_recusa_responsavel_pendente_e_simulacao_rotula(tmp_path):
+    from perfis_teste import WIN
+
+    from robowin.core.config import aprovacao_pendente
+    from robowin.risco.politica import ERRO_APROVACAO_PENDENTE, risco_do_ativo
+    rk = tmp_path / "risco.toml"
+    rk.write_text("contratos_max = 1\n")
+    ap = tmp_path / "ap.toml"
+    ap.write_text(f'sha256 = "{sha256_arquivo(rk)}"\nresponsavel = "pendente: usuario deve aprovar"\n')
+    assert aprovacao_pendente(ap) and carregar_risco(rk, ap).contratos_max == 1  # simulacao: permitido
+    with pytest.raises(ErroConfig, match="responsavel pendente"):
+        carregar_risco(rk, ap, ao_vivo=True)
+    cfg, erro = risco_do_ativo(WIN, rk, ap)  # simulacao: carrega mas rotula risco_nao_aprovado
+    assert cfg.contratos_max == 1 and erro == ERRO_APROVACAO_PENDENTE
+    with pytest.raises(ErroConfig):
+        risco_do_ativo(WIN, rk, ap, ao_vivo=True)
+    ap.write_text(f'sha256 = "{sha256_arquivo(rk)}"\nresponsavel = "Fulano de Tal"\n')
+    assert carregar_risco(rk, ap, ao_vivo=True).contratos_max == 1 and risco_do_ativo(WIN, rk, ap, ao_vivo=True)[1] is None

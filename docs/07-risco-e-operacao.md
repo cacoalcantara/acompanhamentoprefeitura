@@ -4,6 +4,13 @@ Política: `config/risco.toml` travada por hash (`config/aprovacoes/`). Padrões
 R$ 200/dia; R$ 500/semana; drawdown R$ 1.000 alerta / R$ 1.500 máximo; entradas 09:15–17:30; zeragem 17:45.
 **Responsável precisa aprovar** o registro antes de qualquer etapa real.
 
+> **Aprovação pendente (ação do usuário):** `config/aprovacoes/risco-v1.toml` traz `responsavel = "pendente: ..."`.
+> Enquanto estiver assim, a simulação roda mas é rotulada `risco_nao_aprovado` (incidente crítico), e **tudo que
+> opera ao vivo recusa iniciar** (núcleo ao vivo, espelhamento e market making na demo: `ErroConfig`). Para liberar:
+> 1. confira `config/risco.toml` e preencha `responsavel` (seu nome/identificação) e `motivo` no registro de aprovação;
+> 2. regenere o hash do arquivo de risco: `sha256sum config/risco.toml` e grave em `sha256` do mesmo registro
+>    (o hash cobre o `risco.toml`, não o registro; reaprove sempre que alterar `risco.toml`).
+
 - **Emergência:** botão do painel (token), `robowin emergencia` ou arquivo `EMERGENCIA`; cancela, zera,
   bloqueia. No modo dividido, use também o "fechar tudo" manual do MT5.
 - **Desconexão:** feed parado bloqueia entradas; sem heartbeat 15 s bloqueia, 60 s zera a posição demo.
