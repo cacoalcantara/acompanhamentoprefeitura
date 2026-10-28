@@ -32,9 +32,12 @@ desequilíbrio por lado e **perturbar a partir de T não muda nenhum evento ante
 futuro (amostra de D escondida é detectada); **perturbar o futuro de D não muda as decisões anteriores ao instante
 perturbado**; fluxo ponta a ponta com 3 pregões de fixture.
 
-Desempenho medido (sandbox, 1 núcleo; dia SINTÉTICO denso no formato B3 com 6,5 milhões de negócios): importação ~14 s
-por dia (6,5 M linhas → 3,5 M ticks com a agregação ms+preço); `historico` ~75 s por dia (compactação causal de 1 s:
-3,5 M → ~300 mil eventos; replay ~56 s; amostras de treino ~2 s). Sem compactação o mesmo dia levou ~7,5 min de replay.
+Desempenho medido (sandbox de 4 núcleos, 28/10/2026; pregões SINTÉTICOS densos no formato B3 com 6,5 milhões de
+negócios cada, ZIP de ~42 MB): importação ~14 s por pregão (6,5 M linhas → 4,4 M ticks com a agregação ms+preço);
+`historico --dias 1` com 2 pregões no armazém (o anterior só para treino) levou 97 s no total: carga ~7 s, compactação
+causal de 1 s (4,4 M → ~470 mil eventos), treino 0,2 s, replay ~74 s; pico de memória ~2,4 GB. Ordem de grandeza na CI:
+~1,5 min por pregão simulado (10 pregões + 5 de treino: ~20 min). Sem compactação o replay de um pregão passa de 7 min.
+O workflow imprime os tempos reais de cada pregão (`tempos carga/treino/replay`) e o pico de memória no consolidado.
 
 **Limites honestos:** lado agressor inferido (não observado), cotação inferida (spread de 1 tick), sem livro (features
 de livro/OFI/microprice e market making desligados); só ~20-30 pregões disponíveis = amostra muito abaixo do n

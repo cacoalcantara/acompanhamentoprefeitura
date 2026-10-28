@@ -50,7 +50,8 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p relatorios
-          uv run robowin dados baixar-b3 --ativo WIN --ultimos "$DIAS" --saida dados_b3 --json relatorios/download.json \
+          # DIAS simulados + 5 anteriores so de treino ([historico].dias_treino): o 1o dia simulado ja tem modelo
+          uv run robowin dados baixar-b3 --ativo WIN --ultimos "$((DIAS + 5))" --saida dados_b3 --json relatorios/download.json \
             2>&1 | tee relatorios/download.log
           # mantem no cache so os 40 pregoes mais recentes (~40 MB cada)
           find dados_b3 -name '*.zip' -printf '%f %p\n' | sort | head -n -40 | cut -d' ' -f2 | xargs -r rm -f
