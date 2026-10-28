@@ -18,7 +18,10 @@ ligada e um ``servico_reflexao``, cada trade de braco com IA (``braco.ia``) vira
 decisao (como o ``_ciclo`` do Orquestrador) as pendentes cujo atraso de liquidacao venceu sao liquidadas pela MESMA
 ``liquidar_pendentes`` e a licao so entra no dossie a partir de ``t_disponivel = t_liquidacao + latencia da IA``. A
 latencia da IA no backtest e INJETADA (``ConfigReflexaoBacktest.latencia``, deterministica) e nunca menor que a
-medida na chamada: o resultado continua reprodutivel e a licao nunca aparece antes de existir.
+medida na chamada: o resultado continua reprodutivel e a licao nunca aparece antes de existir. A distribuicao
+injetada e a MEDIDA quando houver amostras (``chamadas_llm.total_ms`` do papel ``reflexao`` e ``latencias`` da etapa
+``reflexao_ia`` com injetado=0, de um banco de simulacao/demo; ver ``latencia_reflexao`` e ``reflexao_de_config(...,
+banco_medido=...)``), sorteada por seed; sem amostras, fica a fixa conservadora de ``LATENCIA_REFLEXAO_PADRAO_MS``.
 """
 from __future__ import annotations
 
@@ -62,7 +65,22 @@ from .latencia_injetada import DistribuicaoLatencia, carimbo_injetado, linha_lat
 from .replay import EventoReplay, FonteArmazem, FonteEventos, tick_no_instante
 
 NS = 1_000_000_000
-LATENCIA_REFLEXAO_PADRAO_MS = 5000.0  # conservador; troque por amostras medidas (chamadas_llm.total_ms, papel reflexao)
+LATENCIA_REFLEXAO_PADRAO_MS = 5000.0  # conservador; so vale sem amostras medidas (ver latencia_reflexao)
+PAPEL_REFLEXAO = "reflexao"
+ETAPA_REFLEXAO = "reflexao_ia"
+MIN_AMOSTRAS_LATENCIA_REFLEXAO = 5  # menos que isso nao descreve a distribuicao: fica a fixa conservadora
+
+
+def latencia_reflexao(banco: Banco | None, *, padrao_ms: float = LATENCIA_REFLEXAO_PADRAO_MS,
+                      min_amostras: int = MIN_AMOSTRAS_LATENCIA_REFLEXAO) -> DistribuicaoLatencia:
+    """Distribuicao da latencia da reflexao: a MEDIDA no ``banco`` (papel ``reflexao``; chamadas do proprio backtest
+    ficam de fora) quando houver ``min_amostras``; senao a fixa de ``padrao_ms``. O sorteio e por seed
+    (``AmostradorLatencia``) e, na chamada, vale max(medida na chamada, injetada): conservador e reprodutivel."""
+    if banco is not None:
+        d = DistribuicaoLatencia.de_banco_papel(banco, PAPEL_REFLEXAO, etapa=ETAPA_REFLEXAO, min_amostras=min_amostras)
+        if d is not None:
+            return d
+    return DistribuicaoLatencia.fixa(padrao_ms)
 
 
 # ============================================================================================ configuracao
@@ -81,11 +99,15 @@ class ConfigReflexaoBacktest:
         return MemoriaReflexiva(self.atraso_liquidacao_s, self.max_reflexoes, self.max_tentativas)
 
 
-def reflexao_de_config(cfg: Mapping[str, Any] | None, latencia: DistribuicaoLatencia | None = None
-                       ) -> ConfigReflexaoBacktest:
-    """Le ``[reflexao]`` de config/robowin.toml (chaves ausentes => padroes; ``ativo = false``)."""
+def reflexao_de_config(cfg: Mapping[str, Any] | None, latencia: DistribuicaoLatencia | None = None, *,
+                       banco_medido: Banco | None = None) -> ConfigReflexaoBacktest:
+    """Le ``[reflexao]`` de config/robowin.toml (chaves ausentes => padroes; ``ativo = false``).
+
+    Latencia: ``latencia`` explicita > medida em ``banco_medido`` (``latencia_reflexao``) > fixa de 5000 ms."""
     sec = dict((cfg or {}).get("reflexao", {}) or {})
     b = ConfigReflexaoBacktest()
+    if latencia is None and banco_medido is not None:
+        latencia = latencia_reflexao(banco_medido)
     return ConfigReflexaoBacktest(
         ativo=bool(sec.get("ativo", b.ativo)),
         atraso_liquidacao_s=float(sec.get("atraso_liquidacao_s", b.atraso_liquidacao_s)),

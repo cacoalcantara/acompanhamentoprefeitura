@@ -17,6 +17,7 @@ from robowin.core.protocolos import Banco
 from robowin.core.tipos import CarimboLatencia
 
 MS_NS = 1_000_000
+PREFIXO_CHAMADA_BACKTEST = "llm-ref-"  # chamadas gravadas pelo proprio backtest (latencia ja injetada): nunca medida
 
 
 class ErroLatencia(ValueError):
@@ -53,6 +54,37 @@ class DistribuicaoLatencia:
             sql, params = sql + " AND modelo=?", (etapa, modelo)
         linhas = banco.consultar(sql + " ORDER BY id", params)
         return cls.de_amostras([float(r["dur_ms"]) for r in linhas], origem=f"banco:{etapa}", suave=suave)
+
+    @classmethod
+    def de_banco_papel(cls, banco: Banco, papel: str, *, etapa: str | None = None, min_amostras: int = 1,
+                       suave: bool = False) -> DistribuicaoLatencia | None:
+        """Amostras MEDIDAS de um papel de IA: ``chamadas_llm.total_ms`` (papel = ``papel``) e, se ``etapa``,
+        tambem ``latencias.dur_ms`` com injetado=0. Ignora as chamadas gravadas por um backtest (latencia injetada,
+        ids ``llm-ref-*``), zeros e nao finitos. Ordem fixa (t_ns, id): o sorteio por seed e reprodutivel.
+
+        Devolve None (nunca levanta) se houver menos de ``min_amostras`` ou se o banco nao tiver as tabelas."""
+        amostras: list[float] = []
+        consultas: list[tuple[str, tuple[str, ...]]] = [(
+            "SELECT total_ms AS ms FROM chamadas_llm WHERE papel=? AND total_ms > 0 AND id NOT LIKE ? "
+            "ORDER BY t_ns, id", (papel, PREFIXO_CHAMADA_BACKTEST + "%"))]
+        if etapa is not None:
+            consultas.append(("SELECT dur_ms AS ms FROM latencias WHERE etapa=? AND injetado=0 AND dur_ms > 0 "
+                              "ORDER BY t_ns, id", (etapa,)))
+        for sql, params in consultas:
+            try:
+                linhas = banco.consultar(sql, params)
+            except Exception:  # banco antigo/sem a tabela: sem amostras medidas
+                continue
+            for r in linhas:
+                try:
+                    x = float(r["ms"])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(x) and x > 0:
+                    amostras.append(x)
+        if len(amostras) < max(1, min_amostras):
+            return None
+        return cls.de_amostras(amostras, origem=f"banco:papel={papel}", suave=suave)
 
     def quantis(self, qs: Sequence[float] = (0.5, 0.9, 0.99)) -> dict[str, float]:
         a = np.asarray(self.amostras_ms, dtype=float)
