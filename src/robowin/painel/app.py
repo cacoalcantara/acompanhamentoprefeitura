@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import math
 import os
 import time
 from pathlib import Path
@@ -40,7 +41,7 @@ def _fmt_brl(v: Any, moeda: str = "BRL") -> str:
 
 
 def _fmt_num(v: Any, casas: int = 2) -> str:
-    if v is None:
+    if not isinstance(v, (int, float)) or (isinstance(v, float) and not math.isfinite(v)):  # None/ausente/NaN
         return "—"
     return f"{v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -73,6 +74,7 @@ def criar_app(
     app.mount("/static", StaticFiles(directory=AQUI / "static"), name="static")
     tpl = Jinja2Templates(directory=str(AQUI / "templates"))
     moeda = perfil.moeda if perfil is not None else "BRL"
+    tick_pontos = perfil.tick_pontos if perfil is not None else None
     tpl.env.filters.update(brl=lambda v: _fmt_brl(v, moeda), num=_fmt_num, pct=_fmt_pct)
     tpl.env.globals.update(ROTULO_CANDIDATO=ROTULO_CANDIDATO, N_MIN=N_MIN_AMOSTRA, CONTROLE=CONTROLE)
     app.state.banco = b
@@ -145,7 +147,7 @@ def criar_app(
     @app.get("/desempenho", response_class=HTMLResponse)
     def pg_desempenho(request: Request):
         return tpl.TemplateResponse(request, "desempenho.html", ctx(
-            request, "desempenho", d=D.desempenho(b, metricas_provider)))
+            request, "desempenho", d=D.desempenho(b, metricas_provider), mon=D.monitoramento(b, tick_pontos)))
 
     @app.get("/modelos", response_class=HTMLResponse)
     def pg_modelos(request: Request):
@@ -174,6 +176,11 @@ def criar_app(
     @app.get("/api/desempenho")
     def api_desempenho():
         return D.desempenho(b, metricas_provider)
+
+    @app.get("/api/monitoramento")
+    def api_monitoramento():
+        from robowin.avaliacao.relatorio import para_json_seguro  # NaN/inf -> null
+        return para_json_seguro(D.monitoramento(b, tick_pontos) or {})
 
     @app.get("/api/latencia")
     def api_latencia():

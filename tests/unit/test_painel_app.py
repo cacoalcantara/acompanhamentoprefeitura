@@ -44,7 +44,8 @@ def test_banco_vazio_nao_quebra(vazio, rota):
 
 def test_apis_json(cli, vazio):
     c, _ = cli
-    for rota in ["/api/resumo", "/api/capital", "/api/desempenho", "/api/latencia", "/api/decisoes"]:
+    for rota in ["/api/resumo", "/api/capital", "/api/desempenho", "/api/latencia", "/api/decisoes",
+                 "/api/monitoramento"]:
         assert c.get(rota).status_code == 200
         assert vazio.get(rota).status_code == 200
     assert "claude" in c.get("/api/capital").json()
@@ -110,8 +111,42 @@ def test_desempenho_wilson_controle_e_amostra(cli):
     c, _ = cli
     t = c.get("/desempenho").text
     assert "controle_aleatorio" in t
-    assert "amostra insuficiente" not in t  # demo tem n=40
+    comparacao = t.split('id="monitoramento"')[0]
+    assert "amostra insuficiente" not in comparacao  # demo tem n=40
     assert "IC de Wilson" in t and "p99" in t
+
+
+def test_desempenho_mostra_monitoramento_informativo(cli):
+    """PSI, custo real x modelo, MinTRL e VaR/ES na pagina de Desempenho, rotulados e com 'amostra insuficiente'."""
+    c, _ = cli
+    t = c.get("/desempenho").text
+    mon = t.split('id="monitoramento"')[1].split("Latência por etapa")[0]
+    assert "Monitoramento (informativo; não altera o veto de risco)" in mon
+    for titulo in ("Deriva de features (PSI)", "Custo de execução real × modelo", "MinTRL por braço",
+                   "VaR/ES diário histórico"):
+        assert titulo in mon
+    assert "0,10" in mon and "0,25" in mon  # limiares documentados na pagina
+    assert "amostra insuficiente" in mon  # demo: um pregao so (PSI e VaR sem amostra)
+    assert "faltam" in mon or "já significativo" in mon or "Sharpe observado ≤ 0" in mon
+    assert "SIMULAÇÃO — sem ordens reais" in t and "DADOS SINTÉTICOS" in t
+    js = c.get("/api/monitoramento").json()
+    assert set(js) >= {"psi", "custo_execucao", "mintrl", "cauda", "rotulo"}
+    assert js["psi"]["status"] == "amostra insuficiente" and js["mintrl"]["quant"]["n"] == 40
+    # o painel so le: nao grava o incidente de deriva
+    import sqlite3
+    banco = c.app.state.banco.caminho
+    assert not sqlite3.connect(banco).execute(
+        "SELECT 1 FROM incidentes WHERE origem='deriva_features'").fetchone()
+
+
+def test_monitoramento_com_poucas_operacoes_nao_quebra(tmp_path):
+    """MinTRL sem Sharpe (n pequeno) e campos ausentes viram '—' / 'amostra insuficiente', nunca erro 500."""
+    c = TestClient(criar_app(banco=popular(tmp_path / "p.sqlite", n_trades=5), dir_dados=tmp_path / "d", token="t"))
+    r = c.get("/desempenho")
+    assert r.status_code == 200
+    mon = r.text.split('id="monitoramento"')[1]
+    assert "amostra insuficiente" in mon and "faltam" not in mon
+    assert c.get("/api/monitoramento").json()["mintrl"]["quant"]["status"] == "amostra insuficiente"
 
 
 def test_amostra_insuficiente():

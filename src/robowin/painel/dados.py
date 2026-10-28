@@ -147,6 +147,16 @@ def desempenho(b: Banco, provider=None) -> dict[str, Any]:
     return {"metricas": m, "controle": m.get(CONTROLE), "latencia": latencia_por_etapa(b)}
 
 
+def monitoramento(b: Banco, tick_pontos: float | None = None) -> dict[str, Any] | None:
+    """PSI de features, custo de execucao real x modelo, MinTRL e VaR/ES (INFORMATIVO; nao altera o veto de risco).
+
+    So leitura: o incidente `deriva_features` e gravado pelo `robowin avaliar`, nunca pelo painel."""
+    if not b.existe() or b.caminho is None:
+        return None
+    from robowin.avaliacao.monitoramento_banco import montar_monitoramento
+    return montar_monitoramento(b.caminho, tick_pontos=tick_pontos)
+
+
 def modelos(b: Banco) -> dict[str, Any]:
     mods = b.consultar("SELECT * FROM modelos ORDER BY nome, versao")
     for m in mods:

@@ -13,6 +13,36 @@
 <td>{% if m.amostra_insuficiente %}<span class="tag aviso-tag">amostra insuficiente (n &lt; {{ N_MIN }})</span>{% endif %}</td></tr>{% endfor %}
 </tbody></table></section>{% endif %}
 <section class="cartao"><h2>Curva de capital</h2><div id="grafico-capital" class="grafico" data-url="/api/capital"></div><p id="capital-vazio" class="vazio" hidden>Sem curva de capital registrada.</p></section>
+<section class="cartao" id="monitoramento"><h2>Monitoramento (informativo; não altera o veto de risco)</h2>
+<p class="nota">Métricas de observação: não são veto, não mudam limites e não provam lucro. Quem veta é o motor de risco com os limites fixos aprovados. Também em <code>/api/monitoramento</code> e na seção “Monitoramento” do <code>robowin avaliar</code>.</p>
+{% if not mon %}<p class="vazio">Sem banco para monitorar.</p>{% else %}
+{% set p = mon.psi %}
+<h3>Deriva de features (PSI)</h3>
+<p class="nota">PSI &lt; {{ p.limiares.aviso|num(2) }} estável; {{ p.limiares.aviso|num(2) }} a {{ p.limiares.alerta|num(2) }} aviso; ≥ {{ p.limiares.alerta|num(2) }} alerta (revalidar o modelo com novo teste fora da amostra; nunca reajustar sozinho). PSI acima do limite alto grava um incidente <code>deriva_features</code> (aviso) quando o <code>robowin avaliar</code> roda; nada é bloqueado.</p>
+{% if p.status != "ok" %}<p><span class="tag aviso-tag">amostra insuficiente</span> {{ p.motivo }}</p>
+{% else %}<p>Referência × atual: {{ p.criterio }}. Pior nível: <strong>{{ p.pior }}</strong>.</p>
+<table><thead><tr><th>Feature</th><th>PSI</th><th>Nível</th><th>n referência</th><th>n atual</th></tr></thead><tbody>
+{% for k, v in p.psi.items() %}<tr><td>{{ k }}</td><td>{{ v|num(3) }}</td><td>{% if p.niveis[k] in ("aviso", "alerta") %}<span class="tag aviso-tag">{{ p.niveis[k] }}</span>{% else %}{{ p.niveis[k] }}{% endif %}</td><td>{{ p.n[k].referencia }}</td><td>{{ p.n[k].atual }}</td></tr>{% endfor %}
+</tbody></table>
+{% if p.amostra_insuficiente %}<p class="nota">Amostra insuficiente (fora da tabela): {{ p.amostra_insuficiente|join(", ") }}</p>{% endif %}{% endif %}
+{% set c = mon.custo_execucao %}
+<h3>Custo de execução real × modelo (ticks por execução)</h3>
+{% if c.status == "indisponivel" %}<p class="vazio">Indisponível: {{ c.motivo }}.</p>
+{% else %}<p>{% if c.status != "ok" %}<span class="tag aviso-tag">amostra insuficiente</span> {{ c.motivo }}. {% else %}Fonte: {{ c.fonte }}. {% endif %}
+Entradas a mercado: {{ c.n }}; custo real médio {{ c.real_ticks|num(2) }} ticks × esperado {{ c.esperado_ticks|num(2) }} (estresse {{ c.esperado_estresse_ticks|num(2) }}); razão {{ c.razao|num(2) }}.</p>
+{% if c.alerta %}<p><span class="tag aviso-tag">alerta informativo</span> {{ c.alerta }}</p>{% endif %}{% endif %}
+<h3>MinTRL por braço (operações para o Sharpe observado ser significativo, 95%)</h3>
+{% if mon.mintrl %}<table><thead><tr><th>Braço</th><th>n</th><th>Sharpe por operação</th><th>MinTRL</th><th>Situação</th></tr></thead><tbody>
+{% for b, v in mon.mintrl.items() %}<tr><td>{{ b }}</td><td>{{ v.n }}</td><td>{{ v.sharpe_operacao|num(3) }}</td><td>{{ v.mintrl|num(0) }}</td>
+<td>{% if v.status == "amostra insuficiente" %}<span class="tag aviso-tag">amostra insuficiente</span>{% elif v.status == "sem vantagem" %}Sharpe observado ≤ 0: nenhum n o torna significativo{% elif v.significativo %}já significativo{% else %}faltam {{ v.faltam }} operações{% endif %}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Sem operações.</p>{% endif %}
+<h3>VaR/ES diário histórico</h3>
+{% if mon.cauda %}<table><thead><tr><th>Braço</th><th>Dias</th><th>VaR 95%</th><th>ES 95%</th><th>VaR 99%</th><th>ES 99%</th><th>Pior dia (perda)</th><th>Aviso</th></tr></thead><tbody>
+{% for b, v in mon.cauda.items() %}<tr><td>{{ b }}</td><td>{{ v.dias }}</td>
+{% for nv in ("0.95", "0.99") %}<td>{{ v.niveis[nv].var_brl|brl if nv in v.niveis else "—" }}</td><td>{{ v.niveis[nv].es_brl|brl if nv in v.niveis else "—" }}</td>{% endfor %}
+<td>{{ v.pior_dia_brl|brl }}</td><td>{% if v.amostra_insuficiente %}<span class="tag aviso-tag">amostra insuficiente (&lt; {{ v.min_dias }} dias)</span>{% endif %}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="vazio">Sem dias com resultado.</p>{% endif %}
+{% endif %}</section>
 <section class="cartao"><h2>Latência por etapa (ms)</h2>
 {% if d.latencia %}<table><thead><tr><th>Braço</th><th>Etapa</th><th>n</th><th>p50</th><th>p95</th><th>p99</th></tr></thead><tbody>
 {% for l in d.latencia %}<tr><td>{{ l.braco }}</td><td>{{ l.etapa }}</td><td>{{ l.n }}</td><td>{{ l.p50|num(1) }}</td><td>{{ l.p95|num(1) }}</td><td>{{ l.p99|num(1) }}</td></tr>{% endfor %}

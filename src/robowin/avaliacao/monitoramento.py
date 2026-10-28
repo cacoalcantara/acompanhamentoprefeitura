@@ -7,7 +7,8 @@
   ativo. Se a execucao na conta DEMO custa bem mais que o simulado, os resultados do backtest estao otimistas.
 
 Ideias adaptadas de ``aurum/live/monitor.py`` (Aurum, MIT), reimplementadas em pt-BR e sem constantes de ativo
-(tudo em ticks). Disponivel para relatorios e para a aceitacao; ainda NAO esta ligado ao fluxo ao vivo.
+(tudo em ticks). Ligado ao ``robowin avaliar`` e ao painel por ``monitoramento_banco`` (informativo; nao altera o
+veto de risco); nao roda a cada decisao do nucleo.
 """
 from __future__ import annotations
 
