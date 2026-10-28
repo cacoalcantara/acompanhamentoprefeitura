@@ -165,5 +165,4 @@ futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido d
   `recv/send` e timers.
 - **`docs/capturas/README.md`:** só Chromium (sem Firefox/WebKit/modo escuro); estado "Confirmado" do gateway não
   exercido ponta a ponta no navegador; tabelas largas rolam no celular; sem teste de acessibilidade/carga.
-- **Windows real:** a suíte sob Windows (e o wheel oficial `MetaTrader5`) roda na CI (`.github/workflows/ci.yml`,
-  job `windows`) e, quando disponível, sob Wine (FASE 4, passo 1); não é verificada por `robowin verificar` no Linux.
+- **Windows real:** executado em 28/10/2026 sob Wine (Python 3.12 Windows): o wheel oficial `MetaTrader5` 5.0.6231 importa, as 20 funções usadas existem, `initialize()` sem terminal falha de forma tratada, 72 constantes conferem com o pacote real (`scripts/conferir_constantes_mt5.py`) e 205 de 208 testes passam (as 3 falhas são artefato do ambiente híbrido numpy 1.26 × scipy; detalhes em `docs/11-validacao-sandbox.md`). Isso NÃO inclui terminal MT5/MT4 instalado nem conta de corretora. A suíte completa em Windows nativo roda na CI (`.github/workflows/ci.yml`, job `windows`, ainda não executada); `robowin verificar` não roda no Windows.
