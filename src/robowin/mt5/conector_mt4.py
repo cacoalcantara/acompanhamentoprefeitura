@@ -180,6 +180,11 @@ class ConectorMT4:
     def eh_duble(self) -> bool:
         return bool(self._ola.get("duble", False))
 
+    @property
+    def ola(self) -> dict[str, Any]:
+        """Copia do handshake do EA (versao do protocolo, nome/versao do EA, build, caminho); vazio antes do initialize."""
+        return dict(self._ola)
+
     # ------------------------------------------------------------------------------------------
     # transporte
     # ------------------------------------------------------------------------------------------
