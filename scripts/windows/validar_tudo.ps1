@@ -12,6 +12,8 @@
     6. compilar_ea.ps1                      (so MT4: compila o EA no MetaEditor)
     7. robowin aceitacao --confirmo-conta-demo   (SO se voce passar -ConfirmoContaDemo; ordens de teste de 1 contrato na DEMO)
     8. zip da pasta de relatorios SEM segredos (.env, chaves, senhas) com MANIFESTO.txt (sha256 de cada arquivo)
+    No fim imprime O QUE FALTA (robowin pendencias): aprovacao de risco pendente, perfis a confirmar e chaves de API
+    ausentes, cada item com o comando exato. Nenhuma dessas decisoes e tomada pelo script.
 
   SOMENTE CONTA DEMO. Sem -ConfirmoContaDemo nenhuma ordem e enviada. O robowin recusa conta real automaticamente.
   A senha da conta demo NAO vai por parametro: defina antes  $env:ROBOWIN_MT5_SENHA  (ou deixe o terminal ja logado).
@@ -138,6 +140,12 @@ if ($ConfirmoContaDemo) {
     Write-Host "7. aceitacao: pulada (nenhuma ordem). Para rodar: acrescente -ConfirmoContaDemo -Login <login> -Servidor <servidor DEMO>." -ForegroundColor Yellow
 }
 
+# --- pendencias do usuario (so leitura; nao conta como falha) ---------------------------------------------------------------
+# Decisoes que SO voce pode tomar: aprovacao da politica de risco, perfis a confirmar e chaves de API ausentes,
+# cada uma com o comando exato. O texto vai para o zip (09-pendencias.txt) e e repetido no fim do script.
+$pendencias = @(uv run robowin pendencias 2>&1 | ForEach-Object { "$_" })
+$pendencias | Out-File -Encoding utf8 -FilePath (Join-Path $pasta "09-pendencias.txt")
+
 # --- 8. empacotar SEM segredos ------------------------------------------------------------------------------------------
 Write-Host ""
 Write-Host "=== 8. empacotar relatorios (sem segredos) ===" -ForegroundColor Cyan
@@ -204,6 +212,18 @@ if ($excluidos.Count -gt 0) {
 Write-Host "Pacote para me enviar: $zip" -ForegroundColor Green
 Write-Host "O zip contem so .json/.md/.txt/.log desta pasta ($Saida). NUNCA contem .env, chaves, senha nem o login completo."
 Write-Host "Antes de enviar, abra o MANIFESTO.txt dentro do zip e confira a lista de arquivos."
+
+Write-Host ""
+Write-Host "================ O QUE FALTA (so voce pode fazer) ================" -ForegroundColor Cyan
+if ($pendencias.Count -gt 0) {
+    $pendencias | ForEach-Object { Write-Host $_ }
+} else {
+    Write-Host "Nao foi possivel listar as pendencias; rode: uv run robowin pendencias" -ForegroundColor Yellow
+}
+Write-Host "Aprovacao de risco:   uv run robowin risco aprovar --responsavel ""<seu nome>"" --motivo ""<motivo>""  (digite APROVO)"
+Write-Host "Perfis (estado):      uv run robowin perfil listar"
+Write-Host "Confirmar um perfil:  uv run robowin perfil confirmar <ATIVO|bolsa:CODIGO> --responsavel ""<seu nome>"" --fonte ""<fonte>"" --comparar-terminal  (digite o simbolo)"
+Write-Host "Chave de API:         setx ANTHROPIC_API_KEY ""<sua chave>""  /  setx OPENAI_API_KEY ""<sua chave>""  (abra um novo terminal depois)"
 
 $falhas = @($resumo | Where-Object { $_.Resultado -ne "OK" })
 if ($falhas.Count -gt 0) {
