@@ -1,0 +1,91 @@
+# Simulacao historica walk-forward CAUSAL com dados REAIS da B3 (negocios publicos dos ultimos pregoes).
+# SOMENTE SIMULACAO: nenhuma ordem e enviada a lugar nenhum. O lado agressor e INFERIDO (regra do tick) e nao ha
+# livro de ofertas. Sem ANTHROPIC_API_KEY/OPENAI_API_KEY nos secrets, a IA roda com o provedor FALSO (rotulado).
+# Com as duas chaves, `--provedor auto` usa as APIs reais (custo real, limitado por [ia].orcamento_mensal_usd).
+name: historico-b3
+on:
+  workflow_dispatch:
+    inputs:
+      dias:
+        description: "pregoes simulados (os ultimos disponiveis na B3)"
+        default: "10"
+      provedor:
+        description: "auto = real so se houver chave para todos os provedores; falso = nunca chama API"
+        type: choice
+        options: [auto, falso]
+        default: auto
+  push:
+    paths: [".github/workflows/historico-b3.yml"]
+concurrency:
+  group: historico-b3
+  cancel-in-progress: false
+jobs:
+  historico:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      DIAS: ${{ github.event.inputs.dias || '10' }}
+      PROVEDOR: ${{ github.event.inputs.provedor || 'auto' }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --python 3.13
+      - name: cache dos ZIPs da B3 (acumula pregoes entre execucoes; a B3 so guarda ~20-30)
+        uses: actions/cache@v4
+        with:
+          path: dados_b3
+          key: b3-negocios-${{ github.run_id }}
+          restore-keys: b3-negocios-
+      - name: chaves de IA (so presenca, nunca o valor)
+        shell: bash
+        run: |
+          for v in ANTHROPIC_API_KEY OPENAI_API_KEY; do
+            if [ -n "${!v}" ]; then echo "$v: presente"; else echo "$v: ausente => IA FALSA (rotulada)"; fi
+          done
+      - name: baixar negocios da B3 (contrato vigente de cada pregao; pula dias sem dados)
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p relatorios
+          # DIAS simulados + 5 anteriores so de treino ([historico].dias_treino): o 1o dia simulado ja tem modelo
+          uv run robowin dados baixar-b3 --ativo WIN --ultimos "$((DIAS + 5))" --saida dados_b3 --json relatorios/download.json \
+            2>&1 | tee relatorios/download.log
+          # mantem no cache so os 40 pregoes mais recentes (~40 MB cada)
+          find dados_b3 -name '*.zip' -printf '%f %p\n' | sort | head -n -40 | cut -d' ' -f2 | xargs -r rm -f
+      - name: importar (streaming, cancelamentos fora, lado inferido, agregacao ms+preco)
+        shell: bash
+        run: |
+          set -o pipefail
+          rm -rf dados_hist
+          uv run robowin dados importar-b3 --ativo WIN --arquivo dados_b3 --armazem dados_hist/ticks \
+            --relatorio relatorios/qualidade.md 2>&1 | tee relatorios/importacao.log
+      - name: simulacao historica walk-forward causal
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run robowin historico --ativo WIN --armazem dados_hist/ticks --dias "$DIAS" \
+            --provedor "$PROVEDOR" --saida relatorios/historico 2>&1 | tee relatorios/historico.log
+          echo "tempo do passo: ${SECONDS}s"
+      - name: resumo no job e consolidado no log
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Historico causal B3 - SIMULACAO (nenhuma ordem enviada)"
+            echo
+            if [ -f relatorios/qualidade.md ]; then cat relatorios/qualidade.md; echo; fi
+            if [ -f relatorios/historico/consolidado.md ]; then cat relatorios/historico/consolidado.md
+            else echo "consolidado nao gerado: veja os logs do passo anterior"; fi
+          } | head -c 900000 >> "$GITHUB_STEP_SUMMARY"
+          echo "=================== CONSOLIDADO ==================="
+          cat relatorios/historico/consolidado.md 2>/dev/null || echo "(sem consolidado)"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: historico-b3
+          path: relatorios/
+          retention-days: 30
+          if-no-files-found: warn

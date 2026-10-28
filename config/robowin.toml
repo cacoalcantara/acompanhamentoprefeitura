@@ -127,3 +127,24 @@ ativo = false
 papel = "reflexao"        # papel de [ia.papeis]
 atraso_liquidacao_s = 300 # a reflexao so e pedida depois deste atraso apos a saida da operacao
 max_reflexoes = 3         # quantas reflexoes entram no dossie (as mais recentes disponiveis)
+
+# Negocios intradiarios PUBLICOS da B3 (`robowin dados baixar-b3` / `importar-b3`; dados/b3_negocios.py).
+# Um ZIP por contrato e pregao, com um .txt separado por ';' e decimal ','. So os ultimos ~20-30 pregoes ficam
+# disponiveis. Nao ha lado agressor nem livro: o lado e INFERIDO pela regra do tick e rotulado como tal.
+[dados_b3]
+url_negocios = "https://arquivos.b3.com.br/rapinegocios/tickercsv/{ticker}/{data}"  # {ticker} e {data} (AAAA-MM-DD)
+tentativas = 5             # novas tentativas por pregao (a conexao as vezes cai no meio do ZIP de ~40 MB)
+espera_inicial_s = 5       # espera antes da 2a tentativa; dobra a cada nova tentativa
+timeout_s = 300
+cache = ""                 # vazio = <[geral].dados>/b3/negocios
+fuso_utc_horas = -3        # HoraFechamento vem no horario de Brasilia (UTC-3, sem horario de verao)
+atraso_entrega_ms = 50     # t_disponivel = t_evento + este atraso (entrega do dado ao robo); conservador > 0
+agregacao = "ms_preco"     # "ms_preco" (soma o volume dos negocios do mesmo ms e preco) | "nenhuma"
+
+# Simulacao historica walk-forward causal (`robowin historico`; historico/).
+[historico]
+compactar_ms = 1000        # corridas de mesmo preco/lado: 1o negocio no instante exato, o resto somado no instante
+                           # do ultimo (no maximo esta janela). 0 = sem compactacao (lento: milhoes de eventos/dia)
+dias_treino = 5            # pregoes ANTERIORES usados no treino do modelo quant de cada dia (sem busca de parametros)
+periodo_ia_s = 240         # gatilho periodico dos bracos com IA (como no `simular`)
+idade_max_dado_s = 15      # dado mais velho que isto bloqueia entradas (igual ao nucleo ao vivo)

@@ -10,6 +10,28 @@
   IBGE, Fed, BLS) em `config/fontes.toml` com `verificado=false` até validação.
 - **Infra sugerida:** Windows com MT5 (PC ou VPS em São Paulo); relógio sincronizado (NTP.br).
 
+## Negócios públicos da B3 (dados REAIS para a simulação histórica)
+Fonte: `[dados_b3].url_negocios` em `config/robowin.toml` (`https://arquivos.b3.com.br/rapinegocios/tickercsv/<TICKER>/<AAAA-MM-DD>`),
+confirmada pela CI do GitHub em 28/10/2026 (`.github/workflows/fontes-b3.yml`; este ambiente de desenvolvimento não
+alcança `b3.com.br`). Um ZIP (~40 MB) por contrato e pregão, com `DD-MM-AAAA_NEGOCIOSAVISTA_<TICKER>.txt` (~470 MB,
+~6,5 milhões de linhas), `;` e decimal `,`: `DataReferencia;CodigoInstrumento;AcaoAtualizacao;PrecoNegocio;
+QuantidadeNegociada;HoraFechamento;CodigoIdentificadorNegocio;TipoSessaoPregao;DataNegocio;CodigoParticipanteComprador;
+CodigoParticipanteVendedor`. Só os últimos ~20-30 pregões ficam disponíveis.
+- `robowin dados baixar-b3 --ativo WIN (--de AAAA-MM-DD --ate AAAA-MM-DD | --ultimos N) [--saida DIR]`: contrato
+  **vigente naquele dia** (`contrato_vigente` do perfil), HTTP/1.1 (urllib, respeita `HTTPS_PROXY`), 5 tentativas com
+  espera crescente, ZIP validado por `zipfile.testzip` antes de entrar no cache (troca atômica); 404/sem ZIP = dia sem
+  dados (pulado). Padrão de `--ate`: o pregão anterior a hoje (o de hoje viria incompleto).
+- `robowin dados importar-b3 --arquivo ZIP|TXT|DIR [--ativo WIN] [--armazem DIR]`: leitura **em blocos** direto do ZIP
+  (`pandas.read_csv(chunksize=...)`), `HoraFechamento` (HHMMSSmmm, Brasília, `fuso_utc_horas = -3`) → `t_evento` em UTC
+  ns; `t_disponivel = t_evento + atraso_entrega_ms`; `AcaoAtualizacao != 0` (cancelamento/correção) descarta a linha e
+  o negócio citado (contados); lado **inferido** pela regra do tick (sobe = compra, desce = venda, igual = repete;
+  classificação de microestrutura de Lee-Ready, **não** é indicador técnico) e rotulado `lado_inferido`; cotação
+  inferida (spread de 1 tick do perfil, rotulada `cotacao_inferida`); agregação padrão `ms_preco` (soma o volume do
+  mesmo ms e preço; contagem original nos metadados). O armazém recebe o marcador `REAL.txt` (origem
+  `real_b3_negocios`) e **recusa** misturar com sintético (nos dois sentidos). Relatório de qualidade por dia (linhas,
+  cancelados, duplicados, lacunas > 60 s, faixa de preço, horário, lado c/v/?, pregão possivelmente incompleto).
+- Sem livro e sem agressor: features de livro/OFI/microprice e o market making ficam desligados (como no MT4).
+
 ## Perfis de instrumento e de bolsa (ativo configurável)
 `config/instrumentos.toml` é a única fonte dos números do ativo: `classe`, `bolsa`, `vencimento`
 (`quarta_dia15_meses_pares` para WIN/IND; `primeiro_dia_util_mes` para WDO/DOL; `nenhum` para ação/ETF),

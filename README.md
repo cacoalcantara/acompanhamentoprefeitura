@@ -34,6 +34,20 @@ probabilidades vão, anonimizadas, ao revisor de IA; o veto por odds é opcional
 (`[decisao].veto_por_odds`). Ideia e método inspirados no Time Machine do day-trader-skill (Jake Schincariol, MIT),
 reimplementação independente: ver **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** e `docs/13-inspiracoes.md`.
 
+**Simulação histórica com dados REAIS da B3** ("como se não tivesse havido acontecimentos": o robô e a IA só veem o que
+estaria disponível em cada instante). No PowerShell do seu Windows, na pasta do projeto:
+```
+uv run robowin dados baixar-b3 --ativo WIN --ultimos 10 --saida dados_b3
+uv run robowin dados importar-b3 --ativo WIN --arquivo dados_b3 --armazem dados_locais\ticks_b3 --relatorio relatorios\qualidade.md
+uv run robowin historico --ativo WIN --armazem dados_locais\ticks_b3 --dias 10 --saida relatorios\historico
+```
+(`--de 2026-10-01 --ate 2026-10-27` no lugar de `--ultimos`; `--bracos quant,claude_gpt`; `--provedor falso` para nunca
+chamar API). Sem `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` a IA é o provedor **FALSO** (rotulado). Relatório em
+`relatorios\historico\consolidado.md` e um por pregão em `relatorios\historico\dias\<data>\`. Os negócios públicos da B3 não
+têm lado agressor nem livro: o lado é **inferido** pela regra do tick e tudo sai rotulado; poucos pregões = amostra
+insuficiente; **não prova lucratividade**. Na CI: workflow `historico-b3` (Actions ▸ historico-b3 ▸ Run workflow).
+Detalhes: `docs/03-dados-integracoes-infra.md` e `docs/04-testes-e-criterios.md`.
+
 Windows (MT5 real, conta **DEMO**): `scripts/windows/instalar.ps1`, depois `uv run robowin diagnostico` e
 `docs/07-risco-e-operacao.md`.
 

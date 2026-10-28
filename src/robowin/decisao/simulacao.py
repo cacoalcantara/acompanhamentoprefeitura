@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -458,9 +458,11 @@ def construir_orquestrador(
     p: ParamsSimulacao, *, rel: Any, registro: Registro, ins: Instrumento, modelo: ModeloPreditivo,
     statarb: SinalStatArb | None, precos_aux: Any, sintetico: bool, modo_tempo: str, sessao_id: str,
     t_ref_ns: int, cfg: dict[str, Any] | None = None, catalogo: Catalogo | None = None,
-    piscina_odds: PiscinaSessoes | None = None,
+    piscina_odds: PiscinaSessoes | None = None, ids_bracos: Collection[str] | None = None,
 ) -> Montagem:
-    """Bracos (A, B, C, controles e extras de ``[[bracos]]``), provedores com orcamento e orquestrador."""
+    """Bracos (A, B, C, controles e extras de ``[[bracos]]``), provedores com orcamento e orquestrador.
+
+    ``ids_bracos`` (opcional): so esses bracos, MAIS os controles (aleatorio e nao operar), que ficam sempre."""
     if cfg is None or catalogo is None:
         cfg, catalogo = carregar_ambiente(p)
     papeis = carregar_papeis(cfg) if cfg.get("ia", {}).get("papeis") else {}
@@ -493,6 +495,12 @@ def construir_orquestrador(
     for modo in modos:
         suf = "" if modo == "imediato" else "_cond"
         bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
+    if ids_bracos is not None:
+        pedidos = set(ids_bracos)
+        desconhecidos = pedidos - {b.id for b in bracos}
+        if desconhecidos:
+            raise ErroConfig(f"braco(s) inexistente(s): {sorted(desconhecidos)}; disponiveis: {[b.id for b in bracos]}")
+        bracos = [b for b in bracos if b.id in pedidos or b.familia == "controle" or isinstance(b, BracoNaoOperar)]
     hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "perfil": perfil.hash()}
     contaminados = rotular_declaracoes(bracos, catalogo, hashes)
     memoria_reflexiva, servico_reflexao = montar_reflexao(cfg, fab, provedores, ativo=bool(papeis))

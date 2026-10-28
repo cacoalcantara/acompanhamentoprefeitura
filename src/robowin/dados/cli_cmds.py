@@ -1,8 +1,10 @@
-"""CLI: `robowin dados resumo|verificar|sintetico`."""
+"""CLI: `robowin dados resumo|verificar|sintetico|baixar-b3|importar-b3`."""
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
+from pathlib import Path
 
 from robowin.core.calendario_b3 import SP
 from robowin.core.instrumentos import argumentos_ativo, perfil_do_cli
@@ -66,6 +68,78 @@ def _sintetico(a: argparse.Namespace) -> int:
     return 0
 
 
+def _cfg(a: argparse.Namespace) -> dict:
+    from robowin.core.config import carregar_toml
+    return carregar_toml(a.config) if Path(a.config).is_file() else {}
+
+
+def _baixar_b3(a: argparse.Namespace) -> int:
+    from robowin.core.config import dir_dados
+
+    from .b3_negocios import baixar_b3, config_b3
+    perfil = perfil_do_cli(a)
+    cfg_b3 = config_b3(_cfg(a), tentativas=a.tentativas)
+    cache = Path(a.saida) if a.saida else (Path(cfg_b3.cache) if cfg_b3.cache else dir_dados(a.config) / "b3" / "negocios")
+    try:
+        res = baixar_b3(perfil, cfg_b3, cache, de=dt.date.fromisoformat(a.de) if a.de else None,
+                        ate=dt.date.fromisoformat(a.ate) if a.ate else None, ultimos=a.ultimos,
+                        ao_progresso=lambda r: print(r.linha(), flush=True))
+    except ValueError as e:
+        print(f"ERRO: {e}")
+        return 2
+    ok = [r for r in res if r.disponivel]
+    falhas = [r for r in res if r.status == "falha"]
+    print(f"baixados/em cache: {len(ok)}; sem dados: {sum(r.status == 'sem_dados' for r in res)}; "
+          f"falhas: {len(falhas)}; cache em {cache}")
+    if a.json:
+        Path(a.json).write_text(json.dumps([r.__dict__ for r in res], default=str, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+    return 0 if ok or not res else 1
+
+
+def _importar_b3(a: argparse.Namespace) -> int:
+    from robowin.core.config import dir_dados
+
+    from .b3_negocios import ErroFormatoB3, arquivos_de, config_b3, formatar_qualidade, importar_arquivo
+    from .ticks import MisturaDeDados
+    perfil = perfil_do_cli(a)
+    cfg_b3 = config_b3(_cfg(a), atraso_entrega_ms=a.atraso_ms, agregacao=a.agregacao)
+    arm = ArmazenamentoTicks(a.armazem or dir_dados(a.config) / "ticks_b3")
+    arquivos = arquivos_de(a.arquivo)
+    if not arquivos:
+        print("ERRO: nenhum arquivo .zip/.txt encontrado")
+        return 2
+    relatorio: list[dict] = []
+    erros = 0
+    for arq in arquivos:
+        try:
+            r = importar_arquivo(arq, arm, perfil, cfg_b3, ticker=a.ticker)
+        except MisturaDeDados as e:
+            print(f"ERRO (mistura de dados recusada): {e}")
+            return 2
+        except (ErroFormatoB3, OSError, ValueError) as e:
+            print(f"ERRO em {arq}: {e}")
+            erros += 1
+            continue
+        print(f"{arq.name}: {r.linhas} linhas, {r.invalidas} invalidas, {r.outros_instrumentos} de outros instrumentos")
+        for q in r.dias:
+            print("  " + formatar_qualidade(q).replace("\n", "\n  "))
+        relatorio.append(r.como_dict())
+    print(f"armazem REAL: {arm.raiz} (origem real_b3_negocios; lado INFERIDO pela regra do tick; sem livro)")
+    if a.relatorio:
+        destino = Path(a.relatorio)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        if destino.suffix.lower() == ".json":
+            destino.write_text(json.dumps(relatorio, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        else:
+            linhas = ["# Qualidade dos negocios B3 importados", "",
+                      "> Dados reais (negocios publicos da B3); lado agressor INFERIDO pela regra do tick; sem livro.", ""]
+            for r_ in relatorio:
+                linhas += [f"- `{formatar_qualidade(q)}`".replace("\n", "`\n  - `") for q in r_["dias"]]
+            destino.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+    return 1 if erros and not relatorio else 0
+
+
 def registrar(sub: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
     p = sub.add_parser("dados", help="armazenamento e qualidade de dados")
     ss = p.add_subparsers(dest="dados_cmd")
@@ -84,4 +158,22 @@ def registrar(sub: argparse._SubParsersAction) -> None:  # type: ignore[type-arg
     s.add_argument("--data", default="2026-03-10")
     argumentos_ativo(s)
     s.set_defaults(func=_sintetico)
+    b = ss.add_parser("baixar-b3", help="baixa negocios intradiarios PUBLICOS da B3 (contrato vigente de cada pregao)")
+    b.add_argument("--de", default=None, help="AAAA-MM-DD")
+    b.add_argument("--ate", default=None, help="AAAA-MM-DD (padrao: pregao anterior a hoje)")
+    b.add_argument("--ultimos", type=int, default=None, help="os ultimos N pregoes DISPONIVEIS (pula dias sem dados)")
+    b.add_argument("--saida", default=None, help="cache dos ZIPs (padrao [dados_b3].cache ou <dados>/b3/negocios)")
+    b.add_argument("--tentativas", type=int, default=None, help="novas tentativas por pregao (padrao [dados_b3])")
+    b.add_argument("--json", default=None, help="grava o resultado do download neste arquivo JSON")
+    argumentos_ativo(b)
+    b.set_defaults(func=_baixar_b3)
+    m = ss.add_parser("importar-b3", help="importa ZIP/TXT de negocios da B3 para um armazem de ticks REAL")
+    m.add_argument("--arquivo", nargs="+", required=True, help="ZIP(s), TXT(s) ou diretorio(s)")
+    m.add_argument("--armazem", default=None, help="armazem de ticks (padrao <dados>/ticks_b3; nunca o sintetico)")
+    m.add_argument("--ticker", default=None, help="contrato (padrao: o do nome do arquivo)")
+    m.add_argument("--atraso-ms", type=float, default=None, help="atraso de entrega (padrao [dados_b3])")
+    m.add_argument("--agregacao", choices=["ms_preco", "nenhuma"], default=None)
+    m.add_argument("--relatorio", default=None, help="grava o relatorio de qualidade (.md ou .json)")
+    argumentos_ativo(m)
+    m.set_defaults(func=_importar_b3)
     p.set_defaults(func=lambda a: (p.print_help(), 2)[1])
