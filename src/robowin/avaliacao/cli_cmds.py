@@ -132,7 +132,7 @@ def _avaliar(a) -> int:
         a.banco, tick_pontos=perfil.tick_pontos,
         liquidos_por_braco={b: [t.liquido_brl for t in metricas.ordenar(ts)] for b, ts in trades.items()},
         pnl_diario_por_braco={b: list(metricas.pnl_por_dia(ts).values()) for b, ts in trades.items()},
-        series_extra=extra)
+        series_extra=extra, fonte_psi=a.psi_fonte)
     rel["monitoramento"] = mon
     rel["cauda_perdas"] = mon["cauda"]
     rel["pbo_entre_bracos"] = robustez.pbo_entre_bracos(trades)
@@ -169,6 +169,9 @@ def registrar(sub):
     p.add_argument("--ticks", default=None,
                    help="armazem de ticks: acrescenta ao PSI o vetor de features recalculado (exige --simbolo)")
     p.add_argument("--simbolo", default=None, help="simbolo do armazem de ticks (com --ticks)")
+    p.add_argument("--psi-fonte", choices=list(monit.FONTES_PSI), default="auto",
+                   help="fonte do PSI: auto (vetor de features gravado por ciclo quando existir; senao proxies), "
+                        "features ou proxies")
     p.add_argument("--sem-incidente", action="store_true",
                    help="nao grava o incidente 'deriva_features' no banco (o relatorio continua mostrando o PSI)")
     p.set_defaults(func=_avaliar)

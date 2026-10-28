@@ -8,9 +8,12 @@ Usado pelo ``robowin avaliar`` (relatorio Markdown/JSON) e pelo painel (pagina d
 * **PSI por feature** (``monitoramento.psi_amostras``): referencia = janela de treino do modelo ativo (``modelos.
   treinado_ate_ns``) quando existir dado dos dois lados do corte; senao, as PRIMEIRAS sessoes contra as ULTIMAS
   (metade/metade). Limiares: PSI < 0,10 estavel; 0,10 a 0,25 aviso; >= 0,25 alerta (revalidar o modelo com novo
-  OOS; nunca reajustar parametro sozinho). As features vem do proprio banco: variacao do preco de referencia entre
-  decisoes e as saidas numericas gravadas na proposta de cada braco (ex.: E[R$] e P(stop) do modelo quant); com
-  ``--ticks`` o ``avaliar`` acrescenta o vetor do ``PipelineFeatures`` recalculado do armazem de ticks.
+  OOS; nunca reajustar parametro sozinho). Fonte padrao (``fonte="auto"``): o vetor REAL de features que o
+  Orquestrador usou em cada ciclo de decisao (tabela ``features_ciclo``, ``dados/features_ciclo.py``), quando o
+  banco o tiver. Banco antigo sem essas linhas (ou ``fonte="proxies"``): proxies do proprio banco, isto e, variacao
+  do preco de referencia entre decisoes e as saidas numericas gravadas na proposta de cada braco (ex.: E[R$] e
+  P(stop) do modelo quant). Com ``--ticks`` o ``avaliar`` acrescenta o vetor do ``PipelineFeatures`` recalculado do
+  armazem de ticks (``tick.*``), em qualquer fonte.
 * **Custo de execucao real x modelo**: entradas A MERCADO; custo real = lado x (preco executado - preco de
   referencia da intencao) em ticks; esperado = metade do slippage-base do modelo de custos do relatorio (o modelo
   cobra ``SLIPPAGE_BASE_TICKS`` por operacao ida e volta). Entradas de plano condicional ficam de fora (a
@@ -36,6 +39,7 @@ import numpy as np
 from scipy import stats
 
 from robowin.core.esquema_banco import DDL
+from robowin.dados import features_ciclo
 from robowin.risco import cauda
 from robowin.risco.tempo import dia_sp
 
@@ -54,6 +58,8 @@ MIN_OPERACOES_MINTRL = 30
 CONFIANCA_MINTRL = 0.95
 PASSO_FEATURES_TICKS_S = 60  # amostragem do vetor de features recalculado do armazem de ticks
 NS = 1_000_000_000
+FONTES_PSI = ("auto", "features", "proxies")
+PREFIXO_FEATURE_CICLO = "ciclo."
 
 
 # ------------------------------------------------------------------------------------------- leitura ----
@@ -131,6 +137,32 @@ def series_de_decisoes(decisoes: Sequence[Mapping[str, Any]]) -> dict[str, Serie
             series.setdefault("variacao_abs_preco_referencia_pts", []).append((t, abs(var)))
         anterior = (t, p)
     return series
+
+
+def series_de_features_ciclo(banco: str | Path) -> dict[str, Serie]:
+    """Vetor de features gravado por ciclo de decisao (``features_ciclo``), por feature (``ciclo.<nome>``).
+
+    Vazio quando o banco nao tem a tabela (banco antigo) ou nenhuma linha."""
+    series: dict[str, Serie] = {}
+    for t, vals in features_ciclo.ler_vetores(banco):
+        for k, x in sorted(vals.items()):
+            series.setdefault(f"{PREFIXO_FEATURE_CICLO}{k}", []).append((t, x))
+    return series
+
+
+def series_psi(banco: str | Path, decisoes: Sequence[Mapping[str, Any]], fonte: str = "auto"
+               ) -> tuple[dict[str, Serie], str]:
+    """Series do PSI e a fonte efetiva: ``features`` (vetor gravado por ciclo) ou ``proxies``.
+
+    ``auto``: features quando houver linhas em ``features_ciclo``; senao, proxies. ``features`` sem linhas => vazio
+    (o PSI sai como amostra insuficiente, com a fonte declarada)."""
+    if fonte not in FONTES_PSI:
+        raise ValueError(f"fonte do PSI invalida: {fonte!r} (use {', '.join(FONTES_PSI)})")
+    if fonte in ("auto", "features"):
+        s = series_de_features_ciclo(banco)
+        if s or fonte == "features":
+            return s, "features"
+    return series_de_decisoes(decisoes), "proxies"
 
 
 def series_de_ticks(dir_ticks: str | Path, simbolo: str, passo_s: int = PASSO_FEATURES_TICKS_S) -> dict[str, Serie]:
@@ -336,20 +368,25 @@ def _resultados_do_banco(banco: str | Path) -> tuple[dict[str, list[float]], dic
 def montar_monitoramento(banco: str | Path, *, tick_pontos: float | None,
                          liquidos_por_braco: Mapping[str, Sequence[float]] | None = None,
                          pnl_diario_por_braco: Mapping[str, Sequence[float]] | None = None,
-                         series_extra: Mapping[str, Serie] | None = None) -> dict[str, Any]:
-    """Monta a secao inteira. Sem ``liquidos``/``pnl_diario`` explicitos, le a tabela ``trades``."""
+                         series_extra: Mapping[str, Serie] | None = None, fonte_psi: str = "auto") -> dict[str, Any]:
+    """Monta a secao inteira. Sem ``liquidos``/``pnl_diario`` explicitos, le a tabela ``trades``.
+
+    ``fonte_psi``: ``auto`` (vetor de features gravado por ciclo quando existir; senao proxies), ``features`` ou
+    ``proxies`` (ver ``series_psi``)."""
     decisoes = ler_decisoes(banco)
     if liquidos_por_braco is None or pnl_diario_por_braco is None:
         liq, dia = _resultados_do_banco(banco)
         liquidos_por_braco = liquidos_por_braco if liquidos_por_braco is not None else liq
         pnl_diario_por_braco = (pnl_diario_por_braco if pnl_diario_por_braco is not None
                                 else {b: list(v.values()) for b, v in dia.items()})
-    series = series_de_decisoes(decisoes)
+    series, fonte = series_psi(banco, decisoes, fonte_psi)
     for k, v in (series_extra or {}).items():
         series[f"tick.{k}"] = list(v)
+    psi = deriva_features(series, corte_de_treino_ns(banco))
+    psi["fonte"] = fonte + ("+ticks" if series_extra else "")
     return {
         "rotulo": ROTULO,
-        "psi": deriva_features(series, corte_de_treino_ns(banco)),
+        "psi": psi,
         "custo_execucao": custo_execucao(banco, decisoes, tick_pontos),
         "mintrl": {b: mintrl_braco(v) for b, v in sorted(liquidos_por_braco.items()) if len(v)},
         "cauda": {b: cauda_braco(v) for b, v in sorted(pnl_diario_por_braco.items()) if len(v)},
@@ -368,6 +405,11 @@ def _n(v: Any, casas: int = 2) -> str:
     return f"{f:.{casas}f}".replace(".", ",")
 
 
+_FONTE_TXT = {"features": "vetor de features usado em cada ciclo de decisao (tabela `features_ciclo`, `ciclo.*`)",
+              "proxies": "proxies do banco (variacao do preco de referencia e saidas numericas das propostas; "
+                         "o banco nao tem o vetor de features por ciclo)"}
+
+
 def renderizar_markdown(m: Mapping[str, Any], pbo: Mapping[str, Any] | None = None, moeda: str = "BRL") -> str:
     L = ["", f"## Monitoramento ({ROTULO})", "",
          "> Metricas de observacao: nao sao veto, nao mudam limites e nao provam lucro. Quem veta e o motor de risco "
@@ -377,6 +419,10 @@ def renderizar_markdown(m: Mapping[str, Any], pbo: Mapping[str, Any] | None = No
     L += ["### Deriva de features (PSI)", "",
           f"Limiares: PSI < {_n(lim['aviso'])} estavel; {_n(lim['aviso'])} a {_n(lim['alerta'])} aviso; "
           f">= {_n(lim['alerta'])} alerta (revalidar o modelo com novo OOS; nunca reajustar sozinho).", ""]
+    if p.get("fonte"):
+        L += [f"Fonte: {_FONTE_TXT.get(str(p['fonte']).split('+')[0], p['fonte'])}"
+              + (" + vetor recalculado do armazem de ticks (`tick.*`)" if "+ticks" in str(p["fonte"]) else "")
+              + ".", ""]
     if p.get("status") != "ok":
         L.append(f"- **Amostra insuficiente**: {p.get('motivo', 'sem dados')}.")
     else:

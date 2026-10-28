@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import itertools
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from robowin.core.protocolos import Banco, RegistroAuditoria
 from robowin.core.tipos import CarimboLatencia, ChamadaLLM, Execucao, ManifestoExperimento, Trade
+from robowin.dados import features_ciclo
 from robowin.execucao.oms import OrdemOMS
 from robowin.risco.tempo import dia_sp
 
@@ -32,6 +34,7 @@ class Registro:
         self.sessao_id = sessao_id
         self._n = itertools.count(1)
         self.contagem: dict[str, int] = {}
+        self._features_ok: bool | None = None  # migracao de ``features_ciclo`` aplicada? (None: ainda nao tentada)
 
     def novo_id(self, prefixo: str) -> str:
         return f"{self.sessao_id}-{prefixo}-{next(self._n):07d}"
@@ -71,6 +74,21 @@ class Registro:
     def latencia(self, c: CarimboLatencia, *, t_ns: int, modelo: str = "", effort: str = "") -> None:
         self._ins("latencias", {"t_ns": t_ns, "braco": c.braco, "etapa": c.etapa, "dur_ms": c.dur_ms,
                                 "injetado": int(c.injetado), "modelo": modelo, "effort": effort})
+
+    def features_ciclo(self, *, t_ns: int, ciclo_id: str, bracos: Sequence[str], gatilhos: Sequence[str],
+                       valores: dict[str, float]) -> bool:
+        """Vetor de features (ja filtrado para a lista permitida) usado no ciclo; fonte do PSI do monitoramento.
+
+        Tabela fora do esquema congelado (migracao de ``dados/features_ciclo.py``). Fora da auditoria de proposito:
+        nao muda a cadeia de hash nem os hashes de dossie/resultado. Banco sem suporte a migracao => nao grava."""
+        if self._features_ok is None:
+            self._features_ok = features_ciclo.garantir_tabela(self.banco)
+        if not self._features_ok:
+            return False
+        self._ins(features_ciclo.TABELA, features_ciclo.linha(
+            id=f"{ciclo_id}-fe", t_ns=t_ns, sessao=self.sessao_id, ciclo_id=ciclo_id, bracos=bracos,
+            gatilhos=gatilhos, valores=valores))
+        return True
 
     # ---- risco, incidentes ----------------------------------------------------------------------
     def evento_risco(self, *, t_ns: int, braco: str, tipo: str, detalhe: str = "", critico: bool = False) -> None:
