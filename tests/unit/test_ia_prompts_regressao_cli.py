@@ -137,13 +137,22 @@ CHAVES = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_K
           "OLLAMA_HOST")
 
 
-def test_cli_ia_testar_sem_chave_usa_falso_e_avisa(monkeypatch, capsys):
+def test_cli_ia_testar_sem_chave_falha_claro(monkeypatch, capsys):
     for v in CHAVES:
         monkeypatch.delenv(v, raising=False)
     rc = main(["ia", "testar", "--modelo", "anthropic:claude-opus-5-5", "--k", "1"])
     cap = capsys.readouterr()
+    assert rc == 2 and cap.out == ""
+    assert "sem chave" in cap.err and "ANTHROPIC_API_KEY" in cap.err and "setx" in cap.err and "--falso" in cap.err
+
+
+def test_cli_ia_testar_com_falso_explicito_roda_rotulado(monkeypatch, capsys):
+    for v in CHAVES:
+        monkeypatch.delenv(v, raising=False)
+    rc = main(["ia", "testar", "--modelo", "anthropic:claude-opus-5-5", "--k", "1", "--falso"])
+    cap = capsys.readouterr()
     assert rc == 0
-    assert "FALSO" in cap.err and "sem chave" in cap.err
+    assert "FALSO" in cap.err
     saida = json.loads(cap.out)
     assert saida["provedor_real"] is False and saida["rotulo"] == "FALSO"
 
