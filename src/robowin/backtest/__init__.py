@@ -8,6 +8,7 @@ from .motor import (
     MotorBacktest,
     ResultadoBacktest,
     executar_cenarios,
+    latencia_reflexao,
     reflexao_de_config,
 )
 from .replay import (
@@ -31,5 +32,5 @@ __all__ = [
     "EventoReplay", "ExecucaoBacktest", "FonteArmazem", "FonteMemoria", "MotorBacktest", "NaoOperar",
     "RelatorioVazamento", "ResultadoBacktest", "carimbo_injetado", "dossie_sem_datas", "executar_cenarios",
     "ordenar_por_disponibilidade", "ordenar_por_evento", "perturbar_futuro", "verificar_perturbacao_futura",
-    "reflexao_de_config", "tick_no_instante", "verificar_causal",
+    "latencia_reflexao", "reflexao_de_config", "tick_no_instante", "verificar_causal",
 ]

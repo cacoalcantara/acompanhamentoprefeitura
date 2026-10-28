@@ -42,6 +42,7 @@ from robowin.core.tipos import (
     Tick,
     Trade,
 )
+from robowin.dados.features_ciclo import compactar as compactar_features
 from robowin.execucao.custos import Custos
 from robowin.execucao.oms import OMS, TERMINAIS
 from robowin.execucao.roteador import ResultadoExecucao, Roteador
@@ -974,6 +975,7 @@ class Orquestrador:
                 odds=self._odds if self.avaliador_odds is not None else None)))
         if not ctxs:
             return
+        self._gravar_features(ctxs, snap, t, ciclo_id, disparos)
         self.registro.latencia(
             CarimboLatencia(etapa="features_modelo", braco="*", t_ini_ns=0, t_fim_ns=int(snap.wall_ms * 1e6)), t_ns=t)
         # tick -> gatilho: o relogio do servidor nao e sincronizado, entao e um LIMITE (recebido - evento)
@@ -988,6 +990,18 @@ class Orquestrador:
         resultados = await self._executar_bracos(ctxs)
         for res in resultados:
             self._enfileirar(t + res.latencia_ns, res)
+
+    def _gravar_features(self, ctxs: list[tuple[ContaBraco, ContextoDecisao]], snap: Snapshot, t: int,
+                         ciclo_id: str, disparos: tuple[str, ...]) -> None:
+        """Grava o vetor de features (lista permitida) do ciclo: fonte do PSI. Falha aqui nunca derruba o ciclo."""
+        try:
+            vals = compactar_features(snap.vetor, nomes_permitidos())
+            if vals:
+                self.registro.features_ciclo(t_ns=t, ciclo_id=ciclo_id, bracos=[c.braco.id for c, _ in ctxs],
+                                             gatilhos=disparos, valores=vals)
+        except Exception as e:  # defensivo: monitoramento e informativo
+            self.registro.incidente(t_ns=t, origem="features_ciclo", severidade="aviso",
+                                    detalhe=f"{type(e).__name__}: {e}"[:300])
 
     def _odds(self, ctx: ContextoDecisao, lado: Lado, stop_pontos: float, alvo_pontos: float) -> Any:
         """Probabilidades do plano PROPOSTO (so sessoes anteriores ao dia de t0: sem vazamento). None se desligado."""
