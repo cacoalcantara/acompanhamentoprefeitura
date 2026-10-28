@@ -148,11 +148,12 @@ def test_politica_incoerente_nao_e_aprovada(repo):
         aprovar_politica(risco, repo / "config/aprovacoes", "Fulana", "", confirmar=lambda _r: "APROVO")
 
 
-def test_config_real_continua_pendente():
-    """Nenhum agente aprova pelo usuario: o registro do repositorio segue 'pendente' e sem v2."""
-    reg = tomllib.loads((RAIZ / "config/aprovacoes/risco-v1.toml").read_text(encoding="utf-8"))
-    assert reg["responsavel"].startswith("pendente")
-    assert sorted(p.name for p in (RAIZ / "config/aprovacoes").glob("risco-v*.toml")) == ["risco-v1.toml"]
+def test_config_real_aprovacao_do_titular_e_provisoria_e_demo():
+    """v1 segue 'pendente' (historico); a v2 foi aprovada pelo titular (pedido explicito em 28/10/2026), so DEMO."""
+    reg1 = tomllib.loads((RAIZ / "config/aprovacoes/risco-v1.toml").read_text(encoding="utf-8"))
+    assert reg1["responsavel"].startswith("pendente")
+    reg2 = tomllib.loads((RAIZ / "config/aprovacoes/risco-v2.toml").read_text(encoding="utf-8"))
+    assert "somente DEMO" in reg2["responsavel"] and "provisoria" in reg2["motivo"].lower()
 
 
 # =========================================================================================== perfil confirmar ==

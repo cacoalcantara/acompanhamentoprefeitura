@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 import pytest
 from perfis_teste import ACAO, PERFIS, WDO, WIN
@@ -141,16 +142,27 @@ def test_orquestrador_recusa_modelo_treinado_em_outro_ativo():
 
 
 def test_ativo_diferente_do_aprovado_usa_limites_minimos_e_rotula(tmp_path):
-    cfg, erro = risco_do_ativo(WDO, "config/risco.toml", "config/aprovacoes/risco-v1.toml")
+    # copia isolada com SO a aprovacao 'pendente' (v1): o repositorio real ja tem a v2 aprovada pelo titular
+    (tmp_path / "aprov").mkdir()
+    risco = tmp_path / "risco.toml"
+    risco.write_bytes(Path("config/risco.toml").read_bytes())
+    v1 = tmp_path / "aprov" / "risco-v1.toml"
+    v1.write_bytes(Path("config/aprovacoes/risco-v1.toml").read_bytes())
+    cfg, erro = risco_do_ativo(WDO, risco, v1)
     assert erro and "risco-wdo" in erro
     assert cfg.stop_max_pontos == pytest.approx(WDO.stop_max_pontos) and cfg.operacoes_dia_max <= 5
     with pytest.raises(ErroConfig):
-        risco_do_ativo(WDO, "config/risco.toml", "config/aprovacoes/risco-v1.toml", ao_vivo=True)
-    cfg_win, erro_win = risco_do_ativo(WIN, "config/risco.toml", "config/aprovacoes/risco-v1.toml")
-    # config/aprovacoes/risco-v1.toml traz responsavel 'pendente': carrega (simulacao) mas fica rotulado risco_nao_aprovado
+        risco_do_ativo(WDO, risco, v1, ao_vivo=True)
+    cfg_win, erro_win = risco_do_ativo(WIN, risco, v1)
+    # aprovacao com responsavel 'pendente': carrega (simulacao) mas fica rotulado risco_nao_aprovado
     assert erro_win and "pendente" in erro_win and cfg_win.stop_max_pontos == 300.0
     with pytest.raises(ErroConfig, match="pendente"):
-        risco_do_ativo(WIN, "config/risco.toml", "config/aprovacoes/risco-v1.toml", ao_vivo=True)
+        risco_do_ativo(WIN, risco, v1, ao_vivo=True)
+
+
+def test_repositorio_win_aprovado_pelo_titular_para_demo():
+    cfg_win, erro_win = risco_do_ativo(WIN, "config/risco.toml", "config/aprovacoes/risco-v1.toml")
+    assert erro_win is None and cfg_win.contratos_max == 1
 
 
 def test_manifesto_inclui_ativo_e_hash_do_perfil():

@@ -35,9 +35,11 @@ def test_cobre_todas_as_checagens_pedidas(completo):
         assert trecho in nomes, trecho
 
 
-def test_risco_pendente_e_nao_verificavel_com_motivo(completo):
+def test_risco_do_repositorio_aprovado_pelo_titular(completo):
+    # config/aprovacoes/risco-v2.toml: aprovacao provisoria do titular, somente DEMO (o caso 'pendente' e testado
+    # em test_ativo_configuravel e test_aprovacao_risco_perfil com copias isoladas)
     r = next(x for x in completo if x.nome.startswith("Politica de risco"))
-    assert r.estado == M.NAO_VERIFICAVEL and "risco nao aprovado para o vivo" in r.detalhe
+    assert r.estado == M.APROVADO and "responsavel" in r.detalhe
 
 
 def test_perfis_listam_bloqueados(completo):

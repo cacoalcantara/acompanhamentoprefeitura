@@ -1,0 +1,8 @@
+# Registro de aprovacao da politica de risco gerado por `robowin risco aprovar`. NAO edite: para mudar,
+# altere config/risco.toml e aprove de novo (gera a proxima versao; as anteriores ficam como historico).
+sha256 = "d8c8975e6b90189128d738492dee10b5935739556c0e9fa3dfc9832aced85f9a"
+data = "2026-10-28"
+responsavel = "Titular da conta (GitHub cacoalcantara) - aprovacao provisoria somente DEMO"
+motivo = "Aprovacao provisoria exclusivamente para testes em DEMO: perda max por operacao R$60, diaria R$200, semanal R$500, drawdown max R$1.500, 1 contrato WIN. Nao e padrao para outros usuarios; cada usuario deve aprovar os proprios limites; conta REAL exige nova autorizacao especifica."
+arquivo = "risco.toml"
+aprovado_em_utc = "2026-10-28T21:29:45+00:00"
