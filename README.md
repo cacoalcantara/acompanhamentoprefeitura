@@ -21,6 +21,11 @@ uv run pytest
 uv run robowin backtest --dados sinteticos
 uv run robowin painel --banco dados_locais/robowin.sqlite
 ```
+Autoverificação rápida (< 60 s, sem rede, sem ordens): `uv run robowin verificar` imprime uma matriz
+**APROVADO / REPROVADO / NÃO VERIFICÁVEL AQUI** (com o motivo) e sai com código != 0 se houver REPROVADO;
+`--json` para máquina. O que é verificável aqui, o que depende de você e por que lucratividade nunca é provada:
+**[docs/ENTREGA.md](docs/ENTREGA.md)** (item do pedido original → onde está → evidência → status honesto).
+
 Windows (MT5 real, conta **DEMO**): `scripts/windows/instalar.ps1`, depois `uv run robowin diagnostico` e
 `docs/07-risco-e-operacao.md`.
 
