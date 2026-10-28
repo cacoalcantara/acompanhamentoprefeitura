@@ -222,6 +222,7 @@ class ParamsSimulacao:
     sigma_brl: float = 35.0  # desvio-padrao conservador do liquido por operacao (R$) p/ dimensionar n_alvo
     mde_brl: float = 5.0  # menor efeito de interesse na expectativa por operacao (R$)
     ativo: str | None = None  # simbolo_base do perfil (config/instrumentos.toml); None => [geral].simbolo_base
+    registro_modelos: Path | None = None  # registro de modelos do ativo: carrega o artefato em vez de treinar
 
 
 @dataclass
@@ -248,6 +249,18 @@ def treinar_modelo(treino: DadosSinteticos, perfil: PerfilInstrumento, tipo: str
     m.treinar(am, origem="sintetico", criterio=CriterioOOS())
     m.ativo = perfil.simbolo_base
     return m
+
+
+def _modelo_persistido(p: ParamsSimulacao, perfil: PerfilInstrumento) -> ModeloMicroestrutura | None:
+    """Modelo do registro do ativo (campeao, ou exploratorio rotulado). Artefato invalido => ErroConfig: nada de
+    cair em silencio num modelo treinado na hora quando o usuario pediu o persistido."""
+    if p.registro_modelos is None:
+        return None
+    from robowin.modelos.persistencia import carregar_para_ativo
+    res = carregar_para_ativo(p.registro_modelos, f"microestrutura_{p.tipo_modelo}", perfil.simbolo_base)
+    if res.modelo is None:
+        raise ErroConfig(f"modelo persistido recusado: {res.motivo}")
+    return res.modelo
 
 
 def nome_referencia(perfil: PerfilInstrumento) -> str:
@@ -414,7 +427,7 @@ def montar_sessao(p: ParamsSimulacao) -> Sessao:
     ins = perfil.instrumento(cfg_s.simbolo)
     dias = gerar_dias(cfg_s, 2)
     treino, dados = dias[0], dias[1]
-    modelo = treinar_modelo(treino, perfil, p.tipo_modelo)
+    modelo = _modelo_persistido(p, perfil) or treinar_modelo(treino, perfil, p.tipo_modelo)
     statarb = treinar_statarb(treino, perfil, p.seed)
     sessao_id = f"sim-{p.seed}"
     rel = RelogioSimulado(dados.ticks[0].t_utc_ns)

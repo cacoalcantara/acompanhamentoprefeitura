@@ -87,6 +87,25 @@ class RegistroModelos:
     def eventos(self, nome: str, versao: str) -> list[str]:
         return list(self._versao(nome, versao)["eventos"])
 
+    def versoes(self, nome: str) -> list[str]:
+        return sorted(self._d["modelos"].get(nome, {}).get("versoes", {}))
+
+    def origem(self, nome: str, versao: str) -> str:
+        return str(self._versao(nome, versao)["origem"])
+
+    def artefato(self, nome: str, versao: str) -> dict[str, str] | None:
+        """Arquivo e sha256 do artefato persistido desta versao (None se nao ha)."""
+        a = self._versao(nome, versao).get("artefato")
+        return dict(a) if a else None
+
+    def registrar_artefato(self, nome: str, versao: str, arquivo: str, sha256: str) -> None:
+        v = self._versao(nome, versao)
+        if v.get("artefato"):
+            raise ErroRegistro(f"artefato ja registrado (imutavel): {nome}@{versao}")
+        v["artefato"] = {"arquivo": arquivo, "sha256": sha256}
+        v["eventos"].append("artefato persistido")
+        self._salvar()
+
     def oos(self, nome: str, versao: str) -> dict[str, dict[str, float]]:
         return dict(self._versao(nome, versao)["oos"])
 

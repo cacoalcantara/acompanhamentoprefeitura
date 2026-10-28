@@ -21,6 +21,7 @@ def _params(a: argparse.Namespace) -> Any:
         config=Path(a.config), catalogo=Path(a.catalogo), risco=Path(a.risco), aprovacao=Path(a.aprovacao),
         theta_brl=a.theta, com_condicional=not a.sem_condicional, p_timeout=a.p_timeout, p_http=a.p_http,
         passo_s=a.passo_s, checagem_s=a.checagem_s, ativo=a.ativo,
+        registro_modelos=Path(a.registro_modelos) if a.registro_modelos else None, tipo_modelo=a.tipo_modelo,
         idade_max_dado_s=a.idade_max_dado_s if a.idade_max_dado_s is not None else 60.0)
 
 
@@ -47,11 +48,26 @@ def _cmd_simular(a: argparse.Namespace) -> int:
     return 0
 
 
+def _modelo_do_ativo(ativo: str, tipo: str, registro: str | None) -> Any:
+    """Campeao do ATIVO (ou, sem campeao, a versao em_validacao mais recente: exploratoria, rotulada). Sem artefato
+    valido (ausente, adulterado, de outro ativo...) devolve modelo `nao_treinado`: o braco quant NAO opera."""
+    from robowin.modelos.microestrutura import ModeloMicroestrutura
+    from robowin.modelos.persistencia import caminho_registro_ativo, carregar_para_ativo
+    res = carregar_para_ativo(registro or caminho_registro_ativo(ativo), f"microestrutura_{tipo}", ativo)
+    if res.modelo is None:
+        print(f"AVISO: sem modelo carregavel para {ativo} ({res.motivo}); braco quant 'nao_treinado' (nao opera).")
+        m = ModeloMicroestrutura(tipo)
+        m.ativo = ativo
+        return m
+    print(f"modelo {res.modelo.nome}@{res.versao} ({res.papel}; status {res.modelo.status}; dados "
+          f"{res.modelo.origem_dados}) carregado para {ativo}.")
+    return res.modelo
+
+
 def _cmd_nucleo(a: argparse.Namespace) -> int:
     from robowin.core.config import caminho_flag_emergencia
     from robowin.core.instrumentos import perfil_da_config
     from robowin.core.relogio import RelogioReal
-    from robowin.modelos.microestrutura import ModeloMicroestrutura
 
     from .nucleo import FonteZMQ, Nucleo
     from .simulacao import ParamsSimulacao, abrir_banco, construir_orquestrador, formatar_resumo
@@ -67,10 +83,10 @@ def _cmd_nucleo(a: argparse.Namespace) -> int:
         cfg_geral = carregar_toml(a.config) if Path(a.config).is_file() else {}
         perfil = perfil_da_config(cfg_geral, a.ativo)  # ao vivo: perfil a_confirmar BLOQUEIA (PerfilNaoConfirmado)
         banco, registro, caminho, dir_aud = abrir_banco(p.saida, rel, sessao_id)
-        # sem artefato de modelo persistido: o quant fica 'nao_treinado' (honesto) ate haver modelo validado
+        modelo = _modelo_do_ativo(perfil.simbolo_base, a.tipo_modelo, a.registro_modelos)
         m = construir_orquestrador(
             p, rel=rel, registro=registro, ins=perfil.instrumento(a.simbolo or perfil.simbolo_base),
-            modelo=ModeloMicroestrutura("logistica"), statarb=None, precos_aux=None, sintetico=False,
+            modelo=modelo, statarb=None, precos_aux=None, sintetico=False,
             modo_tempo="real", sessao_id=sessao_id, t_ref_ns=rel.agora_ns())
     except ErroConfig as e:
         print(f"ERRO: {e}")
@@ -134,6 +150,9 @@ def registrar(sub: Any) -> None:
     s.add_argument("--n-ticks", type=int, default=12_000, help="ticks por pregao sintetico (treino + sessao)")
     s.add_argument("--sinal-forca", type=float, default=0.05)
     s.add_argument("--saida", default=f"dados_locais/simulacao/sessao-{int(time.time())}")
+    s.add_argument("--registro-modelos", default=None,
+                   help="registro de modelos do ativo: usa o artefato persistido em vez de treinar na hora")
+    s.add_argument("--tipo-modelo", choices=["lightgbm", "logistica"], default="logistica")
     s.add_argument("--theta", type=float, default=0.0, help="theta (R$) do braco quant")
     s.add_argument("--p-timeout", type=float, default=0.03, help="fracao de timeouts injetados no provedor falso")
     s.add_argument("--p-http", type=float, default=0.02, help="fracao de erros 429 injetados no provedor falso")
@@ -141,6 +160,9 @@ def registrar(sub: Any) -> None:
 
     n = sub.add_parser("nucleo", help="nucleo ao vivo: consome o gateway via ZeroMQ (simulacao, sem ordens reais)")
     _comuns(n)
+    n.add_argument("--registro-modelos", default=None,
+                   help="padrao: dados_locais/modelos/<ATIVO>/registro.json (sem artefato valido: quant nao_treinado)")
+    n.add_argument("--tipo-modelo", choices=["lightgbm", "logistica"], default="lightgbm")
     n.add_argument("--pub", default="tcp://127.0.0.1:5555")
     n.add_argument("--cmd", default="tcp://127.0.0.1:5556", help="ROUTER do gateway (heartbeat); '' desliga")
     n.add_argument("--sem-heartbeat", action="store_true")

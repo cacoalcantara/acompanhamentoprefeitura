@@ -239,6 +239,10 @@ class ModeloMicroestrutura:
         self.origem_dados = ""
         self.ativo = ""  # simbolo_base do perfil em que foi treinado (preenchido por quem treina)
         self.hash_dados = ""
+        self.versao = ""  # preenchido ao carregar um artefato persistido
+        self.janela_treino_ns: tuple[int, int] = (0, 0)  # (primeiro instante de decisao, treinado_ate)
+        self.config_barreiras: dict = {}  # barreiras/custos do rotulo (informativo; gravados no artefato)
+        self.custos: dict = {}
         self.hash_criterio_pre_registrado = ""
         self.metricas_oos: dict[str, float] = {}
         self._clf: dict[str, object] = {}
@@ -278,6 +282,7 @@ class ModeloMicroestrutura:
                 [pnl[ajuste][y[ajuste] == c].mean() if (y[ajuste] == c).any() else 0.0 for c in range(3)])
             self.prior[lado] = np.bincount(y[ajuste], minlength=3) / len(ajuste)
         self.treinado_ate_ns = int(am.t_fim_ns.max())
+        self.janela_treino_ns = (int(am.t_ns.min()), self.treinado_ate_ns)
         self.origem_dados = origem
         self.hash_dados = am.hash_dados()
         self.hash_criterio_pre_registrado = criterio.hash() if criterio else ""
