@@ -1,0 +1,31 @@
+# Le as fichas oficiais da B3 (o sandbox de desenvolvimento nao alcanca b3.com.br) e imprime o texto no log,
+# para conferir os perfis de ativo (config/instrumentos.toml). Nao altera nada no repositorio.
+name: fontes-b3
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/fontes-b3.yml"]
+jobs:
+  ler:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sudo apt-get install -y -q poppler-utils html2text > /dev/null
+      - name: Baixar e extrair
+        shell: bash
+        run: |
+          set +e
+          UA="Mozilla/5.0 (X11; Linux x86_64) robowin-ci"
+          baixar() {  # $1 = nome, $2 = url
+            echo "=================== $1"
+            echo "URL: $2"
+            curl -sSL -A "$UA" --max-time 60 -o "/tmp/$1" "$2"; echo "curl=$? bytes=$(wc -c < /tmp/$1)"
+            if file "/tmp/$1" | grep -qi pdf; then pdftotext -layout "/tmp/$1" - | sed 's/[[:space:]]\+/ /g' | grep -v '^ *$' | head -400
+            else html2text -utf8 "/tmp/$1" | grep -v '^ *$' | head -400; fi
+          }
+          baixar oc015_2025.pdf "https://www.b3.com.br/data/files/10/B1/42/9E/677379106B8BCB69AC094EA8/OC%20015-2025-VPC_ALTERACAO%20CONTRATOS%20FUTUROS%20MOEDAS%20ESTRANGEIRAS%20%C3%9ALTIMO%20DIA%20NEG%20DATA%20FIXING%20%20DATA%20DE%20VENC_PORT.pdf"
+          baixar oc022_2025.pdf "https://www.b3.com.br/data/files/AB/B6/22/F5/67F77910AE23A679AC094EA8/OC%20022-2025-VPC%20ALTERACAO%20NOS%20CONTRATOS%20FUTUROS%20DE%20MOEDAS%20ESTRANGEIRAS%20PARES%20EM%20BRL_PORT.pdf"
+          baixar futuro_ibovespa.html "https://www.b3.com.br/pt_br/produtos-e-servicos/negociacao/renda-variavel/futuro-de-ibovespa.htm"
+          baixar mini_ibovespa.html "https://www.b3.com.br/pt_br/produtos-e-servicos/negociacao/renda-variavel/futuro-mini-de-ibovespa.htm"
+          baixar futuro_dolar.html "https://www.b3.com.br/pt_br/produtos-e-servicos/negociacao/moedas/futuro-de-taxa-de-cambio-de-reais-por-dolar-comercial.htm"
+          baixar mini_dolar.html "https://www.b3.com.br/pt_br/produtos-e-servicos/negociacao/moedas/futuro-mini-de-taxa-de-cambio-de-reais-por-dolar-comercial.htm"
+          exit 0
