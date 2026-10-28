@@ -28,6 +28,14 @@
 .PARAMETER Log
   Arquivo de log do MetaEditor (padrao: %TEMP%\robowin-compilar-ea.log).
 
+.PARAMETER TempoLimite
+  Segundos de espera pelo MetaEditor (padrao 600). Se estourar, o processo e encerrado e o script falha (codigo 1).
+
+.NOTES
+  Com -PastaMql4 o MetaEditor recebe tambem /inc:<PastaMql4> (pasta onde ficam Include\Zmq e Include\Mql).
+  O metaeditor64.exe do MT5 PODE NAO compilar .mq4 (o compilador MQL4 e o do MT4); a CI (job mql) tenta mesmo assim
+  quando so o MT5 esta disponivel e registra o resultado como ele vier, sem tratar isso como prova de nada.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\windows\compilar_ea.ps1
 .EXAMPLE
@@ -37,7 +45,8 @@ param(
     [string]$MetaEditor = "",
     [string]$PastaMql4 = "",
     [string]$Fonte = "",
-    [string]$Log = ""
+    [string]$Log = "",
+    [int]$TempoLimite = 600
 )
 
 $ErrorActionPreference = "Stop"
@@ -89,7 +98,7 @@ if (-not $MetaEditor) {
 }
 if (-not (Test-Path -LiteralPath $MetaEditor)) { Falhar "MetaEditor nao existe: $MetaEditor" 2 }
 if ((Split-Path -Leaf $MetaEditor) -ieq "metaeditor64.exe") {
-    Write-Host "AVISO: metaeditor64.exe e do MT5 e nao compila .mq4; use o metaeditor.exe do MT4." -ForegroundColor Yellow
+    Write-Host "AVISO: metaeditor64.exe e do MT5 e pode nao compilar .mq4; o resultado valido e o do metaeditor.exe do MT4." -ForegroundColor Yellow
 }
 Write-Host "MetaEditor: $MetaEditor"
 
@@ -135,14 +144,20 @@ if (Test-Path -LiteralPath $ex4) { Remove-Item -LiteralPath $ex4 -Force }   # so
 $inicio = Get-Date
 
 $argumentos = @("/compile:`"$alvo`"", "/log:`"$Log`"")
+if ($PastaMql4) { $argumentos += "/inc:`"$PastaMql4`"" }
 Write-Host "Executando: `"$MetaEditor`" $($argumentos -join ' ')"
-$proc = Start-Process -FilePath $MetaEditor -ArgumentList $argumentos -Wait -PassThru
+$proc = Start-Process -FilePath $MetaEditor -ArgumentList $argumentos -PassThru
+$null = $proc.Handle   # guarda o handle para o ExitCode ficar disponivel depois do WaitForExit
+if (-not $proc.WaitForExit($TempoLimite * 1000)) {
+    try { $proc.Kill() } catch { Write-Host "AVISO: nao consegui encerrar o MetaEditor: $($_.Exception.Message)" -ForegroundColor Yellow }
+    Falhar "o MetaEditor nao terminou em $TempoLimite s (travou ou abriu janela esperando resposta)" 1
+}
 Write-Host "MetaEditor terminou (codigo $($proc.ExitCode); o codigo do MetaEditor nao e confiavel, vale o log)."
 
 # --- le o log (o MetaEditor grava em UTF-16; tenta UTF-16 e, se nao houver resultado, o padrao) -----------------
 if (-not (Test-Path -LiteralPath $Log)) { Falhar "o MetaEditor nao gerou o log: $Log (caminho do MetaEditor ou do .mq4 incorreto?)" 1 }
 $texto = Get-Content -LiteralPath $Log -Encoding Unicode -Raw
-if (-not $texto -or $texto -notmatch "(?i)\d+\s+error") { $texto = Get-Content -LiteralPath $Log -Raw }
+if (-not $texto -or $texto -notmatch "(?i)\d+\s+errors?\b") { $texto = Get-Content -LiteralPath $Log -Raw }
 if (-not $texto) { Falhar "log vazio: $Log" 1 }
 
 Write-Host ""
@@ -150,7 +165,8 @@ Write-Host "---- log do MetaEditor ----"
 Write-Host $texto
 Write-Host "---------------------------"
 
-$m = [regex]::Match($texto, "(?i)(\d+)\s+error\w*,\s*(\d+)\s+warning")
+# MT5: "Result: 0 errors, 1 warnings, 120 msec elapsed"; MT4 antigo: "0 error(s), 0 warning(s)"
+$m = [regex]::Match($texto, "(?i)(\d+)\s+errors?(?:\(s\))?\s*,\s*(\d+)\s+warnings?")
 if (-not $m.Success) { Falhar "nao achei a linha de resultado ('N errors, M warnings') no log: $Log" 1 }
 $erros = [int]$m.Groups[1].Value
 $avisos = [int]$m.Groups[2].Value

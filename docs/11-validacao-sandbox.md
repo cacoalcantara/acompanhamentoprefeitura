@@ -102,3 +102,26 @@ O job `windows` da CI roda a suite completa e a conferencia de constantes em Win
      `core.config.sha256_arquivo` normaliza quebras de linha e `.gitattributes` fixa LF.
   3. A checagem do gateway em `robowin verificar` não fechava o log antes de apagar o diretório temporário.
 - Execução 27: **os 3 jobs verdes** (linux 3.12, linux 3.13, windows com o wheel oficial `MetaTrader5`).
+
+## CI: o que passa a ser validado no Windows sem terminal (jobs `windows-scripts` e `mql`)
+
+O ambiente de desenvolvimento não tem PowerShell nem MetaEditor, e os hosts da MetaQuotes são bloqueados. A CI do
+GitHub (runner `windows-latest`, com `pwsh`, Windows PowerShell 5.1 e internet) passa a executar o que aqui só podia
+ser lido:
+
+| Job | O que faz | Falha a CI quando |
+|---|---|---|
+| `windows-scripts` | `scripts/windows/analisar_scripts.ps1` em PowerShell 7 **e** em Windows PowerShell 5.1: `Parser::ParseFile` em todo `scripts/windows/*.ps1`, bytes não ASCII e PSScriptAnalyzer (instalado se faltar) | erro de sintaxe, byte não ASCII ou achado de severidade `Error`/`ParseError` (avisos só são listados no log) |
+| `windows-scripts` | `instalar.ps1 -SemTerminal` (execução seca: `uv sync`, `robowin --help`, `import MetaTrader5`) | qualquer passo com código ≠ 0 |
+| `windows-scripts` | `validar_tudo.ps1 -SemTerminal` (passos 1–5, pendências e o zip; pula compilação e aceitação) e confere o zip: `MANIFESTO.txt` presente, só `.json/.md/.txt/.log`, nenhum nome com cara de segredo; publica `relatorios/` e o zip como artefato `validar-tudo-sem-terminal` | passo com código ≠ 0, zip ausente/irregular, ou `-SemTerminal -ConfirmoContaDemo` não recusado com código 2 |
+| `mql` (**experimental**, `continue-on-error: true`) | `ci_preparar_metaeditor.ps1`: instala o MetaTrader oficial com `/auto` (MT4 se o instalador ainda existir, depois MT5), localiza `metaeditor.exe`/`metaeditor64.exe`, baixa os headers de `dingmaotu/mql-zmq` e `dingmaotu/mql4-lib` (Apache-2.0, commits fixos, **só na CI**, nada entra no repositório) para `MQL4/Include`; depois `compilar_ea.ps1 -MetaEditor ... -PastaMql4 ...` roda `/compile: /log: /inc:` e publica o log no artefato `mql-compilacao` e no resumo do job | o log do MetaEditor tem erros, não tem a linha de resultado, ou o `.ex4` não é gerado (o job aparece vermelho, mas não derruba o workflow enquanto for experimental) |
+
+Limites honestos do job `mql`:
+
+- A MetaQuotes não distribui mais o MT4. Se só o MT5 instalar, a compilação usa o `metaeditor64.exe`, que **pode não
+  compilar `.mq4`**; o resumo do job diz qual MetaEditor foi usado e o resultado é registrado como vier. Só um 0 erros
+  do MetaEditor **do MT4** vale como "o EA compila"; do MT5 é indício, não prova.
+- Sem MT4 instalado não há o `stdlib.mqh` original; a CI grava um **stub** que só declara `ErrorDescription` (importado
+  de `stdlib.ex4`, como no original) e o resumo do job avisa isso.
+- Compilar não testa o EA: comportamento no terminal, DLLs (`libzmq.dll`) e a conta demo continuam dependendo do
+  usuário (docs/12).

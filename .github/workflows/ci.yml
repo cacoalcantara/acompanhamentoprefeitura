@@ -22,3 +22,113 @@ jobs:
       - run: uv run pytest -rfE
       - run: uv run python scripts/conferir_constantes_mt5.py
       - run: uv run python -c "import MetaTrader5 as m; print(m.__version__); assert hasattr(m,'ACCOUNT_TRADE_MODE_DEMO') and hasattr(m,'TICK_FLAG_BUY')"
+  windows-scripts:
+    # Valida TODOS os scripts\windows\*.ps1 num Windows de verdade (o ambiente de desenvolvimento nao tem PowerShell).
+    # Os scripts rodam no Windows PowerShell 5.1 (powershell.exe), que e o que o usuario usa; a analise roda nos dois.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      UV_PYTHON: "3.13"   # os scripts chamam `uv sync` sem --python; fixa o mesmo Python do job windows
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: sintaxe + ASCII + PSScriptAnalyzer (PowerShell 7)
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/windows/analisar_scripts.ps1 -InstalarAnalisador
+      - name: sintaxe + ASCII + PSScriptAnalyzer se houver (Windows PowerShell 5.1)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\analisar_scripts.ps1
+          exit $LASTEXITCODE
+      - name: instalar.ps1 -SemTerminal (execucao seca)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\instalar.ps1 -SemTerminal
+          exit $LASTEXITCODE
+      - name: validar_tudo.ps1 recusa -SemTerminal junto com -ConfirmoContaDemo (codigo 2)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\validar_tudo.ps1 -SemTerminal -ConfirmoContaDemo
+          if ($LASTEXITCODE -ne 2) { Write-Host "esperava codigo 2, veio $LASTEXITCODE"; exit 1 }
+          exit 0
+      - name: validar_tudo.ps1 -SemTerminal (execucao seca)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\validar_tudo.ps1 -SemTerminal
+          exit $LASTEXITCODE
+      - name: conferir o zip gerado (MANIFESTO, so extensoes permitidas, nada com cara de segredo)
+        shell: pwsh
+        run: |
+          $zips = @(Get-ChildItem -File -Filter "robowin-aceitacao-*.zip")
+          if ($zips.Count -ne 1) { throw "esperava 1 zip, achei $($zips.Count)" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [System.IO.Compression.ZipFile]::OpenRead($zips[0].FullName)
+          try {
+            $nomes = @($z.Entries | ForEach-Object { $_.FullName })
+            $nomes | ForEach-Object { Write-Host "  $_" }
+            if (-not ($nomes -contains "MANIFESTO.txt")) { throw "zip sem MANIFESTO.txt" }
+            $arquivos = @($nomes | Where-Object { $_ -notmatch '[\\/]$' })
+            $ruins = @($arquivos | Where-Object { $_ -notmatch '\.(json|md|txt|log)$' -or $_ -match '(?i)(\.env$|\.key$|\.pem$|senha|secret|token)' })
+            if ($ruins.Count -gt 0) { throw "zip com arquivo proibido: $($ruins -join ', ')" }
+          } finally { $z.Dispose() }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: validar-tudo-sem-terminal
+          path: |
+            relatorios/
+            robowin-aceitacao-*.zip
+          if-no-files-found: warn
+  mql:
+    # EXPERIMENTAL (continue-on-error): tenta COMPILAR mql4/RobowinBridge.mq4 com o MetaEditor oficial instalado no
+    # runner (MT4 se o instalador ainda existir; senao MT5). O MetaEditor do MT5 pode nao compilar .mq4: o resultado e
+    # registrado como vier no resumo do job e no artefato mql-compilacao. Headers mql-zmq/mql4-lib so na CI.
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: instalar MetaTrader, localizar o MetaEditor e montar MQL4 (mql-zmq + mql4-lib)
+        id: prep
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/windows/ci_preparar_metaeditor.ps1
+      - name: compilar o EA (scripts/windows/compilar_ea.ps1)
+        id: compilar
+        shell: pwsh
+        env:
+          ME: ${{ steps.prep.outputs.metaeditor }}
+          MQL4: ${{ steps.prep.outputs.pasta_mql4 }}
+          LOGS: ${{ steps.prep.outputs.logs }}
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\compilar_ea.ps1 -MetaEditor $env:ME -PastaMql4 $env:MQL4 -Log (Join-Path $env:LOGS "metaeditor.log") -TempoLimite 300 *>&1 | Tee-Object -FilePath (Join-Path $env:LOGS "compilar_ea.txt")
+          $cod = $LASTEXITCODE
+          $ex4 = Join-Path $env:MQL4 "Experts\RobowinBridge.ex4"
+          if (Test-Path -LiteralPath $ex4) { Copy-Item -LiteralPath $ex4 -Destination $env:LOGS }
+          exit $cod
+      - name: resumo
+        if: always()
+        shell: pwsh
+        env:
+          PLATAFORMA: ${{ steps.prep.outputs.plataforma }}
+          STDLIB: ${{ steps.prep.outputs.stdlib }}
+          ME: ${{ steps.prep.outputs.metaeditor }}
+          LOGS: ${{ steps.prep.outputs.logs }}
+          PREP: ${{ steps.prep.outcome }}
+          COMP: ${{ steps.compilar.outcome }}
+        run: |
+          $l = @("## Compilacao do EA (job mql, experimental)", "",
+                 "- preparacao: $env:PREP; MetaEditor: ``$env:ME`` (plataforma: $env:PLATAFORMA); stdlib.mqh: $env:STDLIB",
+                 "- compilacao (compilar_ea.ps1): **$env:COMP**")
+          if ($env:PLATAFORMA -eq "mt5") { $l += "- ATENCAO: compilado com o MetaEditor do MT5, que pode nao compilar .mq4; so o do MT4 vale como prova." }
+          if ($env:STDLIB -eq "stub") { $l += "- ATENCAO: stdlib.mqh foi um STUB da CI (so ErrorDescription), nao o arquivo do MT4." }
+          $txt = if ($env:LOGS) { Join-Path $env:LOGS "compilar_ea.txt" } else { "" }
+          if ($txt -and (Test-Path -LiteralPath $txt)) {
+            $l += @("", '```') + @(Get-Content -LiteralPath $txt -Tail 60) + @('```')
+          }
+          $l | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mql-compilacao
+          path: ${{ runner.temp }}/mql/logs/
+          if-no-files-found: warn

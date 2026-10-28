@@ -282,6 +282,23 @@ def test_scripts_windows_existem_sao_ascii_e_avisam_que_nao_foram_executados():
     assert "compilar_ea.ps1" in t
 
 
+def test_todos_os_ps1_sao_ascii_e_os_da_ci_tem_modo_seco():
+    pasta = RAIZ / "scripts" / "windows"
+    todos = sorted(pasta.glob("*.ps1"))
+    assert len(todos) >= 7
+    for p in todos:
+        p.read_bytes().decode("ascii")  # ASCII puro (PowerShell 5.1 le arquivo sem BOM como ANSI)
+    for nome in ("analisar_scripts.ps1", "ci_preparar_metaeditor.ps1", "instalar.ps1"):
+        assert "SEM PODER SER EXECUTADO" in (pasta / nome).read_text(encoding="ascii").upper(), nome
+    assert "ParseFile" in (pasta / "analisar_scripts.ps1").read_text(encoding="ascii")
+    for nome in ("validar_tudo.ps1", "instalar.ps1"):
+        assert "[switch]$SemTerminal" in (pasta / nome).read_text(encoding="ascii"), nome
+    ci = (RAIZ / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    for trecho in ("analisar_scripts.ps1", "validar_tudo.ps1 -SemTerminal", "instalar.ps1 -SemTerminal",
+                   "ci_preparar_metaeditor.ps1", "compilar_ea.ps1", "continue-on-error: true"):
+        assert trecho in ci, trecho
+
+
 def test_docs_definem_o_cem_por_cento_como_aceitacao_no_windows():
     doc = (RAIZ / "docs" / "12-aceitacao-no-windows.md").read_text(encoding="utf-8")
     assert "sem nenhuma etapa REPROVADA" in doc and "NUNCA" in doc and "--confirmo-conta-demo" in doc
