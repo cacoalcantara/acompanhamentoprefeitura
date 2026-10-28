@@ -295,7 +295,7 @@ def test_todos_os_ps1_sao_ascii_e_os_da_ci_tem_modo_seco():
         assert "[switch]$SemTerminal" in (pasta / nome).read_text(encoding="ascii"), nome
     ci = (RAIZ / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     for trecho in ("analisar_scripts.ps1", "validar_tudo.ps1 -SemTerminal", "instalar.ps1 -SemTerminal",
-                   "ci_preparar_metaeditor.ps1", "compilar_ea.ps1", "continue-on-error: true"):
+                   "ci_preparar_metaeditor.ps1", "compilar_ea.ps1"):
         assert trecho in ci, trecho
 
 

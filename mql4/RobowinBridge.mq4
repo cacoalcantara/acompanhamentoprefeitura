@@ -48,7 +48,7 @@
 //  GetTickCount() do EA (ms, local, volta a zero a cada ~49 dias).
 //+------------------------------------------------------------------+
 #property copyright "robowin"
-#property version   "0.10"
+#property version   "1.00"
 #property strict
 
 #include <stdlib.mqh>
@@ -67,7 +67,7 @@ input string Token          = "";    // se preenchido, todo pedido precisa traze
 
 //--- constantes do protocolo
 #define VERSAO_PROTOCOLO   1
-#define EA_VERSAO          "0.10-nao-compilado"
+#define EA_VERSAO          "1.00"
 #define MAX_SIMB           4
 #define CAP                20000     // ticks por simbolo no buffer circular
 #define MAX_HIST           500       // itens de historico por resposta

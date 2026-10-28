@@ -145,7 +145,7 @@ def executar_diagnostico(
     return rel
 
 
-AVISO_EA_MT4 = "AVISO: EA mql4/RobowinBridge.mq4 NAO compilado/verificado em MT4 real"
+AVISO_EA_MT4 = "AVISO: EA mql4/RobowinBridge.mq4 compilado na CI (MetaEditor MT4), mas NAO verificado em terminal MT4 real"
 
 
 def _origem(terminal: Any, rotulo: str) -> str:

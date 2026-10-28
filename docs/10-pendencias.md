@@ -12,3 +12,6 @@ desenvolvimento impediram a verificação direta de B3, OpenAI, CVM, Receita e c
 conferir a API da biblioteca `mql-zmq` (recv/send/setLinger) e as constantes `SYMBOL_*`; confirmar com a corretora
 se o ativo existe no MT4, o tamanho do lote (`MODE_MINLOT`), `MODE_TICKVALUE`, nível de stop, se SL/TP na abertura
 é aceito (senão `SltpEmSeguida`), execução (instant/market) e o histórico da conta ("Todo o histórico").
+
+> **Atualização 28/10/2026:** o EA `mql4/RobowinBridge.mq4` compila sem erros no MetaEditor oficial do MT4 (CI, job
+> `mql`). Continua pendente executá-lo num terminal MT4 com conta DEMO (aceitação A11).

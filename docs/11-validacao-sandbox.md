@@ -125,3 +125,12 @@ Limites honestos do job `mql`:
   de `stdlib.ex4`, como no original) e o resumo do job avisa isso.
 - Compilar não testa o EA: comportamento no terminal, DLLs (`libzmq.dll`) e a conta demo continuam dependendo do
   usuário (docs/12).
+
+## Compilação real do EA (CI, job `mql`) — 28/10/2026
+
+O job `mql` instalou o MetaTrader 4 oficial no runner Windows e compilou `mql4/RobowinBridge.mq4` com o
+`metaeditor.exe` do MT4 (headers mql-zmq e mql4-lib baixados só na CI): **0 erros, 1 aviso** (formato de
+`#property version`, já corrigido para "1.00"); `.ex4` gerado (92.648 bytes) e publicado no artefato
+`mql-compilacao`. Ressalva: o `stdlib.mqh` usado foi um stub da CI (só `ErrorDescription`). O EA ainda **não foi
+executado num terminal MT4 com conta**: handshake, hedging e ordens só se provam na aceitação (`robowin aceitacao
+--plataforma mt4`). O job passou a ser bloqueante.

@@ -80,11 +80,10 @@ jobs:
             robowin-aceitacao-*.zip
           if-no-files-found: warn
   mql:
-    # EXPERIMENTAL (continue-on-error): tenta COMPILAR mql4/RobowinBridge.mq4 com o MetaEditor oficial instalado no
-    # runner (MT4 se o instalador ainda existir; senao MT5). O MetaEditor do MT5 pode nao compilar .mq4: o resultado e
-    # registrado como vier no resumo do job e no artefato mql-compilacao. Headers mql-zmq/mql4-lib so na CI.
+    # COMPILA mql4/RobowinBridge.mq4 com o MetaEditor oficial do MT4 instalado no runner (bloqueante desde a primeira
+    # compilacao limpa em 28/10/2026). Resultado no resumo do job e no artefato mql-compilacao (inclui o .ex4).
+    # Headers mql-zmq/mql4-lib so na CI.
     runs-on: windows-latest
-    continue-on-error: true
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5

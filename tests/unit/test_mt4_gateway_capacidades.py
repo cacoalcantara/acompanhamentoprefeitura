@@ -191,7 +191,7 @@ def test_diagnostico_mt4_reporta_capacidades_sem_livro(tmp_path):
     d, con, rel = montar_mt4(ticks_planos(3000))
     rel_ = executar_diagnostico(con, WIN, login_esperado=LOGIN, servidor_esperado=SERVIDOR4, hoje=dt.date(2026, 10, 27),
                                 relogio=rel, plataforma="mt4")
-    assert "NAO compilado/verificado em MT4 real" in rel_["origem"] and "NAO compilado/verificado" in texto_relatorio(rel_)
+    assert "NAO verificado em terminal MT4 real" in rel_["origem"] and "NAO verificado em terminal MT4 real" in texto_relatorio(rel_)
     assert rel_["plataforma"] == "mt4" and "DUBLE MT4" in rel_["origem"] and rel_["conta"]["margin_mode"] == "RETAIL_HEDGING"
     assert rel_["livro"]["assinado"] is False
     assert any("capacidade ausente" in a and "market making" in a for a in rel_["avisos"])
