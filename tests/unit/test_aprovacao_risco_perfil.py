@@ -29,7 +29,7 @@ from robowin.verificacao.checagens import Contexto, politica_risco
 RAIZ = Path(__file__).resolve().parents[2]
 HOJE = dt.date(2026, 10, 28)
 # ativo de teste: o primeiro perfil a_confirmar do config real (o duble simula a corretora de todos os perfis)
-ATIVO_A_CONFIRMAR = "IND"
+ATIVO_A_CONFIRMAR = "BOVA11"  # perfil ainda sem fonte registrada
 
 
 def _aud(d: Path) -> list[dict]:

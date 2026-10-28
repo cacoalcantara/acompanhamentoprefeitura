@@ -8,7 +8,7 @@ você com `robowin perfil confirmar <ATIVO>` depois de conferir a ficha técnica
 | Ativo | Campo | Valor no perfil | O que as fontes dizem | Situação |
 |---|---|---|---|---|
 | IND | valor do ponto | R$ 1,00 | Página da B3 "Futuro de Ibovespa": cada ponto = R$ 1,00 | **Confere** (fonte oficial) |
-| IND | lote | 1 | Suno e Rico: lote padrão mínimo de **5 contratos** | **DIVERGE** — conferir; se for 5, o perfil precisa mudar |
+| IND | lote | 5 (corrigido) | **B3 oficial: lote padrão 5 contratos** | Corrigido (ponto por lote = R$ 5) |
 | IND | vencimento | quarta mais próxima do dia 15, meses pares | Meses pares confirmados (InvestNews); dia não confirmado | Parcial |
 | WDO | valor do ponto | R$ 10,00 | Toro/Eu Quero Investir: ponto = R$ 10; contrato US$ 10.000 | Confere (fontes secundárias) |
 | WDO | tick | 0,5 ponto (R$ 5) | Variação mínima BRL 0,50 por USD 1.000 = R$ 5 por contrato | Confere (fontes secundárias) |
@@ -31,3 +31,17 @@ do contrato na B3 (a regra de vencimento no código pode estar desatualizada). I
 - C6 Bank — Contratos futuros: https://www.c6bank.com.br/blog/contratos-futuros
 - InvestNews — Ibovespa futuro: https://investnews.com.br/investimentos/ibovespa-futuro-o-que-e/
 - Suno — Índice futuro: https://www.suno.com.br/artigos/indice-futuro
+
+## Atualização — fichas oficiais da B3 lidas pela CI (job `fontes-b3`, 28/10/2026)
+
+| Ativo | Ficha oficial B3 | Perfil |
+|---|---|---|
+| WIN | R$ 0,20/ponto; tick 5 pontos; lote 1; vence na quarta mais próxima do dia 15, meses pares | Confere (já confirmado) |
+| IND | R$ 1,00/ponto; tick 5 pontos; **lote padrão 5**; mesma regra de vencimento | Lote corrigido para 5 (R$ 5/ponto por lote) |
+| WDO | USD 10.000; tick BRL 0,50 por USD 1.000 (R$ 5); lote 1; **vence no 1º dia útil do mês**, todos os meses | Confere |
+| DOL | USD 50.000; tick BRL 0,5 por USD 1.000; **lote padrão 5**; vence no 1º dia útil | Lote corrigido para 5 (R$ 250/ponto por lote) |
+
+O OC 015/2025 e o OC 022/2025 alteraram datas dos futuros de **outras moedas** (pares em USD e em BRL); o próprio
+OC 022/2025 diz: "Os contratos Futuros de Taxa de Câmbio de Reais por Dólar Comercial (BRL/USD) permanecem
+inalterados". A regra do WDO/DOL no perfil está correta. Continuam a confirmar: tarifas, margem (corretora), limites
+em ticks e sessão.

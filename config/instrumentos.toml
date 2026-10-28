@@ -67,10 +67,12 @@ fonte = "premissa do plano v1 (nova grade); confirmar com o oficio da B3"
 [IND]
 classe = "futuro_indice"
 descricao = "Indice Bovespa cheio"
-vencimento = "quarta_dia15_meses_pares"
-ponto_valor_brl = 1.0
-tick_pontos = 5.0
-lote = 1
+vencimento = "quarta_dia15_meses_pares"   # B3: quarta-feira mais proxima do dia 15, meses pares (confirmado)
+ponto_valor_brl = 5.0   # B3: R$1,00 por ponto POR CONTRATO; lote padrao = 5 contratos => R$5 por ponto por lote
+tick_pontos = 5.0       # B3: variacao minima 5 pontos (confirmado)
+lote = 5                # B3: lote padrao 5 contratos (corrigido de 1)
+fonte = "B3, pagina oficial do produto (Caracteristicas tecnicas), lida via CI fontes-b3 em 28/10/2026"
+fonte_data = "2026-10-28"
 stop_max_ticks = 10
 slippage_folga_ticks = 2
 stop_padrao_ticks = 2
@@ -80,7 +82,8 @@ rlp = false
 risco_aprovado_padrao = false
 preco_sintetico_ref = 130000.0
 a_confirmar = true
-a_confirmar_itens = ["tarifas (placeholder copiado do WIN)", "margem de day trade", "limites em ticks", "sessao"]
+a_confirmar_itens = ["tarifas (placeholder copiado do WIN)", "margem de day trade", "limites em ticks", "sessao",
+                     "1 lote = 5 contratos: confere com o limite de 1 contrato do risco?"]
 [[IND.tarifas]]
 vigente_desde = "2025-01-01"
 tarifa_lado_brl = 0.25
@@ -90,10 +93,12 @@ fonte = "PLACEHOLDER copiado do WIN - a confirmar"
 [WDO]
 classe = "futuro_cambio"
 descricao = "Mini dolar comercial"
-vencimento = "primeiro_dia_util_mes"
-ponto_valor_brl = 10.0
-tick_pontos = 0.5
-lote = 1
+vencimento = "primeiro_dia_util_mes"   # B3: 1o dia util do mes de vencimento, todos os meses (confirmado)
+ponto_valor_brl = 10.0   # B3: USD10.000; cotacao em BRL por USD1.000 => R$10 por ponto (confirmado)
+tick_pontos = 0.5        # B3: BRL0,50 por USD1.000 (confirmado)
+lote = 1                 # B3: lote padrao 1 contrato (confirmado)
+fonte = "B3, pagina oficial do produto (Caracteristicas tecnicas), lida via CI fontes-b3 em 28/10/2026"
+fonte_data = "2026-10-28"
 stop_max_ticks = 10
 slippage_folga_ticks = 2
 stop_padrao_ticks = 2
@@ -103,9 +108,7 @@ rlp = false
 risco_aprovado_padrao = false
 preco_sintetico_ref = 5400.0
 a_confirmar = true
-a_confirmar_itens = ["ponto_valor_brl (R$10 por ponto de cotacao: SUPOSICAO)", "tick_pontos (0,5: SUPOSICAO)",
-                     "regra de vencimento (1o dia util do mes)", "tarifas (placeholder copiado do WIN)",
-                     "margem de day trade", "limites em ticks", "sessao"]
+a_confirmar_itens = ["tarifas (placeholder copiado do WIN)", "margem de day trade", "limites em ticks", "sessao"]
 [[WDO.tarifas]]
 vigente_desde = "2025-01-01"
 tarifa_lado_brl = 0.25
@@ -115,10 +118,12 @@ fonte = "PLACEHOLDER copiado do WIN - a confirmar"
 [DOL]
 classe = "futuro_cambio"
 descricao = "Dolar comercial cheio"
-vencimento = "primeiro_dia_util_mes"
-ponto_valor_brl = 50.0
-tick_pontos = 0.5
-lote = 1
+vencimento = "primeiro_dia_util_mes"   # B3: 1o dia util do mes de vencimento (BRL/USD inalterado pelo OC 022/2025)
+ponto_valor_brl = 250.0  # B3: USD50.000 => R$50 por ponto POR CONTRATO; lote padrao 5 => R$250 por ponto por lote
+tick_pontos = 0.5        # B3: BRL0,5 por USD1.000 (confirmado)
+lote = 5                 # B3: lote padrao 5 contratos (corrigido de 1)
+fonte = "B3, pagina oficial do produto (Caracteristicas tecnicas), lida via CI fontes-b3 em 28/10/2026"
+fonte_data = "2026-10-28"
 stop_max_ticks = 1
 slippage_folga_ticks = 1
 stop_padrao_ticks = 1
@@ -128,9 +133,8 @@ rlp = false
 risco_aprovado_padrao = false
 preco_sintetico_ref = 5400.0
 a_confirmar = true
-a_confirmar_itens = ["ponto_valor_brl (R$50 por ponto de cotacao: SUPOSICAO)", "tick_pontos (0,5: SUPOSICAO)",
-                     "regra de vencimento (1o dia util do mes)", "tarifas (placeholder copiado do WIN)",
-                     "margem de day trade", "limites em ticks", "sessao"]
+a_confirmar_itens = ["tarifas (placeholder copiado do WIN)", "margem de day trade", "limites em ticks", "sessao",
+                     "1 lote = 5 contratos: confere com o limite de 1 contrato do risco?"]
 [[DOL.tarifas]]
 vigente_desde = "2025-01-01"
 tarifa_lado_brl = 0.25
