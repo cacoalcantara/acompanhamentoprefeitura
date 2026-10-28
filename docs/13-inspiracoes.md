@@ -73,3 +73,7 @@ no repositório clonado: **não há MT5, nem XAUUSD, nem "Aurum TradingBot"**, e
 testes). O repositório analisado é um pacote de skills do Claude para ações dos EUA. Logo, a descrição da imagem
 parece se referir a **outro projeto**. **Se quiser adaptar aquele, envie o link correto** do repositório; nada foi
 assumido ou inventado sobre ele.
+
+## Aurum, TradingAgents, claude-trader e trader-skill
+
+Estudo, matriz de decisão e o que foi adaptado em código: ver [13b-estudo-aurum-tradingagents.md](13b-estudo-aurum-tradingagents.md). Atribuições em `THIRD_PARTY_NOTICES.md`.

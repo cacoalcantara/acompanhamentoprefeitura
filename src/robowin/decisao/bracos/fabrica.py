@@ -13,6 +13,19 @@ Exemplo::
     modo = "condicional"                    # imediato | condicional
     effort_proponente = "low"               # opcional
     effort_revisor = "medium"               # opcional
+
+Braco EXPERIMENTAL de debate (desligado por padrao; so no modo condicional; ver ``debate.py``)::
+
+    [[bracos]]
+    id = "debate_cond"
+    tipo = "debate"
+    proponente = "sintetizador"             # papel (ou 'provedor:modelo') do SINTETIZADOR; faz o papel de proponente
+    revisor = "revisor"                     # opcional: com revisor o braco e o analogo do C
+    modo = "condicional"
+    pesquisador = "pesquisador"             # papel/modelo dos pesquisadores altista e baixista (padrao: o proponente)
+    debatedor_risco = "debatedor_risco"     # papel/modelo dos tres debatedores de risco (padrao: o proponente)
+    rodadas = 1                             # 1 ou 2 rodadas de pesquisa
+    veto_unanime_risco = true               # tres pareceres 'nao_operar' => NAO_OPERAR
 """
 from __future__ import annotations
 
@@ -28,7 +41,17 @@ from ..validade import Prazos, prazos_de_config
 from .base import MODOS, Geometria, Modo
 from .claude import BracoProponente
 from .claude_gpt import BracoProponenteRevisor
+from .debate import (
+    ETAPAS_PESQUISA,
+    ETAPAS_RISCO,
+    BracoDebate,
+    ConfigDebate,
+    EtapaDebate,
+    ServicoPropostaDebate,
+)
 from .llm import BracoLLM, ServicoProposta, ServicoRevisao
+
+TIPOS_BRACO = ("llm", "debate")
 
 
 class ErroConfigBraco(Exception):
@@ -44,6 +67,13 @@ class ConfigBracoExtra:
     effort_proponente: str | None = None
     effort_revisor: str | None = None
     tempo_max_s: int | None = None
+    tipo: str = "llm"  # "llm" (B/C) | "debate" (experimental)
+    pesquisador: str | None = None  # so tipo=debate
+    debatedor_risco: str | None = None  # so tipo=debate
+    effort_pesquisador: str | None = None
+    effort_debatedor_risco: str | None = None
+    rodadas: int = 1
+    veto_unanime_risco: bool = True
 
 
 def extras_de_config(cfg: Mapping[str, Any]) -> list[ConfigBracoExtra]:
@@ -59,10 +89,21 @@ def extras_de_config(cfg: Mapping[str, Any]) -> list[ConfigBracoExtra]:
         if b["id"] in ids:
             raise ErroConfigBraco(f"braco duplicado: {b['id']}")
         ids.add(b["id"])
+        tipo = b.get("tipo", "llm")
+        if tipo not in TIPOS_BRACO:
+            raise ErroConfigBraco(f"braco {b['id']}: tipo invalido {tipo!r} (use {TIPOS_BRACO})")
+        if tipo == "debate" and modo != "condicional":
+            raise ErroConfigBraco(f"braco {b['id']}: o debate so existe no modo condicional")
+        rodadas = int(b.get("rodadas", 1))
+        if tipo == "debate" and not 1 <= rodadas <= 2:
+            raise ErroConfigBraco(f"braco {b['id']}: rodadas deve ser 1 ou 2")
         out.append(ConfigBracoExtra(
             id=str(b["id"]), proponente=str(b["proponente"]), revisor=b.get("revisor"), modo=modo,
             effort_proponente=b.get("effort_proponente"), effort_revisor=b.get("effort_revisor"),
-            tempo_max_s=b.get("tempo_max_s")))
+            tempo_max_s=b.get("tempo_max_s"), tipo=tipo, pesquisador=b.get("pesquisador"),
+            debatedor_risco=b.get("debatedor_risco"), effort_pesquisador=b.get("effort_pesquisador"),
+            effort_debatedor_risco=b.get("effort_debatedor_risco"), rodadas=rodadas,
+            veto_unanime_risco=bool(b.get("veto_unanime_risco", True))))
     return out
 
 
@@ -128,10 +169,35 @@ class FabricaBracos:
             return BracoProponente(id, prop, modo, g, pz)
         return BracoProponenteRevisor(id, prop, self.servico_revisao(revisor, effort_revisor), modo, g, pz)
 
+    def braco_debate(self, e: ConfigBracoExtra) -> BracoDebate:
+        """Braco de debate: sintetizador (= proponente), pesquisadores e debatedores de risco pelos papeis."""
+        ref_s, eff_s = self.resolver(e.proponente, e.effort_proponente)
+        prov_s, _ = dividir_modelo(ref_s)
+        ref_p, eff_p = self.resolver(e.pesquisador or e.proponente, e.effort_pesquisador)
+        ref_r, eff_r = self.resolver(e.debatedor_risco or e.proponente, e.effort_debatedor_risco)
+        etapas: dict[str, EtapaDebate] = {}
+        for nome, ref, eff in ([(n, ref_p, eff_p) for n in ETAPAS_PESQUISA]
+                               + [(n, ref_r, eff_r) for n in ETAPAS_RISCO]):
+            prov, _ = dividir_modelo(ref)
+            etapas[nome] = EtapaDebate(self.provedores[prov], ref, nome, effort=eff,
+                                       diretorio_prompts=self.diretorio_prompts)
+        serv = ServicoPropostaDebate(
+            self.provedores[prov_s], ref_s, etapas, config=ConfigDebate(e.rodadas, e.veto_unanime_risco),
+            stop_max_pontos=self.stop_max_pontos, effort=eff_s, diretorio_prompts=self.diretorio_prompts)
+        g = self.geometria if e.tempo_max_s is None else Geometria(
+            self.geometria.stop_pontos, self.geometria.alvo_pontos, e.tempo_max_s)
+        rev = self.servico_revisao(e.revisor, e.effort_revisor) if e.revisor else None
+        return BracoDebate(e.id, serv, rev, e.modo, g, self.prazos[e.modo])
+
     def extras(self, cfg: Mapping[str, Any]) -> list[BracoLLM]:
-        return [self.braco(e.id, e.proponente, e.revisor, e.modo, effort_proponente=e.effort_proponente,
-                           effort_revisor=e.effort_revisor, tempo_max_s=e.tempo_max_s)
-                for e in extras_de_config(cfg)]
+        out: list[BracoLLM] = []
+        for e in extras_de_config(cfg):
+            if e.tipo == "debate":
+                out.append(self.braco_debate(e))
+            else:
+                out.append(self.braco(e.id, e.proponente, e.revisor, e.modo, effort_proponente=e.effort_proponente,
+                                      effort_revisor=e.effort_revisor, tempo_max_s=e.tempo_max_s))
+        return out
 
     def padrao(self, modos: tuple[Modo, ...] = ("imediato", "condicional"),
                effort_revisor_condicional: str | None = "medium") -> list[BracoLLM]:

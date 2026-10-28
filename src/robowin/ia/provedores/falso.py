@@ -23,6 +23,8 @@ def resposta_padrao(schema: type[BaseModel]) -> BaseModel:
         return RevisaoIA(veredito="REJEITAR", justificativa_curta="[FALSO] revisor de demonstracao")
     if schema is ClassificacaoNoticia:
         return ClassificacaoNoticia(relevancia=0.1, direcao="neutra", intensidade=0.0, tipo="falso")
+    if schema.__name__ == "ReflexaoIA":
+        return schema(licao="FALSO: uma unica operacao e amostra minima.", vies="manter")
     return schema.model_construct()
 
 

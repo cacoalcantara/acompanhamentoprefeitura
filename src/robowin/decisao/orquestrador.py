@@ -50,6 +50,7 @@ from robowin.features.pipeline import PipelineFeatures
 from robowin.features.registro import nomes_permitidos
 from robowin.ia.dossie import ErroDossie, hash_dossie, montar_dossie
 from robowin.ia.orcamento import OrcamentoIA
+from robowin.ia.reflexao import MemoriaReflexiva, liquidar_pendentes
 from robowin.risco.kill_switch import EventoKill, KillSwitch
 from robowin.risco.motor import EventoAgenda, MotorRiscoPadrao
 from robowin.risco.tempo import dia_sp, segundos_do_dia
@@ -126,6 +127,8 @@ class ContaBraco:
     custo_ia_dia: dict[str, float] = field(default_factory=dict)  # dia (SP) -> gasto de IA do braco
     rotulos: set[str] = field(default_factory=set)
     ultimo_bloqueio: tuple[str, ...] | None = None  # evita repetir a mesma recusa de bracos sem IA a cada ciclo
+    resumo_ultima_entrada: dict[str, Any] = field(default_factory=dict)  # hipoteses/justificativa (memoria reflexiva)
+    n_trades_memoria: int = 0
 
 
 @dataclass
@@ -174,6 +177,7 @@ class Orquestrador:
         noticias: Callable[[int], list[dict[str, Any]]] | None = None, eventos: Iterable[EventoAgenda] = (),
         orcamento: OrcamentoIA | None = None, bloqueio: BloqueioDados | None = None, custos: Custos | None = None,
         simulador: SimuladorExecucao | None = None, avaliador_odds: AvaliadorOdds | None = None,
+        memoria_reflexiva: MemoriaReflexiva | None = None, servico_reflexao: Any = None,
     ) -> None:
         if not bracos:
             raise ErroConfig("nenhum braco configurado")
@@ -193,6 +197,10 @@ class Orquestrador:
         if orcamento is not None:
             orcamento.vincular_ativo(self.ativo)
         self.statarb, self.precos_aux, self.noticias_fn = statarb, precos_aux, noticias
+        # memoria reflexiva (opcional, desligada por padrao): reflexoes SO depois do resultado liquidado
+        self.memoria_reflexiva = memoria_reflexiva
+        self.servico_reflexao = servico_reflexao
+        self._liquidando = False
         self.orcamento = orcamento
         self._mes_orcamento: str | None = None
         self.bloqueio = bloqueio or BloqueioDados()
@@ -234,7 +242,8 @@ class Orquestrador:
                   simulada=True)
         self.sim.registrar_braco(b.id, magic)
         rot = Roteador("simulado", cfg.instrumento, self.rel, oms, motor, simulador=self.sim,
-                       bloqueio_externo=self._bloqueio_externo, posicao_fn=self.sim.posicao)
+                       bloqueio_externo=self._bloqueio_externo, posicao_fn=self.sim.posicao,
+                       exigir_aprovacao=True)
         oms.ao_transicao.append(lambda o: self.registro.ordem(o))
         conta = ContaBraco(b, magic, ks, motor, oms, rot, GerenciadorPlano(b.id, cfg.instrumento.tick_pontos))
         ks.registrar_efeito(lambda ev, c=conta: self._efeito_kill(c, ev))
@@ -412,9 +421,19 @@ class Orquestrador:
         self.registro.trade(tr, motivo_saida=motivo)
         conta.stats["trades"] += 1
         sinal = 1.0 if tr.lado == Lado.COMPRA else -1.0
-        conta.memoria.append({
+        conta.n_trades_memoria += 1
+        entrada_mem = {
             "acao": "COMPRAR" if tr.lado == Lado.COMPRA else "VENDER", "resultado_pontos": sinal * (tr.saida - tr.entrada),
-            "duracao_s": max(0, (tr.t_saida_ns - tr.t_entrada_ns) // NS), "motivo_saida": motivo})
+            "duracao_s": max(0, (tr.t_saida_ns - tr.t_entrada_ns) // NS), "motivo_saida": motivo,
+            "trade_id": f"{braco}:{conta.n_trades_memoria}"}
+        conta.memoria.append(entrada_mem)
+        if (self.memoria_reflexiva is not None and conta.braco.ia
+                and self._dono_memoria(conta) is conta):  # so a memoria que ALIMENTA algum dossie
+            # PENDENTE: a reflexao so nasce depois do atraso de liquidacao
+            self.memoria_reflexiva.registrar_trade(
+                trade_id=entrada_mem["trade_id"], braco=braco, t_saida_ns=tr.t_saida_ns, acao=entrada_mem["acao"],
+                resultado_pontos=entrada_mem["resultado_pontos"], duracao_s=entrada_mem["duracao_s"],
+                motivo_saida=motivo, resumo_decisao=conta.resumo_ultima_entrada)
         conta.meta = None
         conta.eventos_posicao.append("fechou")
         self.registro.posicao(braco=braco, t_ns=t, lado=None, quantidade=0, preco_medio=0.0, stop=None, alvo=None)
@@ -638,6 +657,11 @@ class Orquestrador:
             conta.rotulos.update(res.rotulos)
         it = res.intencao
         assert it is not None
+        if res.eh_entrada and res.proposta:  # base da reflexao pos-trade (so texto ja validado da proposta)
+            conta.resumo_ultima_entrada = {
+                "hipoteses": list(res.proposta.get("hipoteses") or [])[:3],
+                "justificativa_curta": str(res.proposta.get("justificativa_curta") or ""),
+                "incerteza": res.proposta.get("incerteza")}
         pos = self.sim.posicao(res.braco)
         tick = self.ultimo_tick
         meio = _meio(tick) if tick else res.preco_ref
@@ -868,8 +892,40 @@ class Orquestrador:
             t0_ns=t, ticks=list(self.hist), spread_pontos=max(snap.ask - snap.bid, 0.0), features=feats,
             features_permitidas=nomes_permitidos(), modelos=snap.modelos, statarb=snap.statarb,
             noticias=snap.noticias, regime=self._regime(snap, conta, t), posicao=posicao, limites=limites,
-            memoria=list(dono.memoria), minutos_desde_abertura=max(0, (seg - 9 * 3600) // 60),
+            memoria=self._memoria_do_dossie(dono, t), minutos_desde_abertura=max(0, (seg - 9 * 3600) // 60),
             minutos_para_zeragem=max(0, (zer - seg) // 60), tick_pontos=self.cfg.instrumento.tick_pontos)
+
+    def _memoria_do_dossie(self, dono: ContaBraco, t: int) -> list[dict[str, Any]]:
+        """Memoria de operacoes do dono; com memoria reflexiva, anexa as licoes JA DISPONIVEIS em ``t``."""
+        mem = list(dono.memoria)
+        if self.memoria_reflexiva is None:
+            return mem
+        return self.memoria_reflexiva.enriquecer(mem, dono.braco.id, t)
+
+    async def _liquidar_reflexoes(self, t: int) -> None:
+        """Pede (e custeia) as reflexoes das operacoes cujo atraso de liquidacao ja passou. Opcional e a prova de
+        falha: um erro aqui nunca bloqueia o ciclo nem toca em risco ou ordens."""
+        if self.memoria_reflexiva is None or self.servico_reflexao is None or self._liquidando:
+            return
+        self._liquidando = True
+        try:
+            niveis = [p for _, p in self.hist]
+            chamadas = await liquidar_pendentes(self.memoria_reflexiva, t, self.servico_reflexao, niveis_absolutos=niveis)
+            for braco_id, ch in chamadas:  # custo atribuido ao braco dono da memoria
+                dono = self.contas.get(braco_id)
+                self.registro.chamada(ch, braco=braco_id, t_ns=t)
+                if dono is not None:
+                    dono.custo_ia_usd += ch.custo_usd
+                    dia_c = dia_sp(t).isoformat()
+                    dono.custo_ia_dia[dia_c] = dono.custo_ia_dia.get(dia_c, 0.0) + ch.custo_usd
+                    self.registro.orcamento(dia=dia_c, braco=braco_id, gasto_usd=dono.custo_ia_dia[dia_c])
+            for e in self.memoria_reflexiva.exportar():
+                if e["estado"] in ("liquidada", "descartada") and e["t_liquidacao_ns"] == t:
+                    self.registro.auditar("reflexao_pos_trade", e)
+        except Exception as exc:  # defensivo: reflexao e opcional
+            self.registro.incidente(t_ns=t, origem="reflexao", severidade="aviso", detalhe=f"{type(exc).__name__}: {exc}"[:300])
+        finally:
+            self._liquidando = False
 
     @staticmethod
     def _dossie_leve(snap: Snapshot) -> dict[str, Any]:
@@ -890,6 +946,7 @@ class Orquestrador:
         return conta
 
     async def _ciclo(self, contas: list[ContaBraco], snap: Snapshot, t: int, disparos: tuple[str, ...]) -> None:
+        await self._liquidar_reflexoes(t)
         ciclo_id = self.registro.novo_id("cic")
         tick = self.ultimo_tick
         assert tick is not None

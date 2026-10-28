@@ -48,7 +48,8 @@ class ExecucaoBacktest:
         self.motor = MotorRiscoPadrao(cfg_risco, instrumento, kill_switch=self.kill, eventos=eventos_agenda)
         self.oms = OMS(relogio, self.magics, banco=banco, janela_duplicada_s=janela_duplicada_s, simulada=True)
         self.rot = Roteador("simulado", instrumento, relogio, self.oms, self.motor, simulador=self.sim,
-                            politica=politica or PoliticaPadrao(), antimanipulacao=antimanipulacao)
+                            politica=politica or PoliticaPadrao(), antimanipulacao=antimanipulacao,
+                            exigir_aprovacao=True)
         self.kill.registrar_efeito(self.rot.efeito_kill)
         if ao_kill is not None:
             self.kill.registrar_efeito(ao_kill)

@@ -17,6 +17,7 @@ from ..core.tipos import Acao, AckOrdem, ComandoOrdem, DecisaoRisco, Instrumento
 from ..risco.antimanipulacao import MonitorAntimanipulacao
 from ..risco.kill_switch import EventoKill
 from ..risco.motor import MotorRiscoPadrao
+from .aprovacao import RegistroAprovacoes
 from .oms import OMS, TERMINAIS, OrdemOMS, ResultadoEnvio
 from .politicas import PoliticaExecucao, PoliticaPadrao, tipo_de_ordem
 from .simulador import EventoSim, SimuladorExecucao
@@ -43,7 +44,7 @@ class Roteador:
         emissor_gateway: Callable[[ComandoOrdem], AckOrdem | None] | None = None,
         politica: PoliticaExecucao | None = None, antimanipulacao: MonitorAntimanipulacao | None = None,
         bloqueio_externo: Callable[[], str] | None = None,
-        posicao_fn: Callable[[str], Posicao] | None = None,
+        posicao_fn: Callable[[str], Posicao] | None = None, exigir_aprovacao: bool = False,
     ) -> None:
         if modo == "real":
             raise ExecucaoRealNaoAutorizada("ordens reais nao implementadas na v1")
@@ -57,10 +58,15 @@ class Roteador:
         self.anti = antimanipulacao
         self.bloqueio_externo = bloqueio_externo
         self._posicao_fn = posicao_fn or (self.sim.posicao if self.sim else None)
+        # com ``exigir_aprovacao``, toda ENTRADA enviada precisa ter a impressao (hash) aprovada pelo risco
+        self.exigir_aprovacao = exigir_aprovacao
+        self.aprovacoes = RegistroAprovacoes()
         self.oms.ao_transicao.append(self._ao_transicao)
 
     # ------------------------------------------------------------------ Executor -----------------------
     def enviar(self, cmd: ComandoOrdem) -> AckOrdem:
+        if self.exigir_aprovacao and cmd.tipo != "saida":  # saidas e protecao nunca esperam aprovacao
+            self.aprovacoes.conferir(cmd)
         if self.modo == "simulado":
             assert self.sim is not None
             return self.sim.enviar(cmd)
@@ -123,6 +129,8 @@ class Roteador:
             self.sim.modificar_stop(it.braco, self._arred(novo, posicao.lado == Lado.COMPRA))
         if cmd is None:
             return ResultadoExecucao(dec, motivo="nada_a_enviar")
+        if entrada:
+            self.aprovacoes.aprovar(cmd, dec)  # a ordem montada e a que o risco acabou de aprovar
         env = self.oms.enviar(cmd, self)
         if entrada and env.enviado and env.ordem.estado not in TERMINAIS and isinstance(self.motor, MotorRiscoPadrao):
             self.motor.reservar_pendente(it, cmd.lado, t_ns)

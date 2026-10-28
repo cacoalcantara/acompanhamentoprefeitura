@@ -8,8 +8,9 @@ from pathlib import Path
 from robowin.core.config import ErroConfig, carregar_toml
 from robowin.core.instrumentos import perfil_da_config
 from robowin.core.tipos import Lado, Trade
+from robowin.risco import cauda
 
-from . import relatorio
+from . import metricas, relatorio, robustez, uso_ia
 
 ORIGEM_SINTETICO = "dados_sinteticos"  # mesma marca de decisao.registro e do painel
 
@@ -92,6 +93,21 @@ def origem_declarada_real(banco: str | Path) -> bool:
     return "historico_real" in _origem_manifestos(banco)
 
 
+def _md_robustez(rel: dict) -> str:
+    ln = ["", "## Monitoramento de cauda e robustez (informativo; nao e veto nem prova de lucro)", ""]
+    pbo = rel.get("pbo_entre_bracos") or {}
+    if pbo.get("pbo") is None:
+        ln.append(f"- PBO entre bracos: indisponivel ({pbo.get('motivo', 'amostra insuficiente')}).")
+    else:
+        ln.append(f"- PBO entre bracos (CSCV, {pbo['n_combinacoes']} combinacoes, {pbo['n_bracos']} bracos, "
+                  f"{pbo['n_periodos']} pregoes): {pbo['pbo']:.2f}. {pbo['aviso']}")
+    for b, c in (rel.get("cauda_perdas") or {}).items():
+        niv = c["niveis"]
+        txt = "; ".join(f"VaR {k} = R$ {v['var_brl']:.2f}, ES = R$ {v['es_brl']:.2f}" for k, v in niv.items())
+        ln.append(f"- {b}: {c['dias']} dias; {txt}; pior dia R$ -{c['pior_dia_brl']:.2f}. " + " ".join(c["avisos"][:1]))
+    return "\n".join(ln) + "\n"
+
+
 def _avaliar(a) -> int:
     trades = carregar_trades(a.banco)
     # desconhecido (None) recusa o selo: so e "nao sintetico"/"nao contaminado" se AFIRMADO
@@ -119,7 +135,14 @@ def _avaliar(a) -> int:
         saida.mkdir(parents=True, exist_ok=True)
         md, js = saida / "relatorio.md", saida / "relatorio.json"
     md.parent.mkdir(parents=True, exist_ok=True)
-    md.write_text(relatorio.renderizar_markdown(rel), encoding="utf-8")
+    uso = uso_ia.resumir_uso(uso_ia.carregar_chamadas(a.banco))  # custo/latencia por braco e papel (debate: varias etapas)
+    rel["uso_ia"] = uso
+    # monitoramento (NUNCA veto): cauda historica de perdas por braco e probabilidade de overfitting da escolha do melhor
+    rel["cauda_perdas"] = {b: cauda.relatorio_cauda(list(metricas.pnl_por_dia(ts).values())).como_dict()
+                           for b, ts in trades.items() if ts}
+    rel["pbo_entre_bracos"] = robustez.pbo_entre_bracos(trades)
+    md.write_text(relatorio.renderizar_markdown(rel) + uso_ia.renderizar_markdown(uso) + _md_robustez(rel),
+                  encoding="utf-8")
     js.write_text(json.dumps(relatorio.para_json_seguro(rel), ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"relatorio escrito em {md} e {js}")
     return 0

@@ -98,6 +98,10 @@ class PropostaObtida:
     violacoes: tuple[str, ...]
     compartilhada: bool
     dono: str
+    # --- bracos de varias etapas (debate): chamadas adicionais a custear, latencia total e resumo auditavel ---
+    chamadas_extras: tuple[ChamadaLLM, ...] = ()
+    latencia_ms: float | None = None  # None => a latencia da propria chamada
+    extras_proposta: dict[str, Any] | None = None
 
 
 @dataclass
@@ -144,8 +148,13 @@ class ServicoProposta(ServicoLLM):
         return r
 
     async def _buscar(self, ctx: ContextoDecisao, modo: Modo, prazos: Prazos) -> PropostaObtida:
-        obj, ch, motivo = await self.chamar(mensagem_proponente(ctx.dossie, modo), prazos.prazo_proponente(),
-                                            ctx.hash_dossie)
+        return await self._propor(ctx, modo, prazos, mensagem_proponente(ctx.dossie, modo),
+                                  prazos.prazo_proponente())
+
+    async def _propor(self, ctx: ContextoDecisao, modo: Modo, prazos: Prazos, mensagem: str,
+                      prazo_s: float) -> PropostaObtida:
+        """Uma chamada ao papel proponente + validacao deterministica (reaproveitada pelo braco de debate)."""
+        obj, ch, motivo = await self.chamar(mensagem, prazo_s, ctx.hash_dossie)
         if motivo or not isinstance(obj, PropostaIA):
             return PropostaObtida(None, ch, motivo or RESPOSTA_INVALIDA, (), False, self.dono_de(modo))
         v = validar_proposta(obj, ctx.dossie, modo=modo, validade_max_s=int(prazos.validade_s),
@@ -216,16 +225,21 @@ class BracoLLM(BracoBase):
         pz = self.prazos
         kw: dict[str, Any] = {"validade_s": pz.validade_s, "desvio_max_pts": pz.desvio_max_ticks * ctx.tick_pontos}
         obt = await self.proponente.obter(ctx, self.modo, pz)
-        lat_prop_ns = int(obt.chamada.total_ms * 1e6)
+        lat_prop_ns = int((obt.chamada.total_ms if obt.latencia_ms is None else obt.latencia_ms) * 1e6)
         chamadas = [RegistroChamada(obt.chamada, obt.dono, "proponente", compartilhada=obt.compartilhada)]
+        chamadas += [RegistroChamada(c, obt.dono, c.papel, compartilhada=obt.compartilhada)
+                     for c in obt.chamadas_extras]
         carimbos = [CarimboLatencia(etapa="proposta_ia", braco=self.id, t_ini_ns=ctx.t0_ns,
                                     t_fim_ns=ctx.t0_ns + lat_prop_ns, injetado=obt.chamada.modelo_servido.endswith("FALSO"))]
         kw.update(chamadas=chamadas, carimbos=carimbos, latencia_ns=lat_prop_ns)
         if obt.proposta is None:
             motivos = (f"ia:{obt.motivo}", *obt.violacoes)
+            if obt.extras_proposta:  # resumo auditavel do debate mesmo quando a proposta nao saiu
+                kw["proposta"] = dict(obt.extras_proposta)
             return self._bloqueada(ctx, motivos, **kw)
         p = obt.proposta
-        proposta_json = p.model_dump(mode="json") | {"compartilhada": obt.compartilhada, "dono_chamada": obt.dono}
+        proposta_json = (p.model_dump(mode="json") | {"compartilhada": obt.compartilhada, "dono_chamada": obt.dono}
+                         | (obt.extras_proposta or {}))
         kw["proposta"] = proposta_json
 
         # --- acoes que NUNCA esperam revisao ----------------------------------------------------------------
