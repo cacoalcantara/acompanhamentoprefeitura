@@ -26,6 +26,11 @@ _SCHEMA_TICK = pa.schema([
 ])
 _SCHEMA_LIVRO = pa.schema([("t_utc_ns", pa.int64()), ("niveis", pa.string())])
 MARCADOR_SINTETICO = "SINTETICO.txt"
+MARCADOR_REAL = "REAL.txt"  # dados de mercado REAIS (ex.: negocios publicos da B3); nunca misturar com sinteticos
+
+
+class MisturaDeDados(ValueError):
+    """Tentativa de misturar dados SINTETICOS e REAIS no mesmo armazem (recusada: separe os diretorios)."""
 
 
 def data_sp(t_ns: int) -> dt.date:
@@ -153,11 +158,11 @@ class ArmazenamentoTicks:
         with self._lock:
             a = self._arq_offset(simbolo)
             a.parent.mkdir(parents=True, exist_ok=True)
-            a.write_text(json.dumps({"offset_ms": int(offset_ms)}))
+            a.write_text(json.dumps({"offset_ms": int(offset_ms)}), encoding="utf-8")
 
     def ler_offset_servidor(self, simbolo: str) -> int | None:
         a = self._arq_offset(simbolo)
-        return int(json.loads(a.read_text())["offset_ms"]) if a.exists() else None
+        return int(json.loads(a.read_text(encoding="utf-8"))["offset_ms"]) if a.exists() else None
 
     # -- inventario ---------------------------------------------------------------
     def simbolos(self, tipo: str = "ticks") -> list[str]:
@@ -172,8 +177,72 @@ class ArmazenamentoTicks:
                       if (p / "part.parquet").exists())
 
     def marcar_sintetico(self) -> None:
-        (self.raiz / MARCADOR_SINTETICO).write_text("DADOS SINTETICOS - nao sao dados de mercado\n")
+        if self.eh_real:
+            raise MisturaDeDados(f"{self.raiz} contem dados REAIS ({MARCADOR_REAL}): nao gravo dados sinteticos aqui")
+        (self.raiz / MARCADOR_SINTETICO).write_text("DADOS SINTETICOS - nao sao dados de mercado\n", encoding="utf-8")
 
     @property
     def eh_sintetico(self) -> bool:
         return (self.raiz / MARCADOR_SINTETICO).exists()
+
+    def marcar_real(self, origem: str) -> None:
+        """Marca o armazem como de dados REAIS (`origem`, ex. 'real_b3_negocios'). Recusa armazem sintetico."""
+        sint = [s for s in self.simbolos() if s.startswith("SINT_")]
+        if self.eh_sintetico or sint:
+            raise MisturaDeDados(f"{self.raiz} contem dados SINTETICOS ({MARCADOR_SINTETICO} ou simbolos {sint[:3]}): "
+                                 "nao misturo dados reais com sinteticos; use outro diretorio")
+        a = self.raiz / MARCADOR_REAL
+        origens = set(self.origens_reais())
+        if origem not in origens:
+            origens.add(origem)
+            a.write_text("DADOS REAIS DE MERCADO - origens: " + ",".join(sorted(origens)) + "\n", encoding="utf-8")
+
+    @property
+    def eh_real(self) -> bool:
+        return (self.raiz / MARCADOR_REAL).exists()
+
+    def origens_reais(self) -> list[str]:
+        a = self.raiz / MARCADOR_REAL
+        if not a.exists():
+            return []
+        txt = a.read_text(encoding="utf-8").split("origens:", 1)
+        return [o.strip() for o in txt[1].split(",") if o.strip()] if len(txt) > 1 else []
+
+    # -- tabela (vetorizado: milhoes de linhas sem criar objetos Tick) -------------------------------
+    def gravar_tabela(self, simbolo: str, df: pd.DataFrame) -> int:
+        """Grava um DataFrame com as colunas de `COLS_TICK`, SUBSTITUINDO cada dia presente (reimportar e
+        idempotente). Sem dedup: negocios distintos com a mesma chave sao legitimos. Retorna as linhas gravadas."""
+        falta = [c for c in COLS_TICK if c not in df.columns]
+        if falta:
+            raise ValueError(f"colunas ausentes: {falta}")
+        if df.empty:
+            return 0
+        tab = df[COLS_TICK].astype(_TIPOS_TICK)
+        dias = pd.to_datetime(tab["t_utc_ns"], unit="ns", utc=True).dt.tz_convert(SP).dt.date
+        with self._lock:
+            for d, grupo in tab.groupby(dias, sort=True):
+                g = grupo.sort_values(["t_utc_ns", "t_recebido_ns"], kind="mergesort").reset_index(drop=True)
+                self._escrever(g, _SCHEMA_TICK, self._arq("ticks", simbolo, d))
+        return len(tab)
+
+    def ler_tabela(self, simbolo: str, d: dt.date) -> pd.DataFrame:
+        """Ticks do dia `d` como DataFrame (colunas de `COLS_TICK`, ordem do arquivo); vazio se nao houver."""
+        a = self._arq("ticks", simbolo, d)
+        if not a.exists():
+            return pd.DataFrame({c: pd.Series(dtype=t) for c, t in _TIPOS_TICK.items()})
+        return pd.read_parquet(a, columns=COLS_TICK)
+
+    # -- metadados por simbolo (JSON) --------------------------------------------------------------
+    def gravar_meta(self, simbolo: str, nome: str, conteudo: dict) -> Path:
+        if not nome or "/" in nome or "\\" in nome or nome.startswith("."):
+            raise ValueError(f"nome de metadado invalido: {nome!r}")
+        with self._lock:
+            a = self._dir("meta", simbolo) / f"{nome}.json"
+            a.parent.mkdir(parents=True, exist_ok=True)
+            a.write_text(json.dumps(conteudo, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+                         encoding="utf-8")
+            return a
+
+    def ler_meta(self, simbolo: str, nome: str) -> dict | None:
+        a = self._dir("meta", simbolo) / f"{nome}.json"
+        return json.loads(a.read_text(encoding="utf-8")) if a.exists() else None
