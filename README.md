@@ -68,3 +68,13 @@ Chaves nunca são gravadas em logs.
   recusados em outro ativo; o manifesto do experimento inclui o ativo e o hash do perfil. Ativo diferente do
   aprovado parte de limites mínimos (`risco_nao_aprovado`) até existir `config/risco-<ativo>.toml` com
   aprovação por hash em `config/aprovacoes/risco-<ativo>.toml`; ao vivo, sem isso, recusa.
+
+**Limites de risco por usuário e por conta.** Os valores de `config/risco.toml` (R$ 60/operação, R$ 200/dia,
+R$ 500/semana, drawdown R$ 1.500, 1 contrato) são a aprovação **provisória do titular, somente DEMO**, e não são padrão
+para ninguém. Cada usuário define, altera e aprova os próprios limites pelo painel (página **Risco**: formulário,
+pré-visualização, "Aprovar" com `APROVO` + token de ações, histórico) ou pela CLI (`robowin usuario criar`,
+`robowin usuario conta`, `robowin risco definir/aprovar/status/historico --usuario U --conta PLAT:SERVIDOR:LOGIN`),
+isolados por usuário e por conta. Usuário novo começa sem limites (bloqueado para operar); alterar invalida a
+aprovação; tudo vai para a auditoria; núcleo/gateway/espelho/MM/aceitação usam só os limites aprovados do par ativo e
+bloqueiam conta conectada diferente; a IA não lê nem altera limites; conta REAL fica sempre bloqueada
+(`autorizacao_real`). Sem usuário configurado, vale o modo de arquivo único. Ver `docs/07-risco-e-operacao.md`.

@@ -89,6 +89,15 @@ uv run robowin perfil confirmar bolsa:NYSE --responsavel "Seu Nome" --fonte "sit
 - **Risco:** grava `config/aprovacoes/risco-vN.toml` novo (nunca sobrescreve) e passa a valer a versão mais recente
   válida; `robowin verificar` mostra **APROVADO**. Se você editar `config/risco.toml` depois, o hash deixa de conferir
   e é preciso aprovar de novo. Detalhes em `docs/07-risco-e-operacao.md`.
+- **Limites por usuário e conta:** os valores de `config/risco.toml` (R$ 60/op, R$ 200/dia, R$ 500/semana, DD
+  R$ 1.500, 1 contrato) são a aprovação **provisória do titular, só DEMO**. Para usar os seus, por conta:
+  `uv run robowin usuario criar --usuario <voce>`, `uv run robowin usuario conta --usuario <voce> --conta
+  mt5:<SERVIDOR-DEMO>:<LOGIN>` e depois defina/aprove no painel (página **Risco**, com o token de ações) ou com
+  `robowin risco definir` + `robowin risco aprovar --usuario ... --conta ...`. Na aceitação, passe o mesmo par:
+  `uv run robowin aceitacao --usuario <voce> --conta mt5:<SERVIDOR-DEMO>:<LOGIN> ...` (conta diferente da aprovada
+  ⇒ recusa; com `--confirmo-conta-demo`, sem aprovação válida ⇒ recusa). O titular pode migrar a aprovação provisória
+  para a conta demo dele com `uv run robowin usuario migrar-legado --usuario titular --conta mt5:<SERVIDOR-DEMO>:<LOGIN>`.
+  Conta REAL: sempre bloqueada (`autorizacao_real`).
 - **Perfil:** troca `a_confirmar = false`, esvazia `a_confirmar_itens` e grava `fonte`, `fonte_data`,
   `confirmado_por` e `confirmado_em` **só naquela seção**; o resto do arquivo (comentários, ordem, tarifas, outros
   perfis) fica idêntico, e a edição é conferida relendo o TOML antes de gravar. `--comparar-terminal` lê (sem ordem)
@@ -164,3 +173,5 @@ Arquivos `aceitacao-<AAAA-MM-DD-HHMMSS>.md` (leitura) e `.json` (máquina) em `r
 | A5/A8 "conta ja tem posicao/ordem" | Zere a conta demo manualmente antes |
 | A3.2 NÃO VERIFICÁVEL | Perfil `a_confirmar`: confira as especificações observadas e rode `uv run robowin perfil confirmar <ATIVO> --responsavel "<seu nome>" --fonte "<fonte>" --comparar-terminal` |
 | Núcleo ao vivo / espelho / MM recusam com "responsavel pendente" | Política de risco não aprovada: `uv run robowin risco aprovar --responsavel "<seu nome>"` |
+| Recusa com "SEM_LIMITES" / "NAO_APROVADO" / "Operacao automatizada BLOQUEADA" (com `--usuario/--conta`) | Defina e aprove os limites desse usuário+conta (painel > Risco, ou `robowin risco aprovar --usuario U --conta C`) |
+| Recusa com "difere da conta aprovada" | O login/servidor/plataforma conectado não é a conta aprovada: confira `--conta` e `[mt5]` |

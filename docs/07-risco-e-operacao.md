@@ -1,13 +1,94 @@
 # 07 — Risco e operação (runbook)
 
-Política: `config/risco.toml` travada por hash (`config/aprovacoes/`). Padrões: 1 contrato; R$ 60/operação;
-R$ 200/dia; R$ 500/semana; drawdown R$ 1.000 alerta / R$ 1.500 máximo; entradas 09:15–17:30; zeragem 17:45.
-**Responsável precisa aprovar** o registro antes de qualquer etapa real.
+> **Os limites de `config/risco.toml` (1 contrato; R$ 60/operação; R$ 200/dia; R$ 500/semana; drawdown R$ 1.000
+> alerta / R$ 1.500 máximo) são a aprovação PROVISÓRIA do titular (`config/aprovacoes/risco-v2.toml`), só para testes
+> em conta DEMO. Não são padrão de ninguém:** cada usuário define e aprova os próprios limites, por conta de
+> negociação (seção "Limites por usuário e por conta", abaixo). Conta REAL exige uma autorização específica que não
+> existe nesta versão.
 
-> **Aprovação pendente (ação do usuário):** `config/aprovacoes/risco-v1.toml` traz `responsavel = "pendente: ..."`.
-> Enquanto estiver assim, a simulação roda mas é rotulada `risco_nao_aprovado` (incidente crítico), e **tudo que
-> opera ao vivo recusa iniciar** (núcleo ao vivo, espelhamento e market making na demo: `ErroConfig`). Nenhum agente
-> aprova por você: a decisão é sua, pelo comando guiado abaixo.
+## Limites por usuário e por conta de negociação
+
+Cada usuário estabelece, altera e aprova os **próprios** limites pelo **painel** (página **Risco**) ou pela CLI, e
+eles ficam isolados por usuário **e** por conta de negociação (plataforma + servidor + login). Código:
+`src/robowin/risco/usuarios.py` (armazém), `src/robowin/painel/risco_usuarios.py` (página), `robowin usuario` e
+`robowin risco` (CLI). Testes: `tests/unit/test_risco_usuarios.py` e `tests/unit/test_painel_risco.py`.
+
+**Armazém** (arquivos simples e auditáveis; padrão `config/usuarios`, fora do git porque contém o login da conta e o
+hash do token; mude com `[geral].usuarios`, `ROBOWIN_USUARIOS` ou `--usuarios`):
+
+```
+config/usuarios/<usuario>/usuario.toml                 nome + sal + sha256 do token (o token nunca é gravado)
+config/usuarios/<usuario>/contas/<plat>-<servidor>-<login>/
+    conta.toml        plataforma, servidor, login, tipo (demo|real), autorizacao_real = "bloqueada"
+    risco.toml        limites DESTE usuário PARA ESTA conta (travados por hash)
+    aprovacoes/risco-vN.toml                          aprovações versionadas (nunca sobrescritas)
+    historico/risco-NNNN.toml + historico/indice.jsonl  cada versão salva dos limites (autor, origem, campos alterados)
+```
+
+**Regras:**
+
+1. **Usuário novo começa SEM limites** (`SEM_LIMITES`): nada é imposto e operar fica **bloqueado** até definir e aprovar.
+   O painel (e `robowin risco definir --modelo-inicial`) oferece um **modelo muito conservador** derivado do perfil do
+   ativo (1 contrato; stop curto; perda por operação = pior caso desse stop + folga; dia = 2 operações; semana = 5;
+   3 operações/dia; para após 2 perdas seguidas; pausa de 15 min), que só vale depois de você editar/salvar e aprovar.
+   Todos os campos são obrigatórios no formulário (nenhum valor entra "por padrão"); a coerência é validada
+   (`validar_coerencia`: operação ≤ dia ≤ semana, alerta ≤ drawdown máximo, janela de horário, teto de 1 contrato).
+2. **Aprovação expressa** antes de qualquer operação automatizada: digitar `APROVO` (no painel, também o **token de
+   ações** `ROBOWIN_TOKEN` digitado no formulário; o cookie não basta) + nome do responsável. A simulação pode rodar
+   sem aprovação, **rotulada** `risco_nao_aprovado` (com os limites do próprio usuário ou o modelo conservador; nunca
+   os de outro usuário nem os provisórios do titular). Núcleo ao vivo, espelho DEMO, MM na demo, gateway com terminal
+   real e aceitação com `--confirmo-conta-demo` **recusam iniciar** sem aprovação válida do par usuário+conta.
+3. **Alterar os limites muda o hash e invalida a aprovação** (`NAO_APROVADO`, "hash difere"): é preciso aprovar de novo
+   (gera `risco-v<N+1>.toml`). Editar o `risco.toml` à mão tem o mesmo efeito.
+4. **Bloqueio automático pelos limites do usuário+conta ativos:** o motor de risco (veto determinístico) e o
+   **guardião do gateway** passam a usar os limites aprovados desse par (`ConfigGuardiao.de_risco`: contratos, janela,
+   perda diária, stop). Antes o guardião usava valores embutidos; agora, mesmo no modo de arquivo único, ele lê o
+   `config/risco.toml` aprovado.
+5. **Conta conectada diferente da aprovada ⇒ bloqueio** com mensagem clara: o gateway e a aceitação recusam iniciar
+   (`ContaDivergente`) se plataforma/servidor/login diferirem; o núcleo bloqueia novas entradas
+   (`conta_divergente`, incidente crítico) até o estado do gateway confirmar a conta aprovada e `trade_mode = demo`.
+6. **Auditoria:** `usuario_criado`, `conta_registrada`, `risco_limites_alterados` (sha anterior/novo, campos
+   alterados, autor, origem painel/cli), `risco_aprovado` (com usuário, conta, escopo) e `risco_migrado_legado` vão
+   para a cadeia de hash em `<[geral].dados>/auditoria` (a página Risco lista os eventos daquela conta).
+7. **A IA não lê nem altera limites:** qualquer campo de limite (ou `risco`, `limites`, `usuario`,
+   `conta_negociacao`) dentro de `[ia]`, `[[bracos]]`, `[reflexao]`, `[prazos]` ou `[decisao]` é recusado ao carregar
+   (`validar_ia_sem_limites`); um teste estático garante que os módulos de IA/braços/notícias não importam o armazém,
+   a aprovação nem a política. O veto final continua determinístico.
+8. **Conta REAL:** pode ser registrada (`tipo = "real"`), mas `autorizacao_real` é **sempre "bloqueada"** nesta
+   versão, qualquer que seja o texto gravado: aprovar e operar recusam (`AutorizacaoRealAusente`). Uma futura etapa
+   real exigirá uma **nova autorização específica**, separada da aprovação de limites (e o checklist abaixo). **O
+   envio real não existe.**
+9. **Isolamento no painel:** login com usuário + token do usuário (`robowin usuario criar` mostra o token uma única
+   vez); a sessão só vê e edita as contas daquele usuário (o usuário vem da sessão, nunca do formulário). Tentativas
+   inválidas são limitadas como no restante do painel.
+
+```bash
+uv run robowin usuario criar --usuario ana --nome "Ana"            # guarda o token mostrado
+uv run robowin usuario conta --usuario ana --conta mt5:CORRETORA-DEMO:123456
+uv run robowin risco definir  --usuario ana --conta mt5:CORRETORA-DEMO:123456 --modelo-inicial
+uv run robowin risco definir  --usuario ana --conta mt5:CORRETORA-DEMO:123456 --campo perda_max_dia_brl=80
+uv run robowin risco aprovar  --usuario ana --conta mt5:CORRETORA-DEMO:123456 --responsavel "Ana" --motivo "demo"
+uv run robowin risco status   --usuario ana --conta mt5:CORRETORA-DEMO:123456
+uv run robowin risco historico --usuario ana --conta mt5:CORRETORA-DEMO:123456
+uv run robowin nucleo  --usuario ana --conta mt5:CORRETORA-DEMO:123456 ...   # idem gateway, simular, mm ao-vivo, aceitacao
+```
+
+Ou fixe o par em `config/robowin.toml` (`[geral].usuario` e `[geral].conta_negociacao`). Sem nenhum dos dois vale o
+**modo de arquivo único** abaixo (compatibilidade).
+
+**Migrar a aprovação provisória do titular** para a conta DEMO dele (uma vez, exige `APROVO`):
+`uv run robowin usuario migrar-legado --usuario titular --conta mt5:<SERVIDOR-DEMO>:<LOGIN>`. Copia o
+`config/risco.toml` e grava `risco-v1.toml` na conta com `provisoria = true`, `escopo = "somente_demo"` e
+`origem = "risco-v2.toml"`. Outros usuários não herdam nada.
+
+## Modo de arquivo único (compatibilidade)
+
+Política: `config/risco.toml` travada por hash (`config/aprovacoes/`); vale quando nenhum usuário/conta está
+selecionado. Hoje está aprovada **provisoriamente pelo titular, somente DEMO** (`risco-v2.toml`).
+
+> **Sem aprovação válida** (responsável `pendente` ou hash divergente), a simulação roda mas é rotulada
+> `risco_nao_aprovado` (incidente crítico), e **tudo que opera ao vivo recusa iniciar** (núcleo ao vivo, espelhamento,
+> market making na demo e gateway com terminal real: `ErroConfig`). Nenhum agente aprova por você.
 
 ### Aprovar a política de risco (`robowin risco aprovar`)
 
@@ -45,7 +126,8 @@ verificar` mostra REPROVADO com o comando para reaprovar. Com responsável preen
 - **Gap:** ver `robowin.risco.estresse`. Um movimento até o limite pode custar ≈ R$ 3,5 mil.
 - **Checklist antes da etapa real:** confirmação escrita da corretora (robôs/API, zeragem, margem,
   mensagens), políticas da Anthropic e da OpenAI revisadas, capital e limites definidos, ciência do risco de
-  gap, autorização expressa. **O envio real não existe nesta versão.**
+  gap, autorização expressa **específica para conta real** (`autorizacao_real` da conta, hoje sempre "bloqueada"; a
+  aprovação de limites DEMO não vale para real). **O envio real não existe nesta versão.**
 - **Teste na demo:** saída com ticket velho deve ser rejeitada (não inverter a posição).
 
 ## Troca de ativo: risco
