@@ -139,6 +139,24 @@ qualquer operação (`PerfilNaoConfirmado`) até você confirmá-lo com `robowin
 `docs/12-aceitacao-no-windows.md`, "Decisões que só você toma"). Trocar o ativo exige posição zerada e abre novo experimento; modelo,
 orçamento e limites de um ativo nunca são reutilizados em outro.
 
+## Qualquer mercado (forex, CFD, metal, cripto): risco
+- **Moeda:** todo limite em dinheiro (`perda_max_*`, `dd_*`, `nocional_max_conta`) está na **moeda da conta**. O
+  pior caso da operação usa o valor do ponto do símbolo × fator de conversão **do instante**; sem cotação do par de
+  conversão o motor veta a entrada (`sem_cotacao_conversao:<lucro>-><conta>`). Saída e zeragem nunca dependem disso.
+- **Lote fracionário:** a unidade do robô é o lote mínimo do perfil (0,01 no EURUSD). `contratos_max` conta essas
+  unidades; `volume_max_lotes` (> 0) troca o limite por volume do terminal (ex.: 0,05 lote ⇒ 5 unidades), com teto da
+  v1 de 1,0 lote; `nocional_max_conta` (> 0) limita preço × valor do ponto × quantidade na moeda da conta. No WIN nada
+  muda: 1 contrato. Os dois campos entram no formulário do painel e em `robowin risco definir` (por usuário + conta).
+- **Invariantes iguais em todo mercado:** stop obrigatório, sem martingale, sem piramidação, uma posição por símbolo
+  (hedging do MT4 incluído); teste por propriedade com lote fracionário em `tests/unit/test_qualquer_mercado.py`.
+- **Janela:** `entradas_de/entradas_ate/zeragem` são lidos **no fuso da sessão do instrumento** (forex:
+  `America/New_York`), combinados com a grade da bolsa/corretora; entradas param `entradas_antes_fechamento_min`
+  antes de qualquer fechamento, pausa ou rollover, e a zeragem é forçada `zeragem_antes_fechamento_min` antes (sem
+  swap no day trade). O dia de negociação (perda diária, operações/dia) termina no rollover. Fim de semana do forex,
+  pausas e `dias_fechados` ⇒ `fora_do_pregao`.
+- **Swap:** se uma posição atravessar o rollover, o swap do perfil (triplo no dia configurado) entra no trade; perfil
+  sem swap conhecido gera aviso e o swap fica de fora (a confirmar).
+
 ## MT4 (hedging): risco e operação
 - **Hedging:** em conta MT4 uma ordem oposta **abre outra posição** em vez de reduzir. Por isso, no modo `hedging`
   (`ConfigDemo.conta`, definido pela plataforma): a saída é **sempre por ticket** (`OrderClose`; nunca ordem

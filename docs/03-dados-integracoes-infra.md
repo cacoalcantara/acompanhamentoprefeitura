@@ -18,8 +18,59 @@
 fuso, calendário, sessões, moeda, tarifas-modelo, limite de oscilação e regime tributário.
 `mt5/contrato.py` valida o símbolo da corretora contra o perfil (tick, valor do ponto por lote, lote, vencimento) e
 **recusa** se divergir. **`a_confirmar`** = valor sem fonte confirmada: bloqueia gateway/núcleo/MT5 até o usuário
-confirmar; a simulação sintética roda rotulada. Limite conhecido: o relógio interno da simulação ainda usa o fuso
-`America/Sao_Paulo`; bolsas de outros fusos só têm o modelo e a operação bloqueada.
+confirmar; a simulação sintética roda rotulada. A sessão é **por instrumento** (`core/sessoes.py`): a B3 segue o
+relógio de `America/Sao_Paulo`; forex/CFD/cripto e bolsas de outro fuso usam o fuso, a grade, as pausas e o rollover
+da própria bolsa/corretora (ver a seção abaixo). Bolsas de outros fusos seguem com a operação bloqueada até confirmar.
+
+## Qualquer mercado do MT4/MT5 (forex, metais, CFD, cripto)
+O mesmo perfil de `config/instrumentos.toml` descreve qualquer símbolo que a corretora ofereça, com campos opcionais
+do modelo genérico (os perfis B3 não mudam, nem o hash):
+
+| Campo | Do terminal (MT5 `symbol_info` / MT4 `MarketInfo`) | Uso |
+|---|---|---|
+| `classe` | deduzida (`trade_calc_mode`, moedas, pasta) ou `--classe` | `forex`, `cfd_indice`, `cfd_acao`, `metal`, `commodity`, `cripto` (+ as da B3 e `futuro`) |
+| `tamanho_contrato`, `volume_min/step/max` | `trade_contract_size`, `volume_*` (`MODE_LOTSIZE/MINLOT/LOTSTEP/MAXLOT`) | a **unidade do robô é o lote mínimo** (quantidade 1 = 0,01 lote no EURUSD); volume enviado = quantidade × `volume_min` |
+| `digitos`, `ponto`, `pip`, `tick_pontos` | `digits`, `point`, `trade_tick_size` | EURUSD 5 dígitos (pip = 10 pontos), USDJPY 3 dígitos; `pip` é só exibição |
+| `tick_valor_lucro` | `trade_tick_value` se a conta está na moeda de lucro; senão `tick_size × contract_size` (forex/CFD) | valor de 1 tick por 1,0 lote **na moeda de lucro**; `ponto_valor_brl` é derivado (nome histórico: "na moeda do instrumento") |
+| `moeda_base/cotacao/lucro/margem` | `currency_*` | P&L do símbolo na moeda de lucro, convertido para a **moeda da conta** |
+| `modo_calculo` | `trade_calc_mode` (MT4: `MODE_PROFITCALCMODE`) | `forex`/`cfd`/`futuros`/`bolsa` |
+| `swap_long/short`, `swap_modo`, `swap_dia_triplo` | `swap_*`, `swap_rollover3days` (MT4: `MODE_SWAP*`, `SYMBOL_SWAP_ROLLOVER3DAYS`) | swap só se a posição atravessar o rollover (o day trade zera antes) |
+| `comissao_lote_lado` | **não informado pelo terminal** | por 1,0 lote e por lado, na moeda de lucro: **a confirmar com a corretora** |
+| `simbolo_corretora` | nome exato (ex.: `EURUSD.m`) | sufixo da corretora |
+
+Mercados da corretora não têm tarifa de bolsa: custo = **spread** (já no preço: compra no ask, venda no bid) +
+**comissão por lote** + **swap** (se atravessar o rollover). Tributação fora do regime brasileiro de day trade: **não
+calculada**. Bolsas/corretora em `config/bolsas.toml`: `FOREX` (24x5: domingo 17:00 a sexta 17:00
+`America/New_York`, pausa de rollover 16:55–17:05 configurável, `dias_fechados` MM-DD), `CFD` (24x5 com pausa diária
+17:00–18:00) e `CRIPTO` (24x7 em UTC, rollover 00:00). Todos modelos `a_confirmar = true`.
+
+**Gerar o perfil a partir do terminal** (nada é inventado; sempre `a_confirmar = true` com `fonte` = terminal,
+corretora, servidor e data):
+
+```
+uv run robowin perfil importar-do-terminal EURUSD                    # MT5 real (Windows)
+uv run robowin perfil importar-do-terminal EURUSD --plataforma mt4   # MT4 via EA
+uv run robowin perfil importar-do-terminal XAUUSD --duble --so-mostrar   # ensaio no duble (fonte rotulada DUBLE)
+uv run robowin perfil confirmar EURUSD --responsavel "<seu nome>" --fonte "<fonte>" --comparar-terminal
+```
+
+Sufixo: o nome exato vence; senão `[mt5].sufixo_simbolo` (`config/robowin.toml`) ou `--sufixo`; senão a única
+decoração aceitável (`EURUSD.m`, `EURUSDpro`, `m.EURUSD`); ambíguo ⇒ recusa listando os candidatos. Os limites em
+ticks (stop máximo, folga, stop/alvo padrão) são decisão sua: sem `--stop-max-ticks` etc. saem como PLACEHOLDER
+(múltiplos do spread lido), marcados em `a_confirmar_itens`. Perfil existente só é trocado com `--substituir`.
+
+**Dados sem negócios:** forex/CFD/cripto na corretora só têm cotações bid/ask (sem `last`, sem agressor). O armazém
+grava esses ticks normalmente; o "volume" do MT é **volume de tick** (contagem de cotações), exposto como a feature
+`volume_tick_30s`; fluxo do agressor e volume negociado ficam **desligados por capacidade do instrumento** (NaN, nunca
+inventados), e as de livro quando `aceita_book = false`. O simulador, sem negócios, dispara stops e preenche
+limitadas pela **cotação** (bid/ask), não por `last`.
+
+**Moeda da conta:** P&L, custos e limites de risco estão na **moeda da conta**. Quando o lucro do símbolo está em
+outra moeda (EURUSD em conta BRL; USDJPY em conta USD), o fator vem da cotação do par de conversão lida **no mesmo
+instante** (`core/moedas.py`: direto `USDBRL`, inverso `1/USDBRL` ou por intermediária `1/USDJPY × USDBRL`, com o
+sufixo da corretora); cotação ausente, inválida ou velha ⇒ **entradas bloqueadas** (`sem_cotacao_conversao:USD->BRL`).
+Saídas nunca são bloqueadas (usam a última cotação válida, registrada). No backtest, `ConversorHistorico` usa os ticks
+gravados do par sem olhar o futuro. A simulação sintética (`simular`) apura na moeda de lucro do símbolo (não há conta).
 
 ## MT4 (ponte EA) — plataforma alternativa
 `[mt5].plataforma = "mt5" | "mt4"` em `config/robowin.toml`, ou `--plataforma` em `diagnostico`, `gateway`,

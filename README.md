@@ -69,13 +69,30 @@ contaminação). Os testes rodam sem chave e sem rede. Passo a passo: [docs/09-m
 - **Bolsa:** cada ativo aponta para uma bolsa de `config/bolsas.toml` (`bolsa = "B3"`; fuso, calendário do
   exchange-calendars, sessões versionadas, moeda, modelo de tarifas, limite de oscilação, regime tributário).
   Só a B3 está preenchida; NYSE, NASDAQ, LSE e CME são modelos `a_confirmar` que bloqueiam a operação.
-- **Moeda:** P&L, custos e limites de risco estão na moeda do instrumento (os campos `*_brl` valem "na moeda do
-  instrumento"); conversão só com taxa fornecida (`core.bolsas.converter`); o orçamento de IA segue em USD
+- **Moeda:** P&L, custos e limites de risco estão na moeda da conta (os campos `*_brl` valem "na moeda do
+  instrumento/conta"); conversão só pela cotação do par lida no instante (`core.moedas`; nunca taxa fixa); o orçamento de IA segue em USD
   (faturamento da API). Imposto só no regime brasileiro; nas outras bolsas o relatório diz "tributo nao calculado".
 - **Troca segura:** exige posição zerada; modelos treinados, registro e orçamento guardam o `ativo` e são
   recusados em outro ativo; o manifesto do experimento inclui o ativo e o hash do perfil. Ativo diferente do
   aprovado parte de limites mínimos (`risco_nao_aprovado`) até existir `config/risco-<ativo>.toml` com
   aprovação por hash em `config/aprovacoes/risco-<ativo>.toml`; ao vivo, sem isso, recusa.
+
+## Qualquer mercado (forex, metais, CFD, cripto)
+Além da B3, o robô opera em **simulação/DEMO** qualquer símbolo que a corretora ofereça no MT4/MT5: forex (EURUSD,
+USDJPY), metais (XAUUSD), CFD de índice/ação (US500), commodities, cripto 24x7 (BTCUSD). Gere o perfil do seu
+terminal (sempre `a_confirmar`), confira e confirme:
+
+```
+uv run robowin perfil importar-do-terminal EURUSD [--plataforma mt4] [--sufixo .m]
+uv run robowin perfil confirmar EURUSD --responsavel "<seu nome>" --fonte "<fonte>" --comparar-terminal
+uv run robowin simular --ativo EURUSD                     # sintetico
+uv run robowin diagnostico --duble --ativo EURUSD         # ensaio contra o duble
+```
+
+Lote fracionário (a unidade do robô é o lote mínimo), P&L e risco na moeda da conta (conversão pela cotação do
+instante; sem cotação, entradas bloqueadas), custos de corretora (spread, comissão por lote, swap só se atravessar o
+rollover; sem tarifa de bolsa), sessão 24x5/24x7 com pausa de rollover, tributação fora do Brasil não calculada.
+Detalhes: `docs/03-dados-integracoes-infra.md` e `docs/07-risco-e-operacao.md`.
 
 **Limites de risco por usuário e por conta.** Os valores de `config/risco.toml` (R$ 60/operação, R$ 200/dia,
 R$ 500/semana, drawdown R$ 1.500, 1 contrato) são a aprovação **provisória do titular, somente DEMO**, e não são padrão

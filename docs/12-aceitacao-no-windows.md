@@ -126,6 +126,17 @@ uv run robowin perfil confirmar bolsa:NYSE --responsavel "Seu Nome" --fonte "sit
 - **Uso não interativo** (script seu, já revisado): `--sim-eu-aprovo` no risco e `--confirmo <SIMBOLO>` no perfil
   equivalem à confirmação digitada. Confirmação errada => nada muda e o código de saída é `1`.
 
+
+## Outro mercado (forex, CFD, metal, cripto) na aceitação
+1. Gere o perfil a partir do **seu** terminal: `uv run robowin perfil importar-do-terminal EURUSD` (MT4:
+   `--plataforma mt4`; sufixo da corretora: `[mt5].sufixo_simbolo` ou `--sufixo .m`). Ele grava `a_confirmar = true`.
+2. Defina comissão por lote (`comissao_lote_lado`) e os limites em ticks; confira a sessão `FOREX`/`CFD`/`CRIPTO` em
+   `config/bolsas.toml` com o horário do servidor; confirme o perfil e a bolsa (`robowin perfil confirmar EURUSD
+   --comparar-terminal` e `robowin perfil confirmar bolsa:FOREX`).
+3. Rode `uv run robowin diagnostico --ativo EURUSD` e `uv run robowin aceitacao --ativo EURUSD --confirmo-conta-demo`
+   (ensaio sem terminal: acrescente `--duble`). As ordens de teste usam **1 lote mínimo** (0,01). A4.1 aprova só
+   com cotações (o forex não tem negócios públicos) e A4.3 fica "não aplicável" sem livro. Conta em moeda diferente
+   da de lucro (ex.: conta BRL operando EURUSD) exige o par de conversão cotado na corretora (A2.4).
 ## O que cada etapa faz e mede
 
 | Etapa | O que faz | Aprovada quando | Vira NÃO VERIFICÁVEL quando |
