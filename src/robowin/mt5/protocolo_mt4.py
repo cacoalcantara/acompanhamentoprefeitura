@@ -47,6 +47,9 @@ ERRO_CONTA_NAO_DEMO = 1006
 ERRO_SOMENTE_LEITURA = 1007
 ERRO_COMANDO_DESCONHECIDO = 1008
 ERRO_SLTP_FALHOU_POSICAO_FECHADA = 1009  # SL/TP nao foi aceito apos abrir; a posicao foi fechada por seguranca
+ERRO_TOKEN = 1010  # token ausente/errado (EA com input Token preenchido)
+ERRO_LIMITE_POSICOES = 1011  # posicoes + pendentes do simbolo/magic ja no maximo (input MaxPosicoes do EA)
+ERRO_MAGIC = 1012  # ticket (ou ordem) de magic fora dos permitidos (input Magics do EA)
 ERRO_INTERNO = 1099
 
 # --- MQL4 GetLastError() relevantes --------------------------------------------------------------------
@@ -106,6 +109,7 @@ def retcode_de_erro(codigo: int) -> int:
         ERRO_TICKET: C.RET_POSICAO_FECHADA, ERRO_SIMBOLO: C.RET_INVALIDO, ERRO_ARGUMENTO: C.RET_INVALIDO,
         ERRO_CONTA_NAO_DEMO: C.RET_TRADE_DESABILITADO, ERRO_SOMENTE_LEITURA: C.RET_TRADE_DESABILITADO,
         ERRO_SLTP_FALHOU_POSICAO_FECHADA: C.RET_STOPS_INVALIDOS,
+        ERRO_TOKEN: C.RET_TRADE_DESABILITADO, ERRO_LIMITE_POSICOES: C.RET_REJEITADO, ERRO_MAGIC: C.RET_REJEITADO,
     }
     return tabela.get(int(codigo), C.RET_ERRO)
 

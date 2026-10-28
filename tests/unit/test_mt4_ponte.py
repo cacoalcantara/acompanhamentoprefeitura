@@ -5,6 +5,7 @@ import time
 
 import numpy as np
 import pytest
+from perfis_teste import WIN
 from test_mt4_comum import LOGIN, SERVIDOR4, SIMB, T0_MS, cmd, montar_exec4, montar_mt4
 
 from robowin.core.protocolos import TerminalMT5
@@ -315,3 +316,45 @@ def test_zeromq_sem_servidor_retorna_none_sem_travar():
     con = ConectorMT4("tcp://127.0.0.1:59999", timeout_ms=100)
     assert con.initialize() is False and con.account_info() is None
     con.shutdown()
+
+
+# --- defesa em profundidade do EA (espelhada no duble): token, MaxPosicoes, Magics ------------------------------
+REQ_ABRIR = {"action": C.ACAO_DEAL, "symbol": SIMB, "volume": 1.0, "type": C.ORDEM_BUY, "price": 100005.0, "magic": 7}
+
+
+def test_token_do_ea_exige_tk_nos_pedidos(monkeypatch):
+    monkeypatch.delenv("ROBOWIN_MT4_TOKEN", raising=False)
+    from test_mt4_comum import _espec_mt4, especificacao
+    from test_mt5_comum import ticks_planos
+
+    from robowin.core.relogio import RelogioSimulado
+    from robowin.mt5.conector_mt4 import TransporteLocal
+    from robowin.mt5.duble_mt4 import DubleMT4
+    d = DubleMT4(RelogioSimulado(T0_MS * 1_000_000), token="segredo")
+    d.adicionar_simbolo(_espec_mt4(especificacao(WIN, SIMB, 0)), ticks_planos(3000))
+    con = ConectorMT4(transporte=TransporteLocal(d))
+    assert not con.initialize()  # sem token o 'ola' e recusado
+    com = ConectorMT4(transporte=TransporteLocal(d), token="segredo")
+    assert com.initialize() and com.account_info() is not None
+    monkeypatch.setenv("ROBOWIN_MT4_TOKEN", "segredo")  # variavel de ambiente tambem vale
+    assert ConectorMT4(transporte=TransporteLocal(d)).initialize()
+    r = d.processar({"v": 1, "id": "x", "cmd": "ordem_abrir", "args": {}, "tk": "errado"})
+    assert r["erro"]["codigo"] == P.ERRO_TOKEN
+
+
+def test_ea_limita_posicoes_mais_pendentes_por_simbolo_magic():
+    d, con, _ = montar_mt4(max_posicoes=1)
+    assert con.order_send(dict(REQ_ABRIR)).retcode == C.RET_EXECUTADA
+    res = con.order_send(dict(REQ_ABRIR, type=C.ORDEM_SELL, price=100000.0))  # liquido 0 seria o par hedging
+    assert res.retcode != C.RET_EXECUTADA and "1011" in res.comment and len(d.posicoes) == 1
+    assert con.order_send(dict(REQ_ABRIR, magic=8)).retcode == C.RET_EXECUTADA  # outro magic nao conta
+
+
+def test_ea_rejeita_magic_fora_da_lista_ao_abrir_fechar_e_modificar():
+    d, con, _ = montar_mt4(magics_permitidos=(7,))
+    manual = d.operar_manual(C.POS_COMPRA, 1.0, SIMB)  # magic 0, fora da ponte
+    for r in (d.processar(P.requisicao("a", P.CMD_ORDEM_FECHAR, {"ticket": manual})),
+              d.processar(P.requisicao("b", P.CMD_ORDEM_MODIFICAR, {"ticket": manual, "sl": 0.0, "tp": 0.0}))):
+        assert r["ok"] is False and r["erro"]["codigo"] == P.ERRO_MAGIC
+    assert manual in d.posicoes
+    assert "1012" in con.order_send(dict(REQ_ABRIR, magic=9)).comment

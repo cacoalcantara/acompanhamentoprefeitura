@@ -61,7 +61,9 @@ class DubleMT4:
 
     def __init__(self, relogio: Relogio | None = None, *, login: int = 900001, servidor: str = "BROKERMT4-Demo",
                  demo: bool = True, offset_servidor_s: int = 10800, capacidade_ring: int = 20000,
-                 slippage_pontos: float = 0.0, margem_por_lote: float = 0.0) -> None:
+                 slippage_pontos: float = 0.0, margem_por_lote: float = 0.0, token: str = "",
+                 max_posicoes: int = 0, magics_permitidos: tuple[int, ...] = ()) -> None:
+        self.token, self.max_posicoes, self.magics_permitidos = token, int(max_posicoes), tuple(magics_permitidos)
         self.relogio = relogio or RelogioReal()
         self.offset_ms = int(offset_servidor_s) * 1000
         self.slippage = slippage_pontos
@@ -259,6 +261,8 @@ class DubleMT4:
             id_ = str(msg.get("id", ""))
             cmd = str(msg.get("cmd", ""))
             self.comandos.append({"cmd": cmd, "args": dict(msg.get("args") or {})})
+            if self.token and msg.get("tk") != self.token:  # como o EA com input Token preenchido
+                return P.resposta_erro(id_, P.ERRO_TOKEN, "token ausente ou invalido")
             if msg.get("v") != P.VERSAO_PROTOCOLO:
                 return P.resposta_erro(id_, P.ERRO_VERSAO, f"versao {msg.get('v')} nao suportada")
             if cmd not in P.COMANDOS:
@@ -369,6 +373,9 @@ class DubleMT4:
             return self._erro(id_, P.ERRO_SOMENTE_LEITURA, "EA em modo somente leitura", "ponte")
         if not c.expert or not c.trade_allowed:
             return self._erro(id_, P.M4_TRADE_NAO_PERMITIDO, "trade nao permitido (AutoTrading/EA)")
+        bad = self._defesa_ea(id_, cmd, a)  # limites do EA (defesa em profundidade, espelham o mq4)
+        if bad is not None:
+            return bad
         if cmd == P.CMD_ORDEM_ABRIR:
             r = self._cmd_abrir(id_, a)
         elif cmd == P.CMD_ORDEM_FECHAR:
@@ -380,6 +387,23 @@ class DubleMT4:
         if r["ok"]:
             self.envios.append({"cmd": cmd, "args": dict(a)})
         return r
+
+    def _defesa_ea(self, id_: str, cmd: str, a: dict[str, Any]) -> dict[str, Any] | None:
+        if cmd == P.CMD_ORDEM_ABRIR:
+            magic = int(a.get("magic", 0))
+            if self.magics_permitidos and magic not in self.magics_permitidos:
+                return self._erro(id_, P.ERRO_MAGIC, f"magic {magic} nao permitido", "ponte")
+            if self.max_posicoes > 0:
+                sym = str(a.get("simbolo", ""))
+                n = sum(1 for o in (*self.posicoes.values(), *self.pendentes.values())
+                        if o["simbolo"] == sym and int(o["magic"]) == magic)
+                if n >= self.max_posicoes:
+                    return self._erro(id_, P.ERRO_LIMITE_POSICOES, f"{n} posicoes+pendentes em {sym}/magic {magic} (max {self.max_posicoes})", "ponte")
+        elif self.magics_permitidos:
+            o = self.posicoes.get(int(a.get("ticket", 0))) or self.pendentes.get(int(a.get("ticket", 0)))
+            if o is not None and int(o["magic"]) not in self.magics_permitidos:
+                return self._erro(id_, P.ERRO_MAGIC, f"ticket de magic {o['magic']} nao permitido", "ponte")
+        return None
 
     def _validar_abertura(self, id_: str, a: dict[str, Any]) -> dict[str, Any] | None:
         sym = str(a.get("simbolo", ""))

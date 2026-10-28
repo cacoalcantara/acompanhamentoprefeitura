@@ -15,7 +15,7 @@
   (DLL). Exige "Permitir importação de DLL". Arquivos/named pipe não foram implementados.
 
 ## Envelope
-Requisição: `{"v":1,"id":"<texto único>","cmd":"<comando>","args":{...}}`
+Requisição: `{"v":1,"id":"<texto único>","cmd":"<comando>","args":{...}}` (+ `"tk":"<token>"` quando o EA tem o input `Token`)
 
 Resposta ok: `{"v":1,"id":"<mesmo id>","ok":true,"dados":{...}}`
 
@@ -32,7 +32,7 @@ inválido, 132 mercado fechado, 133 negociação desabilitada, 134 sem margem, 1
 
 `origem: "ponte"` (códigos ≥ 1000): 1001 JSON inválido, 1002 argumento inválido, 1003 versão, 1004 símbolo
 desconhecido/sem buffer, 1005 ticket, **1006 conta não DEMO (todas as ordens recusadas)**, 1007 EA em
-`SomenteLeitura`, 1008 comando desconhecido, 1009 SL/TP recusado após abrir (a posição foi fechada por segurança).
+`SomenteLeitura`, 1008 comando desconhecido, 1009 SL/TP recusado após abrir (a posição foi fechada por segurança), **1010 token ausente/inválido**, **1011 limite de posições+pendentes por símbolo/magic (`MaxPosicoes`)**, **1012 magic fora de `Magics`**.
 
 Conversão para `retcode` do MT5 (cliente Python, `protocolo_mt4.retcode_de_erro`): 138/135/136/137 → 10004
 (requote); 129 → 10015; 130/145 → 10016; 131/4051 → 10014; 132 → 10018; 133/64/65 → 10017; 134 → 10019; 8/141/146 →
@@ -87,6 +87,16 @@ manual (CLIENT).
 - Sem retentativa no EA: erro ⇒ resposta de erro; quem decide é o robô.
 
 ## Segurança
+Defesa em profundidade no EA (o Python também confere; o `.mq4` continua **NÃO compilado/verificado em MT4 real**):
+- `MaxPosicoes` (padrão 1): `ordem_abrir` é recusada (1011) se posições abertas + pendentes do símbolo/magic já
+  estiverem no máximo.
+- `Magics` (lista separada por vírgula; vazio = sem filtro, não recomendado): `ordem_abrir` só aceita esses magics;
+  `ordem_fechar`/`ordem_modificar`/`ordem_apagar` recusam (1012) ticket cujo magic não esteja na lista (posição
+  manual, magic 0, nunca é tocada pela ponte).
+- `Token` (opcional): se preenchido, **todo** pedido precisa trazer `tk` igual (1010). O cliente Python envia
+  `[mt5].mt4_token` ou a variável `ROBOWIN_MT4_TOKEN`. É segredo compartilhado simples, não criptografia: o
+  transporte continua restrito a 127.0.0.1.
+
 Ordens só em conta DEMO (EA e cliente conferem, `IsDemo()`); o cliente trata qualquer conta não demo como
 real. `trade_mode`/`margin_mode` do `account_info` são derivados: demo ⇒ `demo`, senão `real`; margem sempre
 `RETAIL_HEDGING`. O `order_check` do cliente é **simulado localmente** (volume, passo, nível de stop, margem

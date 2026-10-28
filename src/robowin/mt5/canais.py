@@ -5,16 +5,62 @@ Mensagens sao dicts JSON com `tipo` e `id` (correlacao). O lado do gateway imple
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import queue
 import time
 import uuid
 from collections.abc import Callable
 from typing import Any
 
+VAR_TOKEN = "ROBOWIN_CMD_TOKEN"
+
+
+class BindInseguro(RuntimeError):
+    """O canal de comandos (ordem/emergencia/rearmar) nao pode escutar fora do loopback sem token compartilhado."""
+
 
 def _novo_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def token_do_ambiente() -> str:
+    return os.environ.get(VAR_TOKEN, "").strip()
+
+
+def endereco_local(endereco: str) -> bool:
+    """True se o endereco so e alcancavel nesta maquina: 127.0.0.1 / localhost / ::1 / ipc / inproc."""
+    esquema, _, resto = endereco.partition("://")
+    if esquema in ("ipc", "inproc"):
+        return True
+    host = resto.rsplit(":", 1)[0].strip("[]")
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def exigir_bind_seguro(endereco: str, token: str = "") -> None:
+    if not endereco_local(endereco) and not token:
+        raise BindInseguro(f"canal de comandos em '{endereco}' (fora de 127.0.0.1/localhost/ipc) exige token compartilhado: "
+                           f"defina {VAR_TOKEN} no gateway e nos clientes, ou use tcp://127.0.0.1:porta")
+
+
+def assinatura(msg: dict[str, Any], token: str) -> str:
+    corpo = json.dumps({k: v for k, v in msg.items() if k != "token"}, sort_keys=True, separators=(",", ":"), default=str)
+    return hmac.new(token.encode(), corpo.encode(), hashlib.sha256).hexdigest()
+
+
+def assinar(msg: dict[str, Any], token: str | None = None) -> dict[str, Any]:
+    """Copia de `msg` com o campo `token` (HMAC-SHA256 do conteudo); sem token configurado devolve a copia sem assinar."""
+    tk = token_do_ambiente() if token is None else token
+    out = dict(msg)
+    if tk:
+        out["token"] = assinatura(out, tk)
+    return out
+
+
+def token_valido(msg: dict[str, Any], token: str) -> bool:
+    return hmac.compare_digest(str(msg.get("token", "")), assinatura(msg, token))
 
 
 class CanalComandosLocal:
@@ -48,7 +94,7 @@ class ClienteLocal:
         self.canal._resp.setdefault(ident, queue.Queue())
 
     def enviar_sem_resposta(self, msg: dict[str, Any]) -> None:
-        self.canal._q.put((self.ident, dict(msg)))
+        self.canal._q.put((self.ident, assinar(msg)))
 
     def enviar(self, msg: dict[str, Any], timeout_s: float = 5.0,
                bombear: Callable[[], None] | None = None) -> dict[str, Any] | None:
@@ -71,7 +117,8 @@ class ClienteLocal:
 class CanalComandosZMQ:
     """Lado gateway: ROUTER."""
 
-    def __init__(self, endereco: str) -> None:
+    def __init__(self, endereco: str, token: str | None = None) -> None:
+        exigir_bind_seguro(endereco, token_do_ambiente() if token is None else token)
         import zmq
         self._ctx = zmq.Context.instance()
         self._s = self._ctx.socket(zmq.ROUTER)
@@ -103,7 +150,7 @@ class ClienteComandosZMQ:
         self._s.connect(endereco)
 
     def enviar_sem_resposta(self, msg: dict[str, Any]) -> None:
-        self._s.send(json.dumps(msg, default=str).encode())
+        self._s.send(json.dumps(assinar(msg), default=str).encode())
 
     def enviar(self, msg: dict[str, Any], timeout_s: float = 5.0) -> dict[str, Any] | None:
         msg = {"id": _novo_id(), **msg}

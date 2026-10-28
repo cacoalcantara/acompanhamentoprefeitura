@@ -108,10 +108,18 @@ class Reconciliador:
 
         # 1) posicoes por braco (liquido assinado) e posicoes de origem desconhecida
         liquido_term: dict[int, int] = {}
+        tickets_por_magic: dict[int, list[int]] = {}
         for p in posicoes:
             mg = int(_g(p, "magic"))
+            tickets_por_magic.setdefault(mg, []).append(int(_g(p, "ticket")))
             sinal = 1 if int(_g(p, "type")) == DEAL_TYPE_BUY else -1
             liquido_term[mg] = liquido_term.get(mg, 0) + sinal * int(_g(p, "volume"))
+        # hedging: compra+venda do mesmo magic somam liquido 0 mas sao DUAS posicoes (por ticket); o robo opera no maximo
+        # uma por simbolo/magic, entao mais de uma posicao e divergencia (em netting nunca ocorre)
+        for mg, tks in sorted(tickets_por_magic.items()):
+            if len(tks) > 1:
+                div.append(Divergencia(tipo="posicoes_multiplas", braco=braco_de.get(mg, ""),
+                                       detalhe=f"magic={mg} {len(tks)} posicoes (tickets {sorted(tks)}); liquido={liquido_term[mg]}"))
         for mg, q in liquido_term.items():
             if mg not in braco_de and q != 0:
                 div.append(Divergencia(tipo="posicao_externa", detalhe=f"magic={mg} liquido={q}"))

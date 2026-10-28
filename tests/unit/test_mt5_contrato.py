@@ -104,6 +104,26 @@ def test_validar_especificacoes_lista_divergencias():
     assert len(validar_especificacoes(ruim, ESPEC)) == 1  # tick diverge; valor do ponto (0,20) confere
 
 
+def test_moeda_divergente_ou_ausente_recusa():
+    e = especificacao_win("WINZ26")
+    assert validar_especificacoes(e, ESPEC, moeda_conta="BRL") == []
+    assert any("moeda da conta" in m for m in validar_especificacoes(e, ESPEC, moeda_conta="USD"))
+    assert any("nao informada" in m for m in validar_especificacoes(e, ESPEC, moeda_conta=""))
+    e.currency_profit = "USD"
+    assert any("currency_profit" in m for m in validar_especificacoes(e, ESPEC, moeda_conta="BRL"))
+    e.currency_profit = ""
+    assert any("nao confirmada" in m for m in validar_especificacoes(e, ESPEC, moeda_conta="BRL"))
+
+
+def test_resolver_contrato_recusa_conta_em_outra_moeda():
+    d = criar_duble_padrao()
+    d.initialize()
+    real = d.account_info
+    d.account_info = lambda: NS(**{**vars(real()), "currency": "USD"})
+    with pytest.raises(ContratoRecusado, match="moeda da conta"):
+        resolver_contrato(d, dt.date(2026, 10, 27), WIN)
+
+
 def test_preenchimento_lido_do_simbolo():
     e = especificacao_win("WINZ26")
     assert preenchimento_do_simbolo(e) == C.PREENCHE_IOC

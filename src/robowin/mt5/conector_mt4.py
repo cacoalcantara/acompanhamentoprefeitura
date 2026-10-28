@@ -23,6 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import fnmatch
 import itertools
+import os
 import threading
 import time
 import uuid
@@ -156,8 +157,10 @@ class ConectorMT4:
     suporta_backfill = False  # sem historico de ticks: lacuna so BLOQUEIA entradas
 
     def __init__(self, endereco: str = "tcp://127.0.0.1:5560", timeout_ms: int = 1500,
-                 transporte: Transporte | None = None, ttl_spec_s: float = 5) -> None:
+                 transporte: Transporte | None = None, ttl_spec_s: float = 5, token: str | None = None) -> None:
         self.endereco = endereco
+        # token compartilhado com o input Token do EA (opcional): [mt5].mt4_token ou ROBOWIN_MT4_TOKEN
+        self._token = (os.environ.get("ROBOWIN_MT4_TOKEN", "") if token is None else token).strip()
         self._tr: Transporte = transporte if transporte is not None else TransporteZMQ(endereco, timeout_ms)
         self._ttl_spec_s = ttl_spec_s
         self._pref = uuid.uuid4().hex[:8]
@@ -186,7 +189,10 @@ class ConectorMT4:
         with self._lock:
             for _ in range(tentativas):
                 id_ = f"{self._pref}-{next(self._n)}"
-                bruto = self._tr.requisitar(P.codificar(P.requisicao(id_, cmd, args)))
+                req = P.requisicao(id_, cmd, args)
+                if self._token:
+                    req["tk"] = self._token
+                bruto = self._tr.requisitar(P.codificar(req))
                 if bruto is None:
                     self.falhas_transporte += 1
                     self._ultimo_erro = C.ERR_SEM_CONEXAO

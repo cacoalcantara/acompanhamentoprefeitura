@@ -26,6 +26,7 @@ from robowin.core.relogio import Relogio, RelogioReal
 from robowin.core.tipos import AckOrdem, ComandoOrdem
 
 from . import constantes as C
+from .canais import exigir_bind_seguro, token_do_ambiente, token_valido
 from .capacidades import capacidades_do_terminal, features_desligadas, normalizar_plataforma
 from .coleta import ColetorLivro, ColetorTicks, LogBruto
 from .consultas import posicoes_publicas, snapshot_terminal
@@ -95,6 +96,7 @@ class Gateway:
         self.relogio = relogio or RelogioReal()
         self.pub = publicador if publicador is not None else BarramentoLocal()
         self.canal = canal
+        self._token = token_do_ambiente()  # ROBOWIN_CMD_TOKEN: se definido, TODO comando precisa vir assinado (HMAC)
         self.resolucao: ResolucaoContrato | None = None
         self.rs = RelogioServidor()
         self.executor: ExecucaoDemo
@@ -236,6 +238,9 @@ class Gateway:
 
     def tratar(self, msg: dict[str, Any]) -> dict[str, Any] | None:
         tipo = msg.get("tipo")
+        if self._token and not token_valido(msg, self._token):  # ordem, emergencia, rearmar e parar passam pelo mesmo token
+            self._alerta("comando_sem_token", {"tipo": str(tipo)})
+            return {"tipo": "erro", "id": msg.get("id"), "erro": "token invalido ou ausente"}
         if tipo == "heartbeat":
             self.guardiao.heartbeat()
             return None
@@ -418,6 +423,7 @@ def rodar_gateway_zmq(fabrica_terminal: Callable[[], Any], cfg: ConfigGateway, e
     from robowin.core.barramento import PublicadorZMQ
 
     from .canais import CanalComandosZMQ
+    exigir_bind_seguro(end_cmd, token_do_ambiente())  # fora do loopback so com token (levanta BindInseguro)
     terminal = fabrica_terminal()
     gw = Gateway(terminal, cfg, relogio, PublicadorZMQ(end_pub), CanalComandosZMQ(end_cmd))
     for nome, end in (("pub", end_pub), ("cmd", end_cmd)):

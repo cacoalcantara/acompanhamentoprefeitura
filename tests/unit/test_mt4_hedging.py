@@ -241,6 +241,15 @@ def test_guardiao_classifica_deals_do_mt4_e_bloqueia_por_intervencao_manual():
     assert g.classificacao["manual"] == 2  # a saida fora da ponte (magic 0) tambem e manual
 
 
+def test_guardiao_hedging_detecta_par_compra_venda_de_liquido_zero():
+    a, g = montar_guardiao4()
+    a.d.operar_manual(C.POS_COMPRA, 1.0, SIMB)
+    a.d.operar_manual(C.POS_VENDA, 1.0, SIMB)  # liquido 0, mas DUAS posicoes (mesmo magic 0)
+    a.rel.avancar(1_000_000_000)
+    g.reconciliar()
+    assert any(b.startswith("divergencia") for b in g.estado()["bloqueios"])
+
+
 def test_servidor_de_netting_continua_recusando_hedging_e_vice_versa():
     a = montar_exec(cfg_extra={"conta": "hedging"})
     from robowin.mt5.execucao_demo import GuardaDemoViolada

@@ -285,6 +285,13 @@ class Guardiao:
                 self._bloquear("reconciliacao", "terminal sem resposta a positions/orders/deals", persistente=False)
             return {"ok": False}
         self._falhas_reconc = 0
+        if self.ex.hedging:  # par compra+venda (liquido 0) continua sendo duas posicoes: conta por TICKET
+            por_chave: dict[tuple[str, int], list[int]] = {}
+            for p in ps:
+                por_chave.setdefault((str(p.symbol), int(p.magic)), []).append(int(p.ticket))
+            for (sim, mg), tks in por_chave.items():
+                if len(tks) > 1:
+                    self._bloquear("divergencia", f"hedging: {len(tks)} posicoes em {sim}/magic {mg} (tickets {sorted(tks)})")
         novos: list[dict[str, Any]] = []
         for d in deals:
             if int(d.type) not in (C.DEAL_COMPRA, C.DEAL_VENDA) or int(d.ticket) in self._deals_vistos:

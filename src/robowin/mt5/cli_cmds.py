@@ -224,7 +224,8 @@ def _terminal(args: argparse.Namespace, cfg: dict[str, Any], relogio: Relogio) -
             from .duble_mt4 import ServidorDubleMT4, criar_duble_mt4_padrao
             srv = ServidorDubleMT4(criar_duble_mt4_padrao(relogio, n_ticks=int(getattr(args, "ticks_duble", 6000))))
             return ConectorMT4(srv.iniciar())
-        return ConectorMT4(getattr(args, "mt4_endereco", None) or cfg.get("mt4_endereco") or "tcp://127.0.0.1:5560")
+        return ConectorMT4(getattr(args, "mt4_endereco", None) or cfg.get("mt4_endereco") or "tcp://127.0.0.1:5560",
+                           token=str(cfg.get("mt4_token") or "") or None)  # None => variavel ROBOWIN_MT4_TOKEN
     if args.duble:
         from .duble import criar_duble_padrao
         return criar_duble_padrao(relogio, n_ticks=int(getattr(args, "ticks_duble", 6000)))

@@ -21,6 +21,11 @@
 //  modificar, apagar).
 //
 //  Seguranca (defesa em profundidade; o Python tambem confere):
+//   - MaxPosicoes (padrao 1): ordem_abrir e recusada (1011) se ja houver
+//     posicoes + pendentes >= MaxPosicoes no simbolo/magic da ordem.
+//   - Magics: se preenchido, ordem_abrir/fechar/modificar/apagar so aceitam
+//     esses magics (1012); fechar/modificar/apagar conferem o magic do TICKET.
+//   - Token (opcional): se preenchido, todo pedido precisa trazer "tk" igual (1010).
 //   - ORDENS SO EM CONTA DEMO (IsDemo()). Em conta real todo comando de
 //     ordem devolve erro 1006; nao existe parametro para desligar isso.
 //   - SomenteLeitura=true recusa qualquer ordem (erro 1007).
@@ -56,6 +61,9 @@ input bool   SomenteLeitura = false; // true = recusa todas as ordens
 input bool   SltpEmSeguida  = false; // true = abre sem SL/TP e aplica em seguida (corretoras ECN/market execution)
 input int    TimerMs        = 5;     // intervalo do temporizador em ms
 input int    MaxDesvio      = 50;    // teto do desvio (slippage) aceito por ordem, em pontos
+input int    MaxPosicoes    = 1;     // maximo de posicoes + pendentes por simbolo/magic (0 = sem limite; NAO recomendado)
+input string Magics         = "";    // magics aceitos (ordem_abrir/fechar/modificar/apagar), separados por virgula; vazio = sem filtro
+input string Token          = "";    // se preenchido, todo pedido precisa trazer "tk" igual (mesmo valor em [mt5].mt4_token / ROBOWIN_MT4_TOKEN)
 
 //--- constantes do protocolo
 #define VERSAO_PROTOCOLO   1
@@ -75,6 +83,9 @@ input int    MaxDesvio      = 50;    // teto do desvio (slippage) aceito por ord
 #define ERRO_SOMENTE_LEITURA 1007
 #define ERRO_COMANDO       1008
 #define ERRO_SLTP_FECHADA  1009
+#define ERRO_TOKEN         1010
+#define ERRO_LIMITE        1011
+#define ERRO_MAGIC         1012
 
 //--- estado global
 Context g_ctx("RobowinBridge");
@@ -558,6 +569,42 @@ string ChecarPodeOperar(const string id)
    return("");
   }
 
+//--- defesa em profundidade: magic aceito? (Magics vazio = sem filtro)
+bool MagicPermitido(const int magic)
+  {
+   if(StringLen(Magics) == 0)
+      return(true);
+   string partes[];
+   int n = StringSplit(Magics, ',', partes);
+   for(int i = 0; i < n; i++)
+      if((int)StringToInteger(partes[i]) == magic)
+         return(true);
+   return(false);
+  }
+
+//--- posicoes abertas + pendentes do simbolo/magic
+int ContarSimboloMagic(const string sym, const int magic)
+  {
+   int c = 0;
+   int n = OrdersTotal();
+   for(int i = 0; i < n; i++)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+      if(OrderSymbol() == sym && OrderMagicNumber() == magic)
+         c++;
+     }
+   return(c);
+  }
+
+//--- ticket ja selecionado (OrderSelect): devolve "" se o magic dele e aceito; senao o JSON de erro
+string ChecarMagicDoTicket(const string id)
+  {
+   if(!MagicPermitido(OrderMagicNumber()))
+      return(ErrJson(id, ERRO_MAGIC, "ticket de magic " + IntegerToString(OrderMagicNumber()) + " fora de Magics", "ponte"));
+   return("");
+  }
+
 double PrecoMercado(const string sym, const int tipo)
   {
    RefreshRates();
@@ -587,6 +634,11 @@ string CmdOrdemAbrir(const string id, const string req)
    if(desvio > MaxDesvio)
       desvio = MaxDesvio;
    int magic = (int)JNum(req, "magic", 0.0);
+   if(!MagicPermitido(magic))
+      return(ErrJson(id, ERRO_MAGIC, "magic " + IntegerToString(magic) + " fora de Magics", "ponte"));
+   if(MaxPosicoes > 0 && ContarSimboloMagic(sym, magic) >= MaxPosicoes)
+      return(ErrJson(id, ERRO_LIMITE, "posicoes+pendentes de " + sym + "/magic " + IntegerToString(magic) + " ja no maximo (" +
+                     IntegerToString(MaxPosicoes) + ")", "ponte"));
    string com = JStr(req, "comentario");
    datetime expira = 0;
    if(tipo >= OP_BUYLIMIT)
@@ -662,6 +714,9 @@ string CmdOrdemFechar(const string id, const string req)
    int tipo = OrderType();
    if((tipo != OP_BUY && tipo != OP_SELL) || OrderCloseTime() != 0)
       return(ErrJson(id, 4108, "ticket " + IntegerToString(ticket) + " nao e uma posicao aberta", "mt4"));
+   string rm = ChecarMagicDoTicket(id);
+   if(StringLen(rm) > 0)
+      return(rm);
    string sym = OrderSymbol();
    double vol = JNum(req, "volume", 0.0);
    double aberto = OrderLots();
@@ -695,6 +750,9 @@ string CmdOrdemModificar(const string id, const string req)
       return(ErrJson(id, 4108, "ticket " + IntegerToString(ticket) + " inexistente", "mt4"));
    if(OrderCloseTime() != 0)
       return(ErrJson(id, 4108, "ticket " + IntegerToString(ticket) + " ja encerrado", "mt4"));
+   string rm = ChecarMagicDoTicket(id);
+   if(StringLen(rm) > 0)
+      return(rm);
    int dig = (int)MarketInfo(OrderSymbol(), MODE_DIGITS);
    double sl = NormalizeDouble(JNum(req, "sl", 0.0), dig);
    double tp = NormalizeDouble(JNum(req, "tp", 0.0), dig);
@@ -718,6 +776,9 @@ string CmdOrdemApagar(const string id, const string req)
       return(ErrJson(id, 4108, "ticket " + IntegerToString(ticket) + " inexistente", "mt4"));
    if(OrderType() < OP_BUYLIMIT || OrderCloseTime() != 0)
       return(ErrJson(id, 4108, "ticket " + IntegerToString(ticket) + " nao e ordem pendente", "mt4"));
+   string rm = ChecarMagicDoTicket(id);
+   if(StringLen(rm) > 0)
+      return(rm);
    if(IsTradeContextBusy())
       return(ErrMt4(id, 146));
    ResetLastError();
@@ -757,6 +818,8 @@ string Tratar(const string req)
       return(ErrJson(id, ERRO_JSON_INVALIDO, "JSON invalido ou sem id", "ponte"));
    if((int)JNum(req, "v", 0.0) != VERSAO_PROTOCOLO)
       return(ErrJson(id, ERRO_VERSAO, "versao do protocolo nao suportada (esperado 1)", "ponte"));
+   if(StringLen(Token) > 0 && JStr(req, "tk") != Token) // token opcional: confere ANTES de cache/leitura/ordem
+      return(ErrJson(id, ERRO_TOKEN, "token ausente ou invalido", "ponte"));
    string cmd = JStr(req, "cmd");
    if(ComandoDeOrdem(cmd))
      {

@@ -67,6 +67,14 @@ def test_tudo_consistente():
     assert r.ok and not r.bloqueio and not ks.ativo and not rec.bloqueado
 
 
+def test_par_compra_venda_de_liquido_zero_e_divergencia():
+    _, _, term, _, _, rec, _ = montar({})
+    term.pos = [posicao(ticket=100, tipo=0), posicao(ticket=101, tipo=1)]  # hedging: liquido 0, duas posicoes
+    r = rec.reconciliar(1000 * S)
+    assert not r.ok and r.bloqueio
+    assert any(d.tipo == "posicoes_multiplas" and "100" in d.detalhe and "101" in d.detalhe for d in r.divergencias)
+
+
 def test_posicao_divergente_bloqueia_e_aciona_kill():
     _, _, term, _, ks, rec, aud = montar({})
     term.pos = [posicao()]  # terminal tem posicao que o robo nao conhece

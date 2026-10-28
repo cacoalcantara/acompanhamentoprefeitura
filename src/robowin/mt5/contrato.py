@@ -104,7 +104,9 @@ def resolver_contrato(
         raise ContratoRecusado([f"symbol_select falhou para {cand.nome}"])
     info = terminal.symbol_info(cand.nome)
     venc = calendario_b3.vencimento_do_codigo(perfil, codigo)
-    erros = validar_especificacoes(info, EspecEsperada.do_perfil(perfil), venc)
+    ai = terminal.account_info()
+    moeda_conta = "" if ai is None else str(getattr(ai, "currency", "") or "")
+    erros = validar_especificacoes(info, EspecEsperada.do_perfil(perfil), venc, moeda_conta=moeda_conta)
     if erros:
         raise ContratoRecusado([f"{cand.nome}: {e}" for e in erros])
     inst = instrumento_de(cand.nome, info, venc, ativo=perfil.simbolo_base)

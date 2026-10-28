@@ -17,10 +17,12 @@ class EspecEsperada:
     ponto_valor_brl: float
     lote: int
     tolerancia: float = 1e-9
+    moeda: str = "BRL"
 
     @classmethod
     def do_perfil(cls, perfil: PerfilInstrumento) -> EspecEsperada:
-        return cls(tick_pontos=perfil.tick_pontos, ponto_valor_brl=perfil.ponto_valor_brl, lote=perfil.lote)
+        return cls(tick_pontos=perfil.tick_pontos, ponto_valor_brl=perfil.ponto_valor_brl, lote=perfil.lote,
+                   moeda=perfil.moeda)
 
 
 def valor_ponto_brl(info: Any) -> float | None:
@@ -33,13 +35,25 @@ def valor_ponto_brl(info: Any) -> float | None:
 
 
 def validar_especificacoes(
-    info: Any, esperado: EspecEsperada, vencimento: dt.date | None = None
+    info: Any, esperado: EspecEsperada, vencimento: dt.date | None = None, moeda_conta: str | None = None
 ) -> list[str]:
     """Lista de divergencias (vazia = especificacoes validas). Qualquer divergencia => recusa."""
     erros: list[str] = []
     if info is None:
         return ["symbol_info indisponivel"]
     tol = esperado.tolerancia
+    # moeda: o P&L e os limites de risco estao na moeda do perfil; moeda nao informada = nao confirmada = recusa
+    moeda_lucro = str(getattr(info, "currency_profit", "") or "").strip().upper()
+    if not moeda_lucro:
+        erros.append(f"currency_profit nao informada pelo terminal: moeda {esperado.moeda} nao confirmada")
+    elif moeda_lucro != esperado.moeda.upper():
+        erros.append(f"currency_profit={moeda_lucro} diverge da moeda do perfil {esperado.moeda}")
+    if moeda_conta is not None:
+        mc = str(moeda_conta).strip().upper()
+        if not mc:
+            erros.append(f"moeda da conta nao informada pelo terminal: moeda {esperado.moeda} nao confirmada")
+        elif mc != esperado.moeda.upper():
+            erros.append(f"moeda da conta {mc} diverge da moeda do perfil {esperado.moeda} (P&L/risco seriam em outra moeda)")
     tick = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
     if abs(tick - esperado.tick_pontos) > tol:
         erros.append(f"tick_size={tick} diverge do esperado {esperado.tick_pontos} pontos")
