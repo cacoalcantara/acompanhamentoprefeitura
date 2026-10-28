@@ -6,6 +6,12 @@ simbolo_base = "WIN"
 # Espelha UM braco (id) na conta DEMO via gateway (decisao/espelho.py). Vazio = desligado (padrao).
 # Exige conta = "demo_mt5", gateway no ar, conta demo zerada e SL em toda entrada; exclusivo com [mm].demo_mm.
 espelhar = ""
+# Limites de risco POR USUARIO e POR CONTA (risco/usuarios.py; docs/07-risco-e-operacao.md). Vazios = modo de arquivo
+# unico (config/risco.toml, cuja aprovacao risco-v2 e PROVISORIA do titular, somente DEMO). Com usuario + conta, nucleo,
+# gateway, espelho, MM e aceitacao usam SO os limites aprovados desse par; usuario novo comeca sem limites (bloqueado).
+usuario = ""                  # ex.: "titular" (criado com `robowin usuario criar`)
+conta_negociacao = ""         # PLATAFORMA:SERVIDOR:LOGIN, ex.: "mt5:CORRETORA-DEMO:123456"
+usuarios = "config/usuarios"  # armazem de usuarios/contas (fora do git; relativo a raiz do projeto)
 
 [ia]
 orcamento_mensal_usd = 400

@@ -10,3 +10,5 @@ dados_locais/
 *.sqlite
 .env
 .claude/worktrees/
+# limites/aprovacoes por usuario e conta (dados pessoais: login da conta, hash do token): ficam so na maquina
+config/usuarios/

@@ -15,7 +15,7 @@
 {% if sintetico %}<div class="faixa faixa-sint" role="alert">DADOS SINTÉTICOS</div>{% endif %}
 <nav>
   <strong>robowin</strong>
-  {% for href, id, nome in [("/", "visao", "Visão geral"), ("/decisoes", "decisoes", "Decisões"), ("/operacoes", "operacoes", "Operações"), ("/desempenho", "desempenho", "Desempenho e latência"), ("/modelos", "modelos", "Modelos e dados"), ("/auditoria", "auditoria", "Auditoria")] %}
+  {% for href, id, nome in [("/", "visao", "Visão geral"), ("/decisoes", "decisoes", "Decisões"), ("/operacoes", "operacoes", "Operações"), ("/desempenho", "desempenho", "Desempenho e latência"), ("/modelos", "modelos", "Modelos e dados"), ("/risco", "risco", "Risco"), ("/auditoria", "auditoria", "Auditoria")] %}
   <a href="{{ href }}" {% if pagina == id %}class="ativa" aria-current="page"{% endif %}>{{ nome }}</a>
   {% endfor %}
 </nav>

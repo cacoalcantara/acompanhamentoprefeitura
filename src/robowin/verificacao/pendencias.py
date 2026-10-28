@@ -29,6 +29,7 @@ def listar_pendencias(raiz: str | Path) -> list[Pendencia]:
     estado, detalhe = estado_aprovacao(r / "config/risco.toml", r / "config/aprovacoes/risco-v1.toml")
     if estado != "APROVADO":
         out.append(Pendencia("OBRIGATORIA", f"Aprovacao da politica de risco {estado}: {detalhe}", CMD_RISCO))
+    out += _pendencias_usuarios(r)
     try:
         ativo = str(carregar_toml(r / "config/robowin.toml").get("geral", {}).get("simbolo_base") or "").upper()
     except (OSError, ValueError):
@@ -50,6 +51,31 @@ def listar_pendencias(raiz: str | Path) -> list[Pendencia]:
         if not os.environ.get(v):
             out.append(Pendencia("OPCIONAL", f"Chave de API {v} ausente (bracos de IA reais e etapa A10 nao rodam)",
                                  f'setx {v} "<sua chave>"   (depois abra um novo terminal; nunca grave a chave no repositorio)'))
+    return out
+
+
+def _pendencias_usuarios(r: Path) -> list[Pendencia]:
+    """Limites por usuario+conta: sem usuarios, lembra que os do arquivo unico sao provisorios do titular (DEMO);
+    com usuarios, cada conta DEMO sem aprovacao valida e uma pendencia OBRIGATORIA (ela nao opera)."""
+    from robowin.risco.usuarios import APROVADO, ArmazemUsuarios, dir_usuarios
+    cfg = r / "config/robowin.toml"
+    try:
+        arm = ArmazemUsuarios(dir_usuarios(cfg) if cfg.is_file() else r / "config/usuarios")
+        nomes = arm.usuarios()
+    except (OSError, ValueError):
+        return []
+    if not nomes:
+        return [Pendencia("OPCIONAL", "Limites de risco proprios por usuario e conta (os de config/risco.toml sao a "
+                          "aprovacao PROVISORIA do titular, somente DEMO, e nao valem como padrao para outros usuarios)",
+                          'uv run robowin usuario criar --usuario <nome>   (depois: robowin painel > Risco)')]
+    out = []
+    for u in nomes:
+        for c in arm.contas(u):
+            st = arm.estado(u, c.chave)
+            if c.tipo == "demo" and st.estado != APROVADO:
+                out.append(Pendencia("OBRIGATORIA", f"Risco de {u} na conta {c.chave.texto}: {st.estado} ({st.detalhe})",
+                                     f'uv run robowin risco aprovar --usuario {u} --conta {c.chave.texto} '
+                                     '--responsavel "<seu nome>"   (ou no painel, pagina Risco)'))
     return out
 
 

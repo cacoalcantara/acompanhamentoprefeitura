@@ -53,7 +53,7 @@ def _ao_vivo(a) -> int:
     from ..decisao.simulacao import abrir_banco
     from ..execucao.ponte_gateway import TravaEspelho
     from ..mt5.canais import ClienteComandosZMQ
-    from ..risco.politica import risco_do_ativo
+    from ..risco.usuarios import risco_para, selecao_de
     from .ao_vivo import MMAoVivo
     from .ponte_demo import ConfigPonteMM, MMDemoRecusado, PonteMMDemo, validar_config_mm
 
@@ -68,7 +68,9 @@ def _ao_vivo(a) -> int:
         validar_config_mm(cfg)
         perfil = perfil_da_config(cfg, a.ativo)  # ao vivo: perfil a_confirmar BLOQUEIA
         ins = perfil.instrumento(a.simbolo or perfil.simbolo_base)
-        risco, _ = risco_do_ativo(perfil, a.risco, a.aprovacao, ao_vivo=True)
+        sel = selecao_de(a.config, a.usuario, a.conta, a.usuarios)  # limites do usuario+conta (ou arquivo unico)
+        risco, _, _ = risco_para(sel, perfil, a.risco, a.aprovacao, ao_vivo=True)
+        print(f"Limites de risco: {sel.descricao()} (aprovado).")
         banco, registro, caminho, _ = abrir_banco(Path(a.saida), rel, f"mm-{int(time.time())}")
         cot = CotadorMM(params=ParamsAS.do_instrumento(ins), cfg=ConfigMM(demo_mm=True))
         fonte, cliente = FonteZMQ(a.pub), ClienteComandosZMQ(a.cmd)
@@ -112,6 +114,8 @@ def registrar(sub):
     v.add_argument("--simbolo", default=None)
     v.add_argument("--risco", default="config/risco.toml")
     v.add_argument("--aprovacao", default="config/aprovacoes/risco-v1.toml")
+    from ..risco.usuarios import adicionar_args
+    adicionar_args(v)
     v.add_argument("--demo-mm", action="store_true", help="liga a flag demo_mm so nesta execucao")
     v.add_argument("--pub", default="tcp://127.0.0.1:5555")
     v.add_argument("--cmd", default="tcp://127.0.0.1:5556")
