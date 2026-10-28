@@ -20,4 +20,5 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --extra dev --extra mt5 --python 3.13
       - run: uv run pytest
+      - run: uv run python scripts/conferir_constantes_mt5.py
       - run: uv run python -c "import MetaTrader5 as m; print(m.__version__); assert hasattr(m,'ACCOUNT_TRADE_MODE_DEMO') and hasattr(m,'TICK_FLAG_BUY')"

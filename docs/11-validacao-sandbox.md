@@ -68,3 +68,26 @@ escritas, codigos de erro e versao) entre o EA, `mql4/PROTOCOLO.md`, `protocolo_
   nao ERRO; o que esta nela pode estar com aridade errada na tabela. Sao ~150 funcoes, nao a API inteira.
 - O que so o MetaEditor/MT4 revelam (limites de memoria dos arrays globais, permissoes, build, comportamento de
   `recv/send`, timers) continua sem verificacao ate o teste em conta DEMO.
+
+## Windows de verdade sob Wine (executado em 28/10/2026)
+
+Procedimento: Wine 9.0 (apt, Ubuntu 24.04) + Python 3.12.10 para Windows x64 obtido do pacote NuGet `python`
+(o Python 3.13 nao serve: usa `CopyFile2`, nao implementada no Wine 9) + wheels `win_amd64` do PyPI.
+Limitacao do Wine 9: `ucrtbase.dll.crealf` nao existe, entao o numpy recente (>= 2.2) aborta ao importar;
+para este teste usou-se numpy 1.26.4 + pandas 2.2.3 numa pasta separada (`PYTHONPATH`), o que **quebra o scipy 1.18**
+(`np.long`). Isso e artefato do ambiente de teste, nao do projeto.
+
+Resultados:
+
+| Verificacao | Resultado |
+|---|---|
+| Python Windows (AMD64) roda sob Wine | OK (3.12.10) |
+| `import MetaTrader5` (wheel OFICIAL 5.0.6231, `win_amd64`) | OK |
+| 20 funcoes que o projeto usa existem no pacote real (`initialize`, `order_send`, `copy_ticks_*`, `market_book_*`, `positions_get`, `history_deals_get`...) | todas presentes |
+| `MetaTrader5.initialize()` sem terminal | falha de forma tratada: `(-10003, 'IPC initialize failed, MetaTrader 5 x64 not found')` |
+| `ConectorMT5` do projeto sem terminal | `initialize() -> False`, `last_error()` correto, sem excecao |
+| Constantes numericas (`scripts/conferir_constantes_mt5.py`) | 72 conferem, 0 divergem, 2 sem equivalente no pacote Python (mascaras `SYMBOL_FILLING_FOK/IOC`, valores 1/2 da documentacao MQL5) |
+| Testes unitarios sob Windows (core, guardiao, contrato, AST de `order_send`, gateway, MT4 ponte/hedging/capacidades, OMS, risco) | 205 de 208 passam; as 3 falhas sao `numpy.long` do scipy no ambiente hibrido (CLI importa `avaliacao`) |
+
+NAO coberto: terminal MT5/MT4 instalado, conexao a servidor de corretora, `order_send` real, `.mq4` compilado.
+O job `windows` da CI roda a suite completa e a conferencia de constantes em Windows nativo com numpy 2.
