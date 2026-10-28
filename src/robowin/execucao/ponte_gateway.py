@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,6 +99,12 @@ class EspelhamentoNaoExclusivo(Exception):
 
 
 def _pid_vivo(pid: int) -> bool:
+    """O processo `pid` existe? NUNCA usar os.kill(pid, 0) no Windows: la o sinal 0 e CTRL_C_EVENT e
+    interromperia o grupo de processos (inclusive o proprio robo/gateway)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        return _pid_vivo_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -105,6 +112,30 @@ def _pid_vivo(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _pid_vivo_windows(pid: int) -> bool:  # pragma: no cover - exercitado na CI windows
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k32.GetExitCodeProcess.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+    acesso_consulta_limitada, acesso_negado, ainda_ativo = 0x1000, 5, 259
+    h = k32.OpenProcess(acesso_consulta_limitada, False, pid)
+    if not h:
+        return ctypes.get_last_error() == acesso_negado  # type: ignore[attr-defined]  # existe, de outro usuario
+    try:
+        codigo = wintypes.DWORD()
+        if not k32.GetExitCodeProcess(h, ctypes.byref(codigo)):
+            return True
+        return codigo.value == ainda_ativo
+    finally:
+        k32.CloseHandle(h)
 
 
 IDADE_ILEGIVEL_S = 5  # trava vazia/ilegivel mais nova que isto e tratada como OCUPADA (criacao em andamento)
