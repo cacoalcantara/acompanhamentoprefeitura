@@ -122,7 +122,8 @@ class PonteMMDemo:
             self.oms.ao_transicao.append(lambda o: registro.ordem(o, simulada=False))
         self.emissor = EmissorGateway(canal, dono=DONO, timeout_s=cfg.timeout_s)
         self.roteador = Roteador("gateway_demo", instrumento, relogio, self.oms, self.motor, emissor_gateway=self.emissor,
-                                 politica=PoliticaPassiva(0.0), bloqueio_externo=self._bloqueio)
+                                 politica=PoliticaPassiva(0.0), bloqueio_externo=self._bloqueio,
+                                 exigir_aprovacao=True)
         self.terminal = TerminalViaGateway(canal, desde_ns=relogio.agora_ns() - 60 * NS, timeout_s=cfg.timeout_s)
         self.simbolo_gw = ""
         self.ativo = False

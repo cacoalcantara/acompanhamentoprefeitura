@@ -233,7 +233,8 @@ class Orquestrador:
                   simulada=True)
         self.sim.registrar_braco(b.id, magic)
         rot = Roteador("simulado", cfg.instrumento, self.rel, oms, motor, simulador=self.sim,
-                       bloqueio_externo=self._bloqueio_externo, posicao_fn=self.sim.posicao)
+                       bloqueio_externo=self._bloqueio_externo, posicao_fn=self.sim.posicao,
+                       exigir_aprovacao=True)
         oms.ao_transicao.append(lambda o: self.registro.ordem(o))
         conta = ContaBraco(b, magic, ks, motor, oms, rot, GerenciadorPlano(b.id, cfg.instrumento.tick_pontos))
         ks.registrar_efeito(lambda ev, c=conta: self._efeito_kill(c, ev))

@@ -367,7 +367,7 @@ def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo
                 fixavel[d["modelo"]] = bool(catalogo.obter(d["modelo"]).fixavel)
             except Exception:
                 fixavel[d["modelo"]] = False
-    hipoteses = ("H1: o braco com IA tem expectativa liquida maior que o controle aleatorio",
+    hipoteses: tuple[str, ...] = ("H1: o braco com IA tem expectativa liquida maior que o controle aleatorio",
                  "H2: o revisor (C) melhora a expectativa liquida sobre a proposta sem revisor (B)",
                  "H3: o modo condicional difere do imediato")
     if any(b.familia == "debate" for b in bracos):
@@ -441,7 +441,7 @@ def construir_orquestrador(
         bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
     hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "perfil": perfil.hash()}
     memoria_reflexiva, servico_reflexao = montar_reflexao(cfg, fab, provedores, ativo=bool(papeis))
-    if memoria_reflexiva is not None:
+    if memoria_reflexiva is not None and servico_reflexao is not None:
         hashes["reflexao"] = f"ativa:{servico_reflexao.chave}"
     if erro_risco is None or erro_risco == ERRO_APROVACAO_PENDENTE:
         hashes["risco"] = _hash_arquivo(p.risco)  # o arquivo foi o aplicado (aprovacao pendente fica registrada)

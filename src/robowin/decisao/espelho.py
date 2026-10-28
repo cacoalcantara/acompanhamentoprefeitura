@@ -196,7 +196,8 @@ class EspelhoDemo:
         self.emissor = EmissorGateway(canal, timeout_s=cfg.timeout_s)
         self.terminal = TerminalViaGateway(canal, desde_ns=self.rel.agora_ns() - 60 * NS, timeout_s=cfg.timeout_s)
         self.roteador = Roteador("gateway_demo", ins, self.rel, self.oms, self.motor, emissor_gateway=self.emissor,
-                                 bloqueio_externo=self._bloqueio, posicao_fn=self._posicao_gateway)
+                                 bloqueio_externo=self._bloqueio, posicao_fn=self._posicao_gateway,
+                                 exigir_aprovacao=True)
         self.reconciliador = Reconciliador(
             self.terminal, self.oms, "", self._crenca_de, kill_switch=conta.kill, auditoria=orq.registro.auditoria,
             espera_incerta_s=cfg.espera_incerta_s)
