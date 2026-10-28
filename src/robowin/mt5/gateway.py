@@ -27,6 +27,7 @@ from robowin.core.tipos import AckOrdem, ComandoOrdem
 
 from . import constantes as C
 from .coleta import ColetorLivro, ColetorTicks, LogBruto
+from .consultas import posicoes_publicas, snapshot_terminal
 from .conta import ler_estado_conta
 from .contrato import ContratoRecusado, ResolucaoContrato, resolver_contrato
 from .execucao_demo import (
@@ -81,6 +82,7 @@ class ConfigGateway:
     guardiao: ConfigGuardiao = field(default_factory=ConfigGuardiao)
     tentativas_emergencia: int = 5
     espera_emergencia_s: float = 0.1
+    modo_mm: bool = False  # ponte do market making: uma limitada por lado, limitada pode reduzir a posicao oposta
 
 
 class Gateway:
@@ -140,7 +142,8 @@ class Gateway:
         self.executor = ExecucaoDemo(
             self.t, ConfigDemo(login=self.cfg.login, servidor=self.cfg.servidor, simbolo=simbolo,
                                modo_config=self.cfg.modo_config, msgs_por_min=self.cfg.msgs_por_min,
-                               espera_incerta_s=self.cfg.espera_incerta_s, lote=perfil.lote),
+                               espera_incerta_s=self.cfg.espera_incerta_s, lote=perfil.lote,
+                               modo_mm=self.cfg.modo_mm),
             self.relogio, alerta=self._alerta, registrar=registrar, relogio_srv=self.rs)
         self.executor.restaurar_enviadas(ja_enviadas)
         self.executor.verificar_guarda()  # falha cedo: conta real/login/servidor errados
@@ -186,6 +189,16 @@ class Gateway:
         return {"tipo": "ack", "id": msg.get("id"), "ack": ack.model_dump(mode="json"), "estado": est.value,
                 "intencao_id": cmd.intencao_id}
 
+    def _ordem_pendente(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Cancela ou modifica (preco/SL) uma ordem pendente pelo ticket; conta na franquia de mensagens."""
+        dono = str(msg.get("dono", "nucleo"))
+        if msg.get("tipo") == "cancelar_ordem":
+            ack = self.executor.cancelar_ordem(int(msg["ticket"]), dono=dono)
+        else:
+            ack = self.executor.modificar_ordem(int(msg["ticket"]), float(msg["preco"]), msg.get("sl"), dono=dono)
+        return {"tipo": "ack", "id": msg.get("id"), "ack": ack.model_dump(mode="json"),
+                "estado": estado_do_retcode(ack.retcode).value}
+
     def _emergencia(self, msg: dict[str, Any]) -> dict[str, Any]:
         origem = f"comando ({msg.get('origem', 'desconhecida')})"
         self.guardiao.acionar_emergencia(origem)
@@ -207,6 +220,11 @@ class Gateway:
             return self._ordem(msg)
         if tipo == "emergencia":
             return self._emergencia(msg)
+        if tipo == "snapshot":  # consulta SOMENTE LEITURA (positions/orders/deals) para a reconciliacao do nucleo
+            return {"tipo": "snapshot", "id": msg.get("id"), **snapshot_terminal(
+                self.t, self.rs, self.executor.cfg.lote, int(msg.get("desde_ns", 0)), self.relogio.agora_ns() + 86_400_000_000_000)}
+        if tipo in ("cancelar_ordem", "modificar_ordem"):
+            return self._ordem_pendente(msg)
         if tipo == "estado":
             return {"tipo": "estado", "id": msg.get("id"), **self.estado()}
         if tipo == "rearmar":
@@ -224,11 +242,9 @@ class Gateway:
     def estado(self) -> dict[str, Any]:
         conta = ler_estado_conta(self.t)
         ps = self.t.positions_get()
-        pos = None
-        if ps:
-            p = ps[0]
-            pos = {"ticket": int(p.ticket), "simbolo": str(p.symbol), "lado": "compra" if p.type == C.POS_COMPRA else "venda",
-                   "volume": float(p.volume), "sl": float(p.sl), "tp": float(p.tp)}
+        os_ = self.t.orders_get()
+        posicoes = None if ps is None else posicoes_publicas(ps, self.executor.cfg.lote)
+        pos = posicoes[0] if posicoes else None  # compat.: a primeira posicao
         return {
             "t_ns": self.relogio.agora_ns(),
             "conta": conta.model_dump() if conta else None,
@@ -239,7 +255,9 @@ class Gateway:
             "ticks_total": self.ticks.total, "livro_total": self.livro.total,
             "livro_profundidade": {"declarada": self.livro.profundidade_declarada,
                                    "observada": self.livro.profundidade_observada},
-            "guardiao": self.guardiao.estado(), "posicao": pos,
+            "guardiao": self.guardiao.estado(), "posicao": pos, "posicoes": posicoes,
+            "ordens": None if os_ is None else len(os_), "lote": self.executor.cfg.lote,
+            "modo_mm": self.cfg.modo_mm, "capacidades": {"livro": bool(self.livro.profundidade_declarada)},
             "incertas": sorted(self.executor.incertas), "parado": self.parado,
         }
 

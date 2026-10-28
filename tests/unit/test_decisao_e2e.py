@@ -117,12 +117,12 @@ def test_so_ordens_simuladas_nenhuma_ordem_real(sessao):
     c = _con(sessao)
     assert c.execute("SELECT COUNT(*) FROM ordens WHERE simulada=0").fetchone()[0] == 0
     assert c.execute("SELECT COUNT(*) FROM execucoes WHERE simulada=0").fetchone()[0] == 0
-    modos = []  # o roteador so e construido no modo 'simulado' (o gateway e o unico dono de order_send)
+    modos = []  # o orquestrador so constroi o roteador 'simulado'; 'gateway_demo' so no espelho (o gateway e o unico dono de order_send)
     for arq in RAIZ_PKG.rglob("*.py"):
         for no in ast.walk(ast.parse(arq.read_text())):
             if isinstance(no, ast.Call) and getattr(no.func, "id", "") == "Roteador":
-                modos.append(ast.literal_eval(no.args[0]))
-    assert modos == ["simulado"]
+                modos.append((arq.name, ast.literal_eval(no.args[0])))
+    assert sorted(modos) == [("espelho.py", "gateway_demo"), ("orquestrador.py", "simulado")]
 
 
 def test_posicoes_zeradas_ao_fim_e_trades_consistentes(sessao):

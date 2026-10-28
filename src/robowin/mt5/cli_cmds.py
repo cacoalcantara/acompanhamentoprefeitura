@@ -271,6 +271,8 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         offset_fixo_s=args.offset_fixo_s,
         guardiao=ConfigGuardiao(arquivo_emergencia=caminho_flag_emergencia(args.config, args.arquivo_emergencia),
                                 exigir_dia_util=not args.duble))
+    caminho_cfg = Path(getattr(args, "config", "") or "")
+    gcfg.modo_mm = bool(args.modo_mm or (carregar_toml(caminho_cfg).get("mm", {}).get("demo_mm") if caminho_cfg.is_file() else False))
     if args.duble:
         # o duble sintetico nao tem horario de pregao: libera a janela so para exercitar a infraestrutura
         gcfg.guardiao.entradas_de, gcfg.guardiao.entradas_ate, gcfg.guardiao.zeragem = "00:00", "23:58", "23:59"
@@ -359,6 +361,8 @@ def registrar(sub: Any) -> None:
                    help="padrao: <[geral].dados do robowin.toml>/EMERGENCIA (mesmo caminho do painel e do nucleo)")
     g.add_argument("--offset-fixo-s", type=int, default=None)
     g.add_argument("--duracao-s", type=float, default=None)
+    g.add_argument("--modo-mm", action="store_true",
+                   help="aceita as cotacoes do MM na demo (uma limitada por lado); tambem ligado por [mm].demo_mm = true")
     g.set_defaults(func=_cmd_gateway)
 
     c = sub.add_parser("coletar", help="coleta ticks e livro (sem ordens) gravando o log bruto")

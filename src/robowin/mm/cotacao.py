@@ -127,6 +127,12 @@ class CotadorMM:
         return {"bid": self.vivas["bid"].preco if "bid" in self.vivas else None,
                 "ask": self.vivas["ask"].preco if "ask" in self.vivas else None}
 
+    def descartar(self, lado: str) -> None:
+        """A cotacao do lado NAO ficou no livro (recusada/perdida na ponte): esquece-a sem contar mensagem."""
+        v = self.vivas.pop(lado, None)
+        if v is not None:
+            self.monitor._abertas.pop(v.ordem_id, None)
+
     def registrar_execucao(self, lado: str, t_ns: int) -> None:
         """Informa que a ordem do lado ("bid"/"ask") foi executada (some do livro)."""
         v = self.vivas.pop(lado, None)

@@ -9,7 +9,7 @@ import numpy as np
 from ..core.relogio import RelogioSimulado
 from ..core.tipos import ComandoOrdem, Instrumento, Lado, LivroSnapshot, Tick
 from ..execucao.simulador import SimuladorExecucao
-from .config import ConfigMM, exigir_simulador_apenas
+from .config import ConfigMM
 from .cotacao import CotadorMM
 from .markouts import Preenchimento
 
@@ -38,10 +38,23 @@ def _microprice(t: Tick, livro: LivroSnapshot | None) -> float:
     return (bid + ask) / 2
 
 
+def estado_mm(tk: Tick, livro: LivroSnapshot | None, mids: deque[float], fluxo: deque[float], estoque: int,
+              intervalo_s: float) -> dict[str, float] | None:
+    """Estado que o CotadorMM le (microprice, topo do livro, estoque, sigma, toxicidade). Compartilhado pela
+    simulacao e pela ponte ao vivo da demo. ``None`` enquanto as janelas ainda nao tem amostras suficientes."""
+    bid, ask = (tk.bid if tk.bid > 0 else tk.last), (tk.ask if tk.ask > 0 else tk.last)
+    mids.append((bid + ask) / 2)
+    if len(mids) < 10 or len(fluxo) < 5:
+        return None
+    sigma = max(float(np.std(np.diff(np.array(mids)))) / np.sqrt(intervalo_s), 1.0)
+    tox = abs(float(np.mean(fluxo)))  # proxy: desequilibrio de fluxo agressor nos ultimos 10 negocios
+    return {"microprice": _microprice(tk, livro), "melhor_bid": bid, "melhor_ask": ask, "estoque": estoque,
+            "sigma": sigma, "toxicidade": tox}
+
+
 def simular_mm(ticks: list[Tick] | tuple[Tick, ...], livros: list[LivroSnapshot] | tuple[LivroSnapshot, ...],
                cotador: CotadorMM, instrumento: Instrumento | None = None, intervalo_s: float = 1.0,
                seed: int = 0, cfg: ConfigMM | None = None, latencia_ms: float = 50.0) -> ResultadoMM:
-    exigir_simulador_apenas(cfg or cotador.cfg)
     if instrumento is None:
         raise ValueError("simular_mm exige o Instrumento do ativo (perfil)")
     ins = instrumento
@@ -88,14 +101,9 @@ def simular_mm(ticks: list[Tick] | tuple[Tick, ...], livros: list[LivroSnapshot]
         if t < prox:
             continue
         prox = t + int(intervalo_s * NS)
-        bid, ask = (tk.bid if tk.bid > 0 else tk.last), (tk.ask if tk.ask > 0 else tk.last)
-        mids.append((bid + ask) / 2)
-        if len(mids) < 10 or len(fluxo) < 5:
+        estado = estado_mm(tk, livro, mids, fluxo, estoque(), intervalo_s)
+        if estado is None:
             continue
-        sigma = max(float(np.std(np.diff(np.array(mids)))) / np.sqrt(intervalo_s), 1.0)
-        tox = abs(float(np.mean(fluxo)))  # proxy: desequilibrio de fluxo agressor nos ultimos 10 negocios
-        estado = {"microprice": _microprice(tk, livro), "melhor_bid": bid, "melhor_ask": ask, "estoque": estoque(),
-                  "sigma": sigma, "toxicidade": tox}
         cotador.cotar(t, estado)
         res.n_decisoes += 1
         for m in cotador.ultimas_mensagens:
