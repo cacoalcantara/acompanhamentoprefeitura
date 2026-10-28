@@ -9,7 +9,7 @@ jobs:
   ler:
     runs-on: ubuntu-latest
     steps:
-      - run: sudo apt-get install -y -q poppler-utils html2text > /dev/null
+      - run: sudo apt-get update -q > /dev/null && sudo apt-get install -y -q poppler-utils html2text unzip > /dev/null
       - name: Baixar e extrair
         shell: bash
         run: |
