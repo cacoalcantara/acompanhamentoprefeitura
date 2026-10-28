@@ -26,6 +26,14 @@ Autoverificação rápida (< 60 s, sem rede, sem ordens): `uv run robowin verifi
 `--json` para máquina. O que é verificável aqui, o que depende de você e por que lucratividade nunca é provada:
 **[docs/ENTREGA.md](docs/ENTREGA.md)** (item do pedido original → onde está → evidência → status honesto).
 
+**Máquina do Tempo** (simulação de bootstrap das últimas sessões, **NÃO é previsão**): chances de um plano de stop/alvo
+antes de arriscar qualquer coisa, com custos do perfil e rótulo de dados sintéticos:
+`uv run robowin maquina-do-tempo --ativo WIN --sintetico --lado compra --stop-pontos 100 --alvo-pontos 200`
+(`--dados DIR` para ticks gravados; `--entrada HH:MM --zeragem HH:MM --seed N --replays N --json`). As mesmas
+probabilidades vão, anonimizadas, ao revisor de IA; o veto por odds é opcional e vem desligado
+(`[decisao].veto_por_odds`). Ideia e método inspirados no Time Machine do day-trader-skill (Jake Schincariol, MIT),
+reimplementação independente: ver **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** e `docs/13-inspiracoes.md`.
+
 Windows (MT5 real, conta **DEMO**): `scripts/windows/instalar.ps1`, depois `uv run robowin diagnostico` e
 `docs/07-risco-e-operacao.md`.
 

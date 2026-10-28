@@ -18,8 +18,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from robowin.core.tipos import Acao, CarimboLatencia, ChamadaLLM, PropostaIA, RevisaoIA
+from robowin.core.tipos import Acao, CarimboLatencia, ChamadaLLM, Lado, PropostaIA, RevisaoIA
 from robowin.ia.catalogo import dividir_modelo
+from robowin.ia.dossie import hash_dossie, verificar_anonimizacao
 from robowin.ia.prompts import Prompt, carregar_prompt, mensagem_proponente, mensagem_revisor
 from robowin.ia.provedores.base import modelo_servido_aceito
 from robowin.ia.validadores import revisao_aprova, validar_proposta
@@ -36,6 +37,9 @@ from ..validade import (
     classificar_chamada,
 )
 from .base import NS, BracoBase, ContextoDecisao, Geometria, Modo, RegistroChamada, ResultadoDecisao
+
+CAMPO_PROBABILIDADES = "probabilidades_do_plano"
+LADO_DA_ACAO = {Acao.COMPRAR: Lado.COMPRA, Acao.VENDER: Lado.VENDA}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -157,9 +161,19 @@ class ServicoRevisao(ServicoLLM):
     def __init__(self, provedor: Any, ref: str, **kw: Any) -> None:
         super().__init__(provedor, ref, "revisor", RevisaoIA, **kw)
 
-    async def revisar(self, ctx: ContextoDecisao, proposta: PropostaIA, prazo_s: float) -> RevisaoObtida:
-        obj, ch, motivo = await self.chamar(
-            mensagem_revisor(ctx.dossie, proposta.model_dump(mode="json")), prazo_s, ctx.hash_dossie)
+    async def revisar(self, ctx: ContextoDecisao, proposta: PropostaIA, prazo_s: float,
+                      probabilidades: dict[str, Any] | None = None) -> RevisaoObtida:
+        """``probabilidades``: campo ``probabilidades_do_plano`` (Maquina do Tempo), entregue ao revisor como
+        evidencia do dossie da revisao. SIMULACAO, nao previsao. So entra se passar na verificacao de anonimizacao;
+        o dossie do PROPONENTE (compartilhado, com hash proprio) nao e alterado."""
+        dossie, h = ctx.dossie, ctx.hash_dossie
+        if probabilidades is not None:
+            extra = {CAMPO_PROBABILIDADES: probabilidades}
+            if verificar_anonimizacao(extra, (ctx.preco_ref, ctx.bid, ctx.ask)):  # nunca vaza data nem nivel absoluto
+                extra = {CAMPO_PROBABILIDADES: {"status": "indisponivel", "motivo": "anonimizacao_falhou"}}
+            dossie = {**ctx.dossie, **extra}
+            h = hash_dossie(dossie)
+        obj, ch, motivo = await self.chamar(mensagem_revisor(dossie, proposta.model_dump(mode="json")), prazo_s, h)
         if motivo or not isinstance(obj, RevisaoIA):
             return RevisaoObtida(None, ch, motivo or RESPOSTA_INVALIDA)
         return RevisaoObtida(obj, ch, None)
@@ -234,11 +248,22 @@ class BracoLLM(BracoBase):
             return self._bloqueada(ctx, (f"ia:{RESPOSTA_TARDIA}", "sem_margem_para_risco_e_oms"), acao=p.acao, **kw)
         if self.modo == "condicional" and p.plano is None:
             return self._bloqueada(ctx, ("sem_plano_condicional",), acao=p.acao, **kw)
+        prob: dict[str, Any] | None = None
+        if ctx.odds is not None and p.acao in LADO_DA_ACAO and p.stop_pontos and p.alvo_pontos:
+            try:  # Maquina do Tempo: evidencia para o revisor; falha => indisponivel (nunca bloqueia nem aprova)
+                av = ctx.odds(ctx, LADO_DA_ACAO[p.acao], p.stop_pontos, p.alvo_pontos)
+                prob = av.campo
+            except Exception as e:
+                av = None
+                prob = {"status": "indisponivel", "motivo": f"falha:{type(e).__name__}"}
+            proposta_json[CAMPO_PROBABILIDADES] = prob
+            if av is not None and av.veto:  # [decisao].veto_por_odds = true (desligado por padrao)
+                return self._bloqueada(ctx, (av.motivo_bloqueio,), acao=p.acao, **kw)
         if self.revisor is not None:  # braco C: revisao SO de entradas, antes de armar/executar
             prazo = pz.prazo_revisor(lat_s)
             if prazo <= 0:
                 return self._bloqueada(ctx, (f"ia:{SEM_TEMPO_REVISAO}",), acao=p.acao, **kw)
-            rev = await self.revisor.revisar(ctx, p, prazo)
+            rev = await self.revisor.revisar(ctx, p, prazo, probabilidades=prob)
             lat_rev_ns = int(rev.chamada.total_ms * 1e6)
             chamadas.append(RegistroChamada(rev.chamada, self.id, "revisor"))
             carimbos.append(CarimboLatencia(etapa="revisao_ia", braco=self.id, t_ini_ns=ctx.t0_ns + lat_prop_ns,

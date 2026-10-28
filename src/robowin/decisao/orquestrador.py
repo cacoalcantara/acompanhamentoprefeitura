@@ -58,6 +58,7 @@ from .bracos.base import BracoBase, ContextoDecisao, Geometria, ResultadoDecisao
 from .bracos.controles import BracoAleatorio
 from .dsl_plano import EstadoPlano
 from .gatilhos import ConfigGatilhos, EstadoGatilho, GerenciadorGatilhos
+from .odds import MOTIVO_VETO, AvaliadorOdds
 from .plano_condicional import (
     AssinaturaPosicao,
     EventoPlano,
@@ -153,6 +154,13 @@ def pregoes_restantes_no_mes(dia: dt.date) -> int:
     return max(n, 1)
 
 
+def _chave_bloqueio(motivo: str) -> str:
+    """Chave de contagem do bloqueio: ``ia:x`` -> ``x``; vetos por odds (Maquina do Tempo) viram ``veto_por_odds``."""
+    if motivo.startswith(MOTIVO_VETO):
+        return MOTIVO_VETO
+    return motivo.split(":", 1)[-1] if motivo.startswith("ia:") else motivo
+
+
 def _meio(tick: Tick) -> float:
     m = tick.meio
     return m if m > 0 else tick.last
@@ -165,7 +173,7 @@ class Orquestrador:
         statarb: SinalStatArb | None = None, precos_aux: Callable[[Tick], dict[str, float]] | None = None,
         noticias: Callable[[int], list[dict[str, Any]]] | None = None, eventos: Iterable[EventoAgenda] = (),
         orcamento: OrcamentoIA | None = None, bloqueio: BloqueioDados | None = None, custos: Custos | None = None,
-        simulador: SimuladorExecucao | None = None,
+        simulador: SimuladorExecucao | None = None, avaliador_odds: AvaliadorOdds | None = None,
     ) -> None:
         if not bracos:
             raise ErroConfig("nenhum braco configurado")
@@ -173,6 +181,7 @@ class Orquestrador:
         if len(set(ids)) != len(ids):
             raise ErroConfig(f"ids de braco duplicados: {ids}")
         self.cfg, self.rel, self.registro = cfg, relogio, registro
+        self.avaliador_odds = avaliador_odds  # Maquina do Tempo (opcional): evidencia ao revisor e veto por odds
         self.perfil = perfil_de_instrumento(cfg.instrumento)
         self.ativo = self.perfil.simbolo_base
         self.pipeline = pipeline or PipelineFeatures()
@@ -620,7 +629,7 @@ class Orquestrador:
                 return  # mesma recusa (ex.: modelo nao treinado) em ciclos seguidos: grava so a primeira
             conta.ultimo_bloqueio = res.motivos
             for m in res.motivos:
-                conta.stats[f"bloq:{m.split(':', 1)[-1] if m.startswith('ia:') else m}"] += 1
+                conta.stats[f"bloq:{_chave_bloqueio(m)}"] += 1
             self._gravar_decisao(res, "bloqueada", motivos=res.motivos, gatilho=gat)
             self.registro.evento_risco(t_ns=res.t0_ns, braco=res.braco, tipo="entrada_bloqueada",
                                        detalhe=";".join(res.motivos)[:300])
@@ -904,7 +913,8 @@ class Orquestrador:
             ctxs.append((c, ContextoDecisao(
                 t0_ns=t, dossie=d, hash_dossie=hash_dossie(d), preco_ref=snap.meio, bid=tick.bid, ask=tick.ask,
                 posicao=self.sim.posicao(c.braco.id), ciclo_id=ciclo_id, gatilhos=disparos,
-                tick_pontos=self.cfg.instrumento.tick_pontos)))
+                tick_pontos=self.cfg.instrumento.tick_pontos,
+                odds=self._odds if self.avaliador_odds is not None else None)))
         if not ctxs:
             return
         self.registro.latencia(
@@ -921,6 +931,13 @@ class Orquestrador:
         resultados = await self._executar_bracos(ctxs)
         for res in resultados:
             self._enfileirar(t + res.latencia_ns, res)
+
+    def _odds(self, ctx: ContextoDecisao, lado: Lado, stop_pontos: float, alvo_pontos: float) -> Any:
+        """Probabilidades do plano PROPOSTO (so sessoes anteriores ao dia de t0: sem vazamento). None se desligado."""
+        if self.avaliador_odds is None:
+            return None
+        return self.avaliador_odds.avaliar(t0_ns=ctx.t0_ns, lado=lado, stop_pontos=stop_pontos,
+                                           alvo_pontos=alvo_pontos, preco_ref=ctx.preco_ref)
 
     async def _executar_bracos(self, ctxs: list[tuple[ContaBraco, ContextoDecisao]]) -> list[ResultadoDecisao]:
         brutos = await asyncio.gather(*[c.braco.adecidir(ctx) for c, ctx in ctxs], return_exceptions=True)
