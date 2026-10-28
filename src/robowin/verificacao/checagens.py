@@ -146,6 +146,29 @@ def catalogo_modelos(ctx: Contexto) -> Resultado:
     return aprovado(nome, f"{len(modelos)} modelos, todos com preco e data de corte; modelo sem preco e recusado")
 
 
+def registro_provedores(ctx: Contexto) -> Resultado:
+    nome = "Registro de provedores de IA (config/provedores.toml)"
+    if ctx.raiz is None:
+        return nao_verificavel(nome, "raiz do repositorio nao encontrada")
+    from robowin.core.config import carregar_toml
+    from robowin.ia.catalogo import Catalogo, ErroCatalogo, dividir_modelo
+    from robowin.ia.registro_provedores import ErroRegistro, RegistroProvedores
+    try:
+        reg = RegistroProvedores.carregar(ctx.arq("config/provedores.toml"))
+        cat = Catalogo.carregar(ctx.arq("config/modelos.toml"))
+        cfg = carregar_toml(ctx.arq("config/robowin.toml"))
+    except (ErroRegistro, ErroCatalogo, OSError) as e:
+        return reprovado(nome, str(e))
+    usados = {m.provedor for m in cat}
+    usados |= {dividir_modelo(p["modelo"])[0] for p in cfg.get("ia", {}).get("papeis", {}).values() if "modelo" in p}
+    faltam = sorted(usados - set(reg.nomes()))
+    if faltam:
+        return reprovado(nome, f"provedores usados no catalogo/papeis sem entrada no registro: {faltam}")
+    nao_verif = sum(1 for d in reg if not d.verificado)
+    return aprovado(nome, f"{len(reg.nomes())} provedores ({nao_verif} com base_url NAO verificada nesta sessao: "
+                          "verificado=false); todo provedor do catalogo e dos papeis esta registrado")
+
+
 def perfis_ativo_bolsa(ctx: Contexto) -> Resultado:
     nome = "Perfis de ativo e de bolsa (instrumentos.toml, bolsas.toml)"
     if ctx.raiz is None:
@@ -412,7 +435,8 @@ def conectividade(ctx: Contexto) -> Resultado:
 def checagens() -> list[tuple[str, Callable[[Contexto], Resultado | list[Resultado]]]]:
     return [
         ("importabilidade", importabilidade), ("ruff", ruff), ("lint_mql4", lint_mql4),
-        ("auditoria", cadeia_auditoria), ("catalogo", catalogo_modelos), ("perfis", perfis_ativo_bolsa),
+        ("auditoria", cadeia_auditoria), ("catalogo", catalogo_modelos), ("provedores", registro_provedores),
+        ("perfis", perfis_ativo_bolsa),
         ("risco", politica_risco), ("envio_unico", order_send_unico), ("constantes", constantes_de_ativo),
         ("diagnostico", diagnostico_duble), ("painel", painel), ("gateway", gateway_cliente_local),
         ("metatrader5", pacote_metatrader5), ("chaves", chaves_api), ("conectividade", conectividade),

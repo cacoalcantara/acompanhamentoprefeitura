@@ -333,6 +333,11 @@ class EntradaCatalogoModelo(Base):
     saida_estruturada: Literal["nativa", "json_schema", "json"] = "nativa"
     streaming: bool = True
     notas: str = ""
+    # declaracoes explicitas (robowin ia adicionar-modelo); adicoes opcionais, o padrao preserva o contrato antigo
+    preco_desconhecido: bool = False  # preco nao informado: teto conservador por chamada e rotulo no manifesto
+    teto_chamada_usd: float = 0.0     # teto por chamada usado quando preco_desconhecido (0 = padrao do catalogo)
+    corte_desconhecido: bool = False  # sem data de corte: contaminado em QUALQUER backtest historico
+    local: bool = False               # modelo local (custo de API zero)
 
 
 class Papel(Base):

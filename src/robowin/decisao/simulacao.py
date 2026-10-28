@@ -48,7 +48,6 @@ from robowin.ia.esquemas import ArgumentoDebate, ParecerRisco, ReflexaoIA
 from robowin.ia.orcamento import OrcamentoIA, ProvedorComOrcamento
 from robowin.ia.papeis import carregar_papeis, validar_papeis
 from robowin.ia.prompts import hashes_prompts
-from robowin.ia.provedores import criar_provedor
 from robowin.ia.provedores.base import Medidor, RespostaBruta
 from robowin.ia.provedores.falso import ProvedorFalso
 from robowin.ia.reflexao import MemoriaReflexiva
@@ -324,10 +323,14 @@ def montar_provedores(p: ParamsSimulacao, cfg: dict[str, Any], catalogo: Catalog
     real = p.provedor == "real"
     for n in nomes:
         if real:
-            from robowin.ia.cli_cmds import tem_chave
-            if not tem_chave(n):
-                raise ErroConfig(f"sem chave de API para o provedor '{n}' (use --provedor falso)")
-            interno = criar_provedor(n, catalogo=catalogo)
+            from robowin.ia.registro_provedores import ErroRegistro, registro_padrao
+            reg = registro_padrao()
+            try:
+                if not reg.chave_presente(n):
+                    raise ErroConfig(f"{reg.mensagem_sem_chave(n)} (ou use --provedor falso)")
+                interno = reg.criar(n, catalogo=catalogo)
+            except ErroRegistro as e:
+                raise ErroConfig(str(e)) from e
         else:
             interno = ProvedorFalsoSessao(n, seed=p.seed, catalogo=catalogo, p_timeout=p.p_timeout, p_http=p.p_http)
         out[n] = ProvedorComOrcamento(interno, orc, catalogo)
@@ -345,6 +348,30 @@ def montar_reflexao(cfg: Mapping[str, Any], fab: FabricaBracos, provedores: Mapp
     serv = ServicoLLM(provedores[prov], ref, "reflexao", ReflexaoIA, effort=eff, max_tokens=300)
     mem = MemoriaReflexiva(float(sec.get("atraso_liquidacao_s", 300.0)), int(sec.get("max_reflexoes", 3)))
     return mem, serv
+
+
+ROTULO_CONTAMINADO_CORTE = "contaminado_corte_desconhecido"
+
+
+def rotular_declaracoes(bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str]) -> set[str]:
+    """Marca no manifesto (``hashes``) os modelos declarados com preco/corte desconhecido. Devolve os ids dos
+    bracos com modelo SEM data de corte (contaminados em qualquer backtest historico)."""
+    contaminados: set[str] = set()
+    for b in bracos:
+        m = b.manifesto()
+        refs = [m[p]["modelo"] for p in ("proponente", "revisor") if m.get(p)]
+        refs += [d["modelo"] for d in (m.get("debate") or {}).get("etapas", {}).values()]
+        for ref in refs:
+            try:
+                rot = catalogo.rotulos(ref)
+            except Exception:
+                continue
+            if rot:
+                hashes[f"rotulo:{ref}"] = ",".join(rot)
+            if catalogo.contaminado_em_historico([ref]):
+                contaminados.add(b.id)
+                hashes[f"contaminacao:{b.id}"] = "corte_desconhecido:so_avaliacao_prospectiva"
+    return contaminados
 
 
 def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str],
@@ -444,6 +471,7 @@ def construir_orquestrador(
         suf = "" if modo == "imediato" else "_cond"
         bracos.append(BracoAleatorio(f"controle_aleatorio{suf}", modo, seed=p.seed, geometrias=(g,)))
     hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "perfil": perfil.hash()}
+    contaminados = rotular_declaracoes(bracos, catalogo, hashes)
     memoria_reflexiva, servico_reflexao = montar_reflexao(cfg, fab, provedores, ativo=bool(papeis))
     if memoria_reflexiva is not None and servico_reflexao is not None:
         hashes["reflexao"] = f"ativa:{servico_reflexao.chave}"
@@ -468,6 +496,14 @@ def construir_orquestrador(
                        avaliador_odds=(AvaliadorOdds(perfil, piscina_odds, config_odds(cfg))
                                        if piscina_odds is not None else None),
                        memoria_reflexiva=memoria_reflexiva, servico_reflexao=servico_reflexao)
+    if contaminados and not sintetico and modo_tempo != "real":
+        # dados historicos + modelo sem data de corte: o modelo pode ter visto o periodo => so prospectivo
+        for bid in contaminados:
+            if bid in orq.contas:
+                orq.contas[bid].rotulos.add(ROTULO_CONTAMINADO_CORTE)
+        registro.incidente(t_ns=t_ref_ns, origem="simulacao", severidade="alerta",
+                           detalhe=f"{ROTULO_CONTAMINADO_CORTE}: bracos {sorted(contaminados)} usam modelo sem data de "
+                                   "corte; em dados historicos o resultado NAO e comparavel (so avaliacao prospectiva).")
     if erro_risco is not None:
         registro.incidente(t_ns=t_ref_ns, origem="simulacao", severidade="critico",
                            detalhe=f"risco_nao_aprovado: politica de risco nao aprovada ({erro_risco}); "

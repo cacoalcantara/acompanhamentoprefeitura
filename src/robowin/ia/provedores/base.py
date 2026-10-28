@@ -125,7 +125,10 @@ class ProvedorBase(ABC):
     nome: str = "base"
     rotulo: str = ""  # ex.: "FALSO" para o provedor de testes
 
-    def __init__(self, *, catalogo: Any = None, modelos_servidos_aceitos: Iterable[str] | None = None) -> None:
+    def __init__(self, *, catalogo: Any = None, modelos_servidos_aceitos: Iterable[str] | None = None,
+                 nome: str | None = None) -> None:
+        if nome:
+            self.nome = nome  # nome do REGISTRO (ex.: 'deepseek' com o adaptador openai_compativel)
         self._catalogo = catalogo
         self._aceitos = list(modelos_servidos_aceitos) if modelos_servidos_aceitos is not None else None
 

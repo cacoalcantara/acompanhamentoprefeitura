@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from robowin.ia.provedores.base import Medidor, ProvedorBase, RespostaBruta, exigir_pacote
+from robowin.ia.provedores.base import ErroProvedor, Medidor, ProvedorBase, RespostaBruta, exigir_pacote
 from robowin.ia.segredos import registrar_segredo
 
 _BLOQUEIOS = ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION", "IMAGE_SAFETY")
@@ -32,10 +32,15 @@ class ProvedorGoogle(ProvedorBase):
         registrar_segredo(self._api_key)
         self._cliente = cliente
 
+    def parametros_cliente(self) -> dict[str, Any]:
+        """Argumentos de ``google.genai.Client`` (sem rede)."""
+        return {"api_key": self._api_key}
+
     def _get_cliente(self) -> Any:
         if self._cliente is None:
+            params = self.parametros_cliente()
             genai = exigir_pacote("google.genai", "google")
-            self._cliente = genai.Client(api_key=self._api_key)
+            self._cliente = genai.Client(**params)
         return self._cliente
 
     async def _executar(
@@ -78,3 +83,27 @@ class ProvedorGoogle(ProvedorBase):
             recusa=recusa, categoria_recusa=(bloqueio or fim) if recusa else None,
             tokens_entrada=max(entrada - cache, 0), tokens_cache=cache, tokens_saida=saida,
         )
+
+
+class ProvedorGeminiVertex(ProvedorGoogle):
+    """Gemini no Vertex AI: ``google.genai.Client(vertexai=True, project=..., location=...)``.
+
+    Credencial: credenciais padrao do Google (``GOOGLE_APPLICATION_CREDENTIALS``) ou chave do modo expresso."""
+    nome = "gemini_vertex"
+
+    def __init__(self, *, projeto: str | None = None, regiao: str | None = None, api_key: str | None = None,
+                 **kw: Any):
+        super().__init__(api_key=api_key or "", **kw)
+        self._api_key = api_key  # sem chave: o SDK usa as credenciais padrao do Google
+        self._projeto = projeto or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        self._regiao = regiao or os.environ.get("GOOGLE_CLOUD_LOCATION")
+
+    def parametros_cliente(self) -> dict[str, Any]:
+        kw: dict[str, Any] = {"vertexai": True}
+        if self._api_key:
+            kw["api_key"] = self._api_key  # modo expresso (sem projeto/regiao)
+        else:
+            if not self._projeto or not self._regiao:
+                raise ErroProvedor("gemini_vertex exige GOOGLE_CLOUD_PROJECT e GOOGLE_CLOUD_LOCATION")
+            kw.update(project=self._projeto, location=self._regiao)
+        return kw
