@@ -28,4 +28,12 @@ jobs:
           baixar mini_ibovespa.html "https://www.b3.com.br/pt_br/produtos-e-servicos/negociacao/renda-variavel/futuro-mini-de-ibovespa.htm"
           baixar futuro_dolar.html "https://www.b3.com.br/pt_br/produtos-e-servicos/negociacao/moedas/futuro-de-taxa-de-cambio-de-reais-por-dolar-comercial.htm"
           baixar mini_dolar.html "https://www.b3.com.br/pt_br/produtos-e-servicos/negociacao/moedas/futuro-mini-de-taxa-de-cambio-de-reais-por-dolar-comercial.htm"
+          echo "=================== NEGOCIOS (historico intradiario de negocios da B3)"
+          for t in WINZ26 WDOX26; do for d in 2026-10-26 2026-10-27; do
+            for u in "https://arquivos.b3.com.br/apinegocios/tickercsv/$t/$d" "https://arquivos.b3.com.br/rapinegocios/tickercsv/$t/$d"; do
+              echo "--- $u"; curl -sSL -A "$UA" --max-time 120 -o /tmp/neg "$u"; echo "curl=$? bytes=$(wc -c < /tmp/neg) tipo=$(file -b /tmp/neg)"
+              if file /tmp/neg | grep -qi zip; then unzip -p /tmp/neg | head -5; unzip -p /tmp/neg | wc -l; else head -c 600 /tmp/neg; echo; fi
+            done; done; done
+          baixar horarios.html "https://www.b3.com.br/pt_br/solucoes/plataformas/puma-trading-system/para-participantes-e-traders/horario-de-negociacao/derivativos/indice-de-acoes/"
+          baixar tarifas_deriv.html "https://www.b3.com.br/pt_br/produtos-e-servicos/tarifas/listados-a-vista-e-derivativos/derivativos/tarifas-de-ativos-financeiros/"
           exit 0
