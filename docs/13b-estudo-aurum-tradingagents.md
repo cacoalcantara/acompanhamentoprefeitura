@@ -110,9 +110,12 @@ Legenda de decisão: **adotar** (ideia aplicada quase como está), **adaptar** (
   relatório do `robowin avaliar` e na página *Desempenho e latência* do painel (também `/api/monitoramento`):
   * **PSI por feature**: referência = janela de treino do modelo ativo (`modelos.treinado_ate_ns`) quando há dado
     dos dois lados do corte; senão, primeiras sessões × últimas (metade/metade). Limiares: < 0,10 estável;
-    0,10–0,25 aviso; ≥ 0,25 alerta. Features lidas do banco: variação do preço de referência entre decisões (em
-    pontos) e as saídas numéricas da proposta de cada braço (ex.: E[R$] e P(stop) do quant); com
-    `--ticks DIR --simbolo S` entra também o vetor do `PipelineFeatures` recalculado do armazém. PSI ≥ 0,25 grava
+    0,10–0,25 aviso; ≥ 0,25 alerta. Fonte padrão (`--psi-fonte auto`): o **vetor real de features** que o
+    `Orquestrador` usou em cada ciclo de decisão (tabela `features_ciclo`, séries `ciclo.<feature>`). Banco antigo
+    sem essas linhas (ou `--psi-fonte proxies`): proxies do banco, isto é, variação do preço de referência entre
+    decisões (em pontos) e as saídas numéricas da proposta de cada braço (ex.: E[R$] e P(stop) do quant); com
+    `--ticks DIR --simbolo S` entra também, em qualquer fonte, o vetor do `PipelineFeatures` recalculado do armazém
+    (`tick.*`). O relatório diz qual fonte foi usada. PSI ≥ 0,25 grava
     incidente `deriva_features` (severidade `aviso`, idempotente; `--sem-incidente` desliga); nada é bloqueado e o
     painel nunca grava.
   * **Custo de execução real × modelo** (ticks por execução): entradas a mercado, lado × (preço executado − preço de
@@ -124,8 +127,32 @@ Legenda de decisão: **adotar** (ideia aplicada quase como está), **adaptar** (
   * **VaR/ES diário histórico** (`risco/cauda.py`): < 60 dias = amostra insuficiente (valores exibidos como instáveis).
 * **Ainda não ligado ao ciclo ao vivo**: o PSI/custo são calculados sobre o banco (relatório e painel), não a cada
   decisão do núcleo; o `RastreadorSlippage` não alimenta nenhuma decisão.
-* **`MotorBacktest` (`backtest/motor.py`)**: segue com a memória só de resultados numéricos; a reflexão está ligada ao
-  `Orquestrador` (o fluxo de `robowin simular`/`nucleo`).
+* **`MotorBacktest` (`backtest/motor.py`)**: a reflexão também existe no backtest (`ConfigBacktest.reflexao`,
+  desligada por padrão), com a mesma `liquidar_pendentes` e a mesma regra de `t_disponivel`; o `robowin backtest`
+  da CLI segue só com os braços de referência (sem IA, logo sem reflexão).
+
+## Ressalvas resolvidas
+
+* **PSI sobre as features reais** (antes: só proxies, porque o banco não guardava o vetor). O `Orquestrador` grava,
+  por ciclo de decisão (grupo de braços), o vetor do `PipelineFeatures` restrito à lista permitida
+  (`features/registro.py`) na tabela `features_ciclo` (`dados/features_ciclo.py`): `t_ns`, `sessao`, `ciclo_id`,
+  `bracos`, `gatilhos`, `n` e `valores_json` (JSON compacto, chaves ordenadas, 7 algarismos significativos, sem
+  valores não finitos). A tabela fica **fora do esquema congelado** (`core/esquema_banco.py`): é criada pela
+  migração registrada do módulo (`BancoSQLite.registrar_migracao("features_ciclo", ...)`); banco sem suporte a
+  migração (dublê) simplesmente não grava. Nada disso entra no dossiê, na auditoria ou em `hash_resultado`, então
+  os hashes existentes não mudam (teste: mesmo fluxo com e sem a tabela dá os mesmos `hash_dossie` e decisões).
+  O PSI usa essas linhas por padrão; banco antigo sem a tabela continua funcionando e cai nos proxies. Grupos no
+  mesmo instante compartilham o vetor e contam uma vez. Ressalva que fica: os ciclos são disparados por gatilhos
+  (não a intervalo fixo), então a amostra é a dos instantes em que houve decisão, não uma amostra uniforme do
+  pregão; para isso, o `--ticks` continua disponível.
+* **Latência da reflexão no backtest** (antes: fixa em 5000 ms). `latencia_reflexao(banco)` (em
+  `backtest/motor.py`) devolve a **distribuição medida** quando o banco de simulação/demo tem ao menos 5 amostras
+  (`chamadas_llm.total_ms` do papel `reflexao` e `latencias` da etapa `reflexao_ia` com `injetado=0`; chamadas
+  gravadas por um backtest, ids `llm-ref-*`, e zeros ficam de fora); senão, a fixa de 5000 ms.
+  `reflexao_de_config(cfg, banco_medido=...)` usa isso (uma latência explícita tem prioridade). O sorteio é por
+  seed (`AmostradorLatencia`, ordem fixa das amostras), e na chamada vale max(medida na chamada, injetada): o
+  resultado é reprodutível e conservador. A origem (`banco:papel=reflexao` ou `fixa_5000.0ms`) e os quantis vão
+  para o manifesto do experimento do backtest.
 
 ## Como ligar e medir
 
