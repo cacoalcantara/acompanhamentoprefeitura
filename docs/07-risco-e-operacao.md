@@ -14,3 +14,11 @@ R$ 200/dia; R$ 500/semana; drawdown R$ 1.000 alerta / R$ 1.500 máximo; entradas
   mensagens), políticas da Anthropic e da OpenAI revisadas, capital e limites definidos, ciência do risco de
   gap, autorização expressa. **O envio real não existe nesta versão.**
 - **Teste na demo:** saída com ticket velho deve ser rejeitada (não inverter a posição).
+
+## Troca de ativo: risco
+Limites em pontos são derivados do perfil (`stop_max_ticks` x tick). O `config/risco.toml` aprovado vale só para o
+ativo com `risco_aprovado_padrao = true` (WIN). Outro ativo usa limites mínimos (limites em moeda do `risco.toml`,
+menos operações/dia, stop/folga do perfil) e o rótulo `risco_nao_aprovado`, até existir `config/risco-<ativo>.toml`
+com registro de aprovação por hash; ao vivo, sem aprovação, a sessão é recusada. Perfil `a_confirmar` bloqueia
+qualquer operação (`PerfilNaoConfirmado`). Trocar o ativo exige posição zerada e abre novo experimento; modelo,
+orçamento e limites de um ativo nunca são reutilizados em outro.

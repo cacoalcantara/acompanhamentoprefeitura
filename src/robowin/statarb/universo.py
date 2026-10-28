@@ -8,7 +8,11 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-PADRAO: tuple[str, ...] = ("IND", "WDO", "BOVA11", "IBOV")
+
+def padrao(alvo: str | None = None) -> tuple[str, ...]:
+    """Universo candidato: todos os ativos de config/instrumentos.toml mais o indice de referencia."""
+    from robowin.core.instrumentos import ativos_disponiveis
+    return (*(a for a in ativos_disponiveis() if a != alvo), "IBOV")
 
 
 def _nome(s: Any) -> str:
@@ -24,9 +28,10 @@ class Universo:
     avisos: tuple[str, ...] = field(default=())
 
     @classmethod
-    def criar(cls, simbolos: Iterable[str] = PADRAO, acoes: Iterable[str] = ()) -> Universo:
+    def criar(cls, simbolos: Iterable[str] | None = None, acoes: Iterable[str] = (),
+              alvo: str | None = None) -> Universo:
         vistos: dict[str, None] = {}
-        for s in (*simbolos, *acoes):
+        for s in (*(padrao(alvo) if simbolos is None else simbolos), *acoes):
             s = s.strip().upper()
             if s:
                 vistos.setdefault(s, None)

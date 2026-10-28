@@ -42,7 +42,7 @@ def _cmd_simular(a: argparse.Namespace) -> int:
     finally:
         s.banco.fechar()
     print(formatar_resumo(resumo, rotulo_ia=s.rotulo_dados, caminho_banco=s.caminho_banco,
-                          dir_auditoria=s.dir_auditoria))
+                          dir_auditoria=s.dir_auditoria, moeda=s.orq.perfil.moeda))
     print(f"\nPainel: robowin painel --banco {s.caminho_banco}")
     return 0
 

@@ -104,7 +104,8 @@ def decidir_selo(*, sintetico: bool | None, contaminado: bool | None, n: int, n_
 
 def _relatorio_braco(nome: str, trades: Sequence[Trade], *, n_alvo: int | None, tentativas: int,
                      sintetico: bool | None, contaminado: bool | None, cfg_ir: impostos.ConfigImpostos | None,
-                     n_boot: int, seed: int, var_sr_tentativas: float | None = None) -> dict:
+                     n_boot: int, seed: int, var_sr_tentativas: float | None = None,
+                     calcula_tributo: bool = True) -> dict:
     r = metricas.resumo(trades)
     x = [t.liquido_brl for t in metricas.ordenar(trades)]
     dias = [dia_pregao(t) for t in metricas.ordenar(trades)]
@@ -127,8 +128,10 @@ def _relatorio_braco(nome: str, trades: Sequence[Trade], *, n_alvo: int | None, 
         "acerto": {"n": r.n, "acertos": r.acertos, "taxa": r.taxa_acerto, "ic_wilson_95": wil,
                    "ic_clopper_pearson_95": cp},
         "bootstrap_pregao": bs, "dsr": dsr, "distribuicao_diaria": metricas.distribuicao_diaria(trades),
-        "impostos": [a.como_dict() for a in impostos.apurar(trades, cfg_ir)],
-        "resultado_apos_ir": impostos.resultado_apos_ir(trades, cfg_ir),
+        "impostos": [a.como_dict() for a in impostos.apurar(trades, cfg_ir)] if calcula_tributo else [],
+        "resultado_apos_ir": (impostos.resultado_apos_ir(trades, cfg_ir) if calcula_tributo
+                              else {"antes_ir_brl": r.lucro_liquido_brl, "ir_estimado_brl": None, "depois_ir_brl": None}),
+        "tributo": "brasil_day_trade" if calcula_tributo else "tributo nao calculado",
         "amostra": {"n": r.n, "n_alvo": n_alvo,
                     "suficiente": None if n_alvo is None else not comp.amostra_insuficiente(r.n, n_alvo)},
         "selo": selo,
@@ -144,9 +147,11 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
                     n_boot: int = 2000, seed: int = 0, titulo: str = "Relatorio de avaliacao",
                     ids_vetados: Mapping[str, set[str]] | None = None,
                     n_preregistrado_comparacoes: int | None = None) -> dict[str, Any]:
+    bolsa = perfil.bolsa_perfil() if perfil is not None else None
+    calcula_tributo = bolsa.calcula_tributo if bolsa is not None else True  # sem perfil: regime brasileiro (legado)
     bracos = {nome: _relatorio_braco(nome, ts, n_alvo=n_alvo, tentativas=tentativas, sintetico=sintetico,
                                      contaminado=contaminado, cfg_ir=cfg_impostos, n_boot=n_boot, seed=seed,
-                                     var_sr_tentativas=var_sr_tentativas)
+                                     var_sr_tentativas=var_sr_tentativas, calcula_tributo=calcula_tributo)
               for nome, ts in trades_por_braco.items()}
     comparacoes: dict[str, Any] = {}
     if controle and controle in trades_por_braco:
@@ -170,6 +175,7 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
         "titulo": titulo, "aviso_simulacao": AVISO_SIMULACAO,
         "aviso_acerto": texto_aviso_acerto(perfil, stop_pontos, alvo_pontos, risco),
         "ativo": perfil.simbolo_base if perfil is not None else None,
+        "moeda": perfil.moeda if perfil is not None else "BRL",
         "periodo": {"inicio": dias[0] if dias else None, "fim": dias[-1] if dias else None, "pregoes": len(dias)},
         "dados": {"sintetico": sintetico, "contaminado": contaminado}, "controle": controle,
         "tentativas": tentativas, "var_sr_tentativas": var_sr_tentativas, "bracos": bracos, "comparacoes_com_controle": comparacoes,
@@ -219,8 +225,9 @@ def renderizar_markdown(rel: Mapping[str, Any]) -> str:
               f"- n = {m['n']} operacoes em {m['dias']} pregoes",
               f"- Taxa de acerto (liquido > 0): {_pct(a['taxa'])}; IC de Wilson 95%: "
               f"[{_pct(a['ic_wilson_95'][0])}; {_pct(a['ic_wilson_95'][1])}]",
-              f"- Lucro liquido: R$ {_f(m['lucro_liquido_brl'])}; apos IR estimado: R$ "
-              f"{_f(b['resultado_apos_ir']['depois_ir_brl'])}",
+              f"- Lucro liquido: R$ {_f(m['lucro_liquido_brl'])}; "
+              + (f"apos IR estimado: R$ {_f(b['resultado_apos_ir']['depois_ir_brl'])}" if b["tributo"] == "brasil_day_trade"
+                 else "tributo nao calculado (regime tributario fora do Brasil)"),
               f"- Expectativa por operacao: R$ {_f(m['expectativa_brl'])}; IC 95% (bootstrap por pregao): "
               f"{_ic(bs['expectativa_ic'])}",
               f"- Fator de lucro: {_f(m['fator_lucro'])}; IC 95%: {_ic(bs['fator_lucro_ic'])}",
@@ -252,7 +259,9 @@ def renderizar_markdown(rel: Mapping[str, Any]) -> str:
                 L.append(f"| {i['mes']} | {_f(i['resultado_liquido_brl'])} | {_f(i['irrf_brl'])} | "
                          f"{_f(i['base_calculo_brl'])} | {_f(i['darf_brl'])} | {i['vencimento']} |")
         L.append("")
-    return "\n".join(L)
+    texto = "\n".join(L)
+    moeda = rel.get("moeda", "BRL")
+    return texto if moeda == "BRL" else texto.replace("R$", moeda)  # valores na moeda do instrumento
 
 
 def para_json_seguro(obj: Any) -> Any:

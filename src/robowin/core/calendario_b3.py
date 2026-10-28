@@ -11,28 +11,28 @@ from .tipos import SessaoPregao
 
 SP = ZoneInfo("America/Sao_Paulo")
 
-_cal = None
+CAL_B3 = "BVMF"  # codigo do exchange-calendars da B3 (o de qualquer bolsa vem de config/bolsas.toml)
+_cals: dict[str, object] = {}
 
 
-def _calendario():
-    global _cal
-    if _cal is None:
+def _calendario(codigo: str = CAL_B3):
+    if codigo not in _cals:
         import exchange_calendars as xc
-        _cal = xc.get_calendar("BVMF")
-    return _cal
+        _cals[codigo] = xc.get_calendar(codigo)
+    return _cals[codigo]
 
 
-def eh_pregao(d: dt.date) -> bool:
-    cal = _calendario()
+def eh_pregao(d: dt.date, calendario: str = CAL_B3) -> bool:
+    cal = _calendario(calendario)
     try:
-        return bool(cal.is_session(pd.Timestamp(d)))
+        return bool(cal.is_session(pd.Timestamp(d)))  # type: ignore[attr-defined]
     except Exception:  # fora do intervalo do calendario
         return d.weekday() < 5
 
 
-def proximo_pregao(d: dt.date) -> dt.date:
+def proximo_pregao(d: dt.date, calendario: str = CAL_B3) -> dt.date:
     d += dt.timedelta(days=1)
-    while not eh_pregao(d):
+    while not eh_pregao(d, calendario):
         d += dt.timedelta(days=1)
     return d
 
@@ -46,25 +46,26 @@ def sessao_em(d: dt.date, perfil: PerfilInstrumento | None = None) -> SessaoPreg
     return max(vig, key=lambda s: s.vigente_desde)
 
 
-def _quarta_proxima_dia15(ano: int, mes: int) -> dt.date:
+def _quarta_proxima_dia15(ano: int, mes: int, cal: str = CAL_B3) -> dt.date:
     """Quarta-feira mais proxima do dia 15; se nao for pregao, a sessao seguinte."""
     ref = dt.date(ano, mes, 15)
     quartas = [ref + dt.timedelta(days=k) for k in range(-3, 4) if (ref + dt.timedelta(days=k)).weekday() == 2]
     q = quartas[0]
-    return q if eh_pregao(q) else proximo_pregao(q)
+    return q if eh_pregao(q, cal) else proximo_pregao(q, cal)
 
 
-def _primeiro_dia_util(ano: int, mes: int) -> dt.date:
+def _primeiro_dia_util(ano: int, mes: int, cal: str = CAL_B3) -> dt.date:
     d = dt.date(ano, mes, 1)
-    return d if eh_pregao(d) else proximo_pregao(d)
+    return d if eh_pregao(d, cal) else proximo_pregao(d, cal)
 
 
 def vencimento_contrato(perfil: PerfilInstrumento, ano: int, mes: int) -> dt.date | None:
     """Vencimento do contrato do mes (`None` se o ativo nao vence ou nao ha contrato neste mes)."""
+    cal = perfil.bolsa_perfil().calendario
     if perfil.vencimento == "quarta_dia15_meses_pares":
-        return _quarta_proxima_dia15(ano, mes) if mes % 2 == 0 else None
+        return _quarta_proxima_dia15(ano, mes, cal) if mes % 2 == 0 else None
     if perfil.vencimento == "primeiro_dia_util_mes":  # [a confirmar] regra do WDO/DOL
-        return _primeiro_dia_util(ano, mes)
+        return _primeiro_dia_util(ano, mes, cal)
     return None
 
 

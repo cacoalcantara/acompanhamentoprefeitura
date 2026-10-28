@@ -24,6 +24,7 @@ RegraVencimento = Literal["quarta_dia15_meses_pares", "primeiro_dia_util_mes", "
 RESERVADAS = frozenset({"sessao_padrao"})
 LETRAS_MES = "FGHJKMNQUVXZ"
 ROTULO_A_CONFIRMAR = "ativo_a_confirmar"
+ROTULO_BOLSA_A_CONFIRMAR = "bolsa_a_confirmar"
 
 
 class PerfilNaoConfirmado(ErroConfig):
@@ -52,6 +53,8 @@ class PerfilInstrumento(Base):
     stop_padrao_ticks: int = Field(ge=1)
     alvo_padrao_ticks: int = Field(ge=1)
     sessoes: tuple[SessaoPregao, ...] = ()
+    bolsa: str = "B3"
+    moeda: str = "BRL"  # moeda do instrumento: P&L, custos e limites de risco (campos *_brl) estao NELA
     aceita_book: bool = True
     rlp: bool = False
     risco_aprovado_padrao: bool = False
@@ -106,12 +109,16 @@ class PerfilInstrumento(Base):
     def rotulos(self) -> frozenset[str]:
         return frozenset({ROTULO_A_CONFIRMAR}) if self.a_confirmar else frozenset()
 
+    def bolsa_perfil(self) -> Any:
+        from .bolsas import carregar_bolsa
+        return carregar_bolsa(self.bolsa)
+
     # --- derivados
     def hash(self) -> str:
         return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
 
     def sessao_em(self, d: dt.date) -> SessaoPregao:
-        grade = self.sessoes or sessoes_padrao()
+        grade = self.sessoes or sessoes_padrao()  # `carregar_perfil` preenche com a grade da bolsa
         vig = [s for s in grade if s.vigente_desde <= d.isoformat()]
         if not vig:
             raise ValueError(f"sem grade de sessao para {d}")
@@ -126,7 +133,7 @@ class PerfilInstrumento(Base):
     def instrumento(self, simbolo: str | None = None, vencimento: dt.date | str | None = None, **extra: Any) -> Instrumento:
         """`Instrumento` operacional deste perfil (``simbolo`` da corretora; por padrao o proprio simbolo_base)."""
         return Instrumento(
-            simbolo=simbolo or self.simbolo_base, ativo=self.simbolo_base, ponto_valor_brl=self.ponto_valor_brl,
+            simbolo=simbolo or self.simbolo_base, ativo=self.simbolo_base, moeda=self.moeda, ponto_valor_brl=self.ponto_valor_brl,
             tick_pontos=self.tick_pontos, lote=self.lote,
             vencimento=vencimento.isoformat() if isinstance(vencimento, dt.date) else vencimento, **extra)
 
@@ -167,7 +174,18 @@ def carregar_perfil(simbolo_base: str, caminho: str | Path | None = None, *,
                                    sessoes=tuple(SessaoPregao(**s) for s in sec.get("sessoes", [])))
     except Exception as e:
         raise ErroConfig(f"perfil {chave} invalido: {e}") from e
+    perfil = _aplicar_bolsa(perfil)
     return perfil if permitir_a_confirmar else perfil.exigir_confirmado()
+
+
+def _aplicar_bolsa(perfil: PerfilInstrumento) -> PerfilInstrumento:
+    """Herda moeda e sessoes da bolsa do perfil; bolsa a_confirmar torna o perfil a_confirmar (bloqueia operar)."""
+    from .bolsas import carregar_bolsa
+    b = carregar_bolsa(perfil.bolsa)
+    itens = tuple(perfil.a_confirmar_itens) + tuple(f"bolsa {b.codigo}: {i}" for i in b.a_confirmar_itens)
+    return perfil.model_copy(update={
+        "moeda": b.moeda, "sessoes": perfil.sessoes or b.sessoes,
+        "a_confirmar": perfil.a_confirmar or b.a_confirmar, "a_confirmar_itens": itens})
 
 
 def ativo_da_config(cfg: dict[str, Any], override: str | None = None) -> str:

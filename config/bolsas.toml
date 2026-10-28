@@ -1,0 +1,100 @@
+# Perfis de BOLSA: fuso, calendario (codigo do exchange-calendars), sessoes versionadas, moeda, modelo de tarifas,
+# limites de oscilacao opcionais e regime tributario. Cada ativo de config/instrumentos.toml aponta para uma bolsa
+# (`bolsa = "B3"` por padrao). Trocar de bolsa = apontar o ativo para outra secao daqui.
+#
+# So a B3 esta preenchida e confirmada. As demais sao MODELOS a_confirmar = true: bloqueiam a operacao (e a
+# conexao ao MT5) ate o usuario conferir TODOS os itens e por a_confirmar = false. Hoje a simulacao sintetica
+# usa o fuso/calendario da B3 para o relogio interno; ver docs/03 para esse limite.
+#
+# regime_tributario: brasil_day_trade (IR 20% + IRRF 1%, implementado em avaliacao/impostos.py) | nao_calculado
+#   (qualquer outro regime: o relatorio diz "tributo nao calculado"; nenhum imposto e inventado).
+
+[B3]
+nome = "B3 - Brasil, Bolsa, Balcao"
+fuso = "America/Sao_Paulo"
+calendario = "BVMF"
+moeda = "BRL"
+modelo_tarifas = "por_lado_por_lote"
+regime_tributario = "brasil_day_trade"
+a_confirmar = false
+a_confirmar_itens = []
+[[B3.sessoes]]
+vigente_desde = "2026-03-09"
+abertura = "09:00"
+fechamento = "18:25"
+entradas_ate = "17:30"
+zeragem = "17:45"
+[[B3.sessoes]]
+vigente_desde = "2026-11-03"
+abertura = "09:00"
+fechamento = "18:25"
+entradas_ate = "17:30"
+zeragem = "17:45"
+
+[NYSE]
+nome = "NYSE - MODELO"
+fuso = "America/New_York"
+calendario = "XNYS"
+moeda = "USD"
+modelo_tarifas = "por_acao_ou_percentual"
+regime_tributario = "nao_calculado"
+a_confirmar = true
+a_confirmar_itens = ["sessoes e horarios de pre/pos-mercado", "tarifas e taxas regulatorias", "limites de oscilacao (LULD)",
+                     "regime tributario do investidor", "fuso e feriados conferidos com a corretora"]
+[[NYSE.sessoes]]
+vigente_desde = "2025-01-01"
+abertura = "09:30"
+fechamento = "16:00"
+entradas_ate = "15:30"
+zeragem = "15:45"
+
+[NASDAQ]
+nome = "NASDAQ - MODELO"
+fuso = "America/New_York"
+calendario = "XNAS"
+moeda = "USD"
+modelo_tarifas = "por_acao_ou_percentual"
+regime_tributario = "nao_calculado"
+a_confirmar = true
+a_confirmar_itens = ["sessoes", "tarifas", "limites de oscilacao", "regime tributario", "fuso e feriados"]
+[[NASDAQ.sessoes]]
+vigente_desde = "2025-01-01"
+abertura = "09:30"
+fechamento = "16:00"
+entradas_ate = "15:30"
+zeragem = "15:45"
+
+[LSE]
+nome = "London Stock Exchange - MODELO"
+fuso = "Europe/London"
+calendario = "XLON"
+moeda = "GBP"
+modelo_tarifas = "percentual"
+regime_tributario = "nao_calculado"
+a_confirmar = true
+a_confirmar_itens = ["sessoes", "tarifas e stamp duty", "limites de oscilacao", "regime tributario", "fuso e feriados"]
+[[LSE.sessoes]]
+vigente_desde = "2025-01-01"
+abertura = "08:00"
+fechamento = "16:30"
+entradas_ate = "16:00"
+zeragem = "16:15"
+
+[CME]
+nome = "CME Globex - MODELO"
+fuso = "America/Chicago"
+calendario = "CMES"
+moeda = "USD"
+modelo_tarifas = "por_contrato_por_lado"
+regime_tributario = "nao_calculado"
+a_confirmar = true
+a_confirmar_itens = ["sessoes (quase 24h)", "tarifas", "limites de oscilacao (price limits)", "regime tributario",
+                     "fuso e feriados"]
+[[CME.sessoes]]
+vigente_desde = "2025-01-01"
+abertura = "08:30"
+fechamento = "15:00"
+entradas_ate = "14:30"
+zeragem = "14:45"
+[CME.limite_oscilacao]
+percentual = 0.07

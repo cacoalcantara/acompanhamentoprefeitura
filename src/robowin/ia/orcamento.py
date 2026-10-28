@@ -29,6 +29,9 @@ class Reserva:
     valor_usd: float
 
 
+MOEDA_FATURAMENTO = "USD"  # custo de API e faturado em USD, independe da moeda do instrumento (sem conversao)
+
+
 class OrcamentoIA:
     def __init__(self, teto_mensal_usd: float, *, pregoes_no_mes: int = 21, gasto_mes_usd: float = 0.0,
                  fator_ritmo: float = 1.0, ativo: str = ""):
@@ -97,7 +100,7 @@ class OrcamentoIA:
             self._reservas.pop(reserva.id, None)
 
     def estado(self) -> dict[str, Any]:
-        return {"ativo": self.ativo, "teto": self.teto, "gasto_mes": self.gasto_mes, "gasto_hoje": self.gasto_hoje,
+        return {"ativo": self.ativo, "moeda": MOEDA_FATURAMENTO, "teto": self.teto, "gasto_mes": self.gasto_mes, "gasto_hoje": self.gasto_hoje,
                 "reservado": self.reservado, "cota_dia": self.cota_dia, "esgotado": self.esgotado}
 
 

@@ -8,6 +8,7 @@
 #   especificacao da B3 e da corretora, troque para a_confirmar = false (e esvazie a lista).
 #
 # Campos:
+#   bolsa: chave de config/bolsas.toml (padrao B3); moeda, fuso, calendario e sessoes vem de la
 #   classe: futuro_indice | futuro_cambio | acao | etf
 #   vencimento: quarta_dia15_meses_pares | primeiro_dia_util_mes | nenhum
 #   ponto_valor_brl: R$ por ponto de cotacao por lote (1 lote = `lote` unidades; o volume enviado = quantidade*lote)
@@ -141,8 +142,8 @@ tick_pontos = 0.01
 lote = 100
 stop_max_ticks = 50
 slippage_folga_ticks = 5
-stop_padrao_ticks = 20
-alvo_padrao_ticks = 20
+stop_padrao_ticks = 6
+alvo_padrao_ticks = 6
 aceita_book = true
 rlp = false
 risco_aprovado_padrao = false
@@ -167,8 +168,8 @@ tick_pontos = 0.01
 lote = 1
 stop_max_ticks = 50
 slippage_folga_ticks = 5
-stop_padrao_ticks = 20
-alvo_padrao_ticks = 20
+stop_padrao_ticks = 6
+alvo_padrao_ticks = 6
 aceita_book = true
 rlp = false
 risco_aprovado_padrao = false

@@ -44,6 +44,7 @@ class Instrumento(Base):
     tick_pontos: float
     lote: int = 1
     ativo: str = ""  # simbolo_base do perfil (ex.: o ativo cujo perfil gerou este instrumento)
+    moeda: str = "BRL"  # moeda do P&L, custos e risco deste instrumento
     vencimento: str | None = None  # AAAA-MM-DD
     filling_mode: int = 0
     trade_exemode: int = 0

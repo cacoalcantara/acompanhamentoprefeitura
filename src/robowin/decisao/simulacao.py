@@ -451,12 +451,12 @@ async def executar_sessao(s: Sessao) -> dict[str, dict[str, Any]]:
 
 def formatar_resumo(resumo: Mapping[str, Mapping[str, Any]], *, rotulo_ia: str, caminho_banco: Path | None = None,
                     dir_auditoria: Path | None = None, rotulo_dados: str = ROTULO_SESSAO,
-                    extra: str = "") -> str:
+                    extra: str = "", moeda: str = "BRL") -> str:
     L = ["=" * 100, f"  {rotulo_dados}", f"  IA: {rotulo_ia.upper()}"
          + ("  (respostas e latencias INJETADAS; nao representam nenhum modelo real)" if rotulo_ia == "falso" else ""),
          "  Nenhum resultado abaixo prova lucratividade (sem validacao fora da amostra).",
          "=" * 100,
-         f"{'braco':<24}{'modo':<12}{'dec.':>6}{'entr.':>6}{'vet.':>6}{'bloq.':>6}{'trades':>7}{'liq. R$':>10}"
+         f"{'braco':<24}{'modo':<12}{'dec.':>6}{'entr.':>6}{'vet.':>6}{'bloq.':>6}{'trades':>7}{'liq. ' + moeda:>10}"
          f"{'IA':>5}{'IA inv.':>8}{'custo US$':>10}  rotulos"]
     for b, r in resumo.items():
         L.append(f"{b:<24}{r['modo']:<12}{r['decisoes']:>6}{r['entradas']:>6}{r['vetadas']:>6}{r['bloqueadas']:>6}"

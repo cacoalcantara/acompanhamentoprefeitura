@@ -19,10 +19,10 @@ class _Sim:
 
 
 def test_universo_descarta_ausentes(caplog):
-    u = Universo.criar(acoes=["PETR4", "XXXX3"]).validar([_Sim("IND"), _Sim("BOVA11"), _Sim("PETR4")])
-    assert u.validos == ("IND", "BOVA11", "PETR4")
-    assert set(u.descartados) == {"WDO", "IBOV", "XXXX3"}
-    assert len(u.avisos) == 3 and "XXXX3" in u.avisos[-1]
+    u = Universo.criar(acoes=["PETR4", "XXXX3"], alvo="WIN").validar([_Sim("IND"), _Sim("BOVA11"), _Sim("PETR4")])
+    assert set(u.validos) == {"IND", "BOVA11", "PETR4"}
+    assert set(u.descartados) == {"WDO", "DOL", "IBOV", "XXXX3"}
+    assert len(u.avisos) == 4 and "XXXX3" in u.avisos[-1]
     assert "IND" in u and "WDO" not in u
     assert Universo.criar().validar(None).validos == ()
 
