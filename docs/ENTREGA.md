@@ -6,7 +6,7 @@
 
 ## Resumo honesto (leia primeiro)
 
-**100% verificável em software, aqui (Linux, sem terminal):** código importável (184 módulos), estilo (ruff), linter
+**100% verificável em software, aqui (Linux, sem terminal):** código importável (todos os módulos de `src/robowin`), estilo (ruff), tipos (mypy em `src` inteiro), linter
 estático do `.mq4`, cadeia de auditoria com detecção de adulteração, catálogo de modelos, perfis de ativo/bolsa
 (só o WIN confirmado; os demais **bloqueiam** a operação), política de risco travada por hash, `order_send` único
 (AST), ausência de números de ativo no código, `diagnostico` e gateway/cliente contra o **dublê** MT5 e MT4, painel
@@ -16,8 +16,9 @@ completa com provedor de IA **falso**. Reproduza com `uv run robowin verificar` 
 **Depende do usuário (nunca poderá ser provado aqui):** terminal MT5/MT4 reais e conta demo (`robowin diagnostico`
 sem `--duble`); **compilar** `mql4/RobowinBridge.mq4` no MetaEditor (o linter não é compilador); chaves
 `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` e comportamento real dos modelos; tarifas, margem, horários e vencimentos
-(perfis `a_confirmar`, `docs/10-pendencias.md`); **aprovação de risco** por pessoa
-(`config/aprovacoes/risco-v1.toml` está com `responsavel = "pendente"`); regras da corretora; conectividade com os
+(perfis `a_confirmar`, `docs/10-pendencias.md`, fontes em `docs/14-fontes-dos-perfis.md`; liberar com
+`robowin perfil confirmar <ATIVO>`); **aprovação de risco** por pessoa (`config/aprovacoes/risco-v1.toml` está com
+`responsavel = "pendente"`; aprovar com `robowin risco aprovar --responsavel "Nome"`); `robowin pendencias` lista tudo; regras da corretora; conectividade com os
 hosts críticos (o `verificar` não usa rede).
 
 **O que passa a significar "100%".** Como o que falta provar só existe no Windows do usuário, o "100%" **não** é mais
@@ -172,6 +173,20 @@ futuro; poucas pessoas físicas lucram com day trade (alerta da CVM). O pedido d
 | Validação completa + zip sem segredos | `scripts/windows/validar_tudo.ps1` | — (idem) | **DU** |
 | Passo a passo para o usuário | `docs/12-aceitacao-no-windows.md` | revisão humana | VA |
 | **Aceitação real** (terminal, conta demo, latência de ordens e de IA, kill switch no terminal real) | `docs/12-aceitacao-no-windows.md` | relatório do usuário, sem REPROVADO | **DU** (é o que fecha o "100%") |
+
+## Inspirações externas e fechamento (Fases 5b e 6)
+
+| Item | Onde está | Evidência | Status |
+|---|---|---|---|
+| Máquina do Tempo (day-trader-skill): probabilidades alvo/stop por bootstrap de sessões | `src/robowin/avaliacao/maquina_do_tempo.py`, `src/robowin/avaliacao/cli_maquina.py`, `src/robowin/decisao/odds.py` | `tests/unit/test_maquina_do_tempo.py`, `tests/unit/test_maquina_do_tempo_integracao.py` | VA (sintético) |
+| Máquina do Tempo no núcleo ao vivo (piscina causal do armazém de ticks) | `src/robowin/decisao/nucleo.py` | `tests/unit/test_nucleo_odds.py` | VD |
+| Braço de debate (TradingAgents), desligado por padrão | `src/robowin/decisao/bracos/debate.py` | testes do braço com provedor FALSO | VA (falso) · DU (IA real) |
+| Reflexão pós-trade com liquidação tardia (orquestrador e backtest) | `src/robowin/ia/reflexao.py`, `src/robowin/backtest/motor.py` | `tests/unit/test_backtest_reflexao.py` (perturbação do futuro) | VA (falso) |
+| Ordem só sai se idêntica à aprovada pelo risco (trader-skill) | `src/robowin/execucao/aprovacao.py` | testes do roteador | VA |
+| Uso de IA por braço, PBO/MinTRL, VaR/ES, PSI e custo de execução (Aurum) | `src/robowin/avaliacao/uso_ia.py`, `src/robowin/avaliacao/robustez.py`, `src/robowin/risco/cauda.py`, `src/robowin/avaliacao/monitoramento_banco.py` | `tests/unit/test_aval_monitoramento_fluxo.py`, painel `/api/monitoramento` | VA |
+| Matriz de decisão dos 5 repositórios e licenças | `docs/13-inspiracoes.md`, `docs/13b-estudo-aurum-tradingagents.md`, `THIRD_PARTY_NOTICES.md` | revisão humana | VA |
+| Aprovação de risco e confirmação de perfil guiadas e auditadas | `src/robowin/risco/aprovar.py`, `src/robowin/perfil/`, `src/robowin/verificacao/pendencias.py` | `tests/unit/test_aprovacao_risco_perfil.py` | VA (comando) · **DU** (decisão) |
+| Fontes pesquisadas dos perfis (IND lote diverge; vencimento WDO/DOL possivelmente alterado em 2025) | `docs/14-fontes-dos-perfis.md` | busca web; site da B3 bloqueado aqui | **DU** |
 
 ## O que continua não verificado (de `docs/10-pendencias.md` e `docs/11-validacao-sandbox.md`)
 
