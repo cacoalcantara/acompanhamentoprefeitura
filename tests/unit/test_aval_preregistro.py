@@ -133,3 +133,34 @@ def test_cli_registrar_verificar_e_adulteracao(tmp_path, capsys):
     cadeia.write_text(cadeia.read_text(encoding="utf-8").replace('"alfa": 0.05', '"alfa": 0.5'), encoding="utf-8")
     assert main(["experimento", "verificar", "--dir", d]) == 1
     assert "QUEBRADA" in capsys.readouterr().out
+
+
+def test_hash_do_codigo_e_da_fonte_e_cobre_sombra_seeds_e_linha_de_base(tmp_path, monkeypatch):
+    """dsl_gestao/compilador/correcoes sao o hash da FONTE (antes: sha do texto do rotulo, constante): editar o
+    codigo depois do registro diverge. Entram tambem a regra da sombra trailing, as seeds e os prompts de B/C."""
+    c = prr.hashes_componentes(tmp_path)
+    for k in prr.VERSOES_FIXAS:
+        assert c[k] != prr._sha(k)  # nunca o sha do rotulo
+    assert {"regra:sombra_trailing", "seeds", "prompt:proponente", "prompt:revisor", "esquema:PropostaIA",
+            "esquema:RevisaoIA", "codigo:linha_de_base"} <= set(c)
+    v = prr.variantes_padrao(c)
+    assert set(v) == {"planejador", "planejador_revisor", "claude_gpt_cond"}
+    assert prr.variantes_padrao(prr.hashes_componentes(tmp_path, seed=8))["planejador"] != v["planejador"]
+    # editar a fonte da DSL de gestao muda o hash da variante
+    real = prr._sha_fonte
+    monkeypatch.setattr(prr, "_sha_fonte", lambda m: "editado" if m == "robowin.decisao.gestao" else real(m))
+    c2 = prr.hashes_componentes(tmp_path)
+    assert c2["dsl_gestao:v1"] != c["dsl_gestao:v1"] and prr.variantes_padrao(c2)["planejador"] != v["planejador"]
+    # o prompt de C (linha de base da H1) tambem
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "revisor_v1.md").write_text("outro revisor", encoding="utf-8")
+    monkeypatch.setattr(prr, "_sha_fonte", real)
+    v3 = prr.variantes_padrao(prr.hashes_componentes(tmp_path))
+    assert v3["claude_gpt_cond"] != v["claude_gpt_cond"] and v3["planejador"] == v["planejador"]
+
+
+def test_manifesto_usa_os_mesmos_hashes_de_codigo_do_preregistro():
+    from robowin.decisao.correcoes import CORRECOES_V11
+    cod = prr.hashes_codigo()
+    assert len(set(cod.values())) == len(cod)
+    assert all(x in CORRECOES_V11 for x in ("C7", "C8", "C9", "C19", "veto_teto_tempo_posicao"))

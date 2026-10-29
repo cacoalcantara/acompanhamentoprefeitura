@@ -92,6 +92,8 @@ Os braços B, C, quant, controles e debate continuam como variantes pré-registr
 
 Os itens marcados **[v1.1]** mudam o comportamento de B, C, quant ou controles e ficam rotulados no manifesto.
 
+O rótulo `correcoes:v1.1` (`decisao/correcoes.py`) traz também C7, C8, C9 e C19, que mudam B, C e quant (menos decisões e custo sem entrada possível; `stop_colado_no_preco` no MANTER de C), mais `veto_teto_tempo_posicao` (o motor veta entrada com `tempo_max_s` acima de `tempo_max_posicao_s` ou que passe da zeragem) e `controles_backtest_300s` (controles do backtest com 300 s, antes 900/600 s). O hash pré-registrado de `dsl_gestao:v1`, `compilador:v1` e `correcoes:v1.1` é o da **fonte** dos módulos, nunca o do texto do rótulo (`avaliacao/preregistro.hashes_codigo`, o mesmo do manifesto).
+
 | # | Problema (onde) | Correção (WP) |
 |---|---|---|
 | C1 | O aviso de "92–94%" junta o teto de stop 250 com o alvo padrão 30, combinação que nenhum braço usou (`avaliacao/relatorio.texto_aviso_acerto` l.31-57; `historico/relatorio.py` l.82-85; `docs/15-resultado-historico-real.md:21`) | Aviso por braço com a geometria realizada (medianas das intenções executadas). Sem geometria, o texto diz "teto, não geometria usada". Doc 15 passa a dizer 30/30/60 s (FALSO 30/40/300 s; equilíbrio ≈59% e ≈52%). O teste `test_aval_impostos_relatorio.py:132-138` cobre os dois caminhos (WP8) |

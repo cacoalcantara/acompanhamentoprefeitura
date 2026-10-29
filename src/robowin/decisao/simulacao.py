@@ -41,10 +41,8 @@ from robowin.core.tipos import (
     LivroSnapshot,
     ManifestoExperimento,
     PlanoCondicional,
-    PlanoGestaoCompilado,
     PlanoTradeIA,
     PropostaIA,
-    RegraCompilada,
     RegraGestao,
     RevisaoIA,
     RevisaoPlanoIA,
@@ -69,13 +67,13 @@ from robowin.risco.politica import ERRO_APROVACAO_PENDENTE, stop_maximo_efetivo_
 from robowin.risco.tempo import dia_sp
 from robowin.statarb.sinais import SinalStatArbPadrao
 
-from . import compilador_plano, gestao
 from .bracos.base import BracoBase, Geometria, Modo
 from .bracos.controles import BracoAleatorio, BracoNaoOperar
 from .bracos.fabrica import FabricaBracos, extras_de_config
 from .bracos.llm import ServicoLLM
 from .bracos.planejador import BracoPlanejador
 from .bracos.quant import BracoQuant
+from .correcoes import CORRECOES_V11
 from .gatilhos import ConfigGatilhos
 from .odds import AvaliadorOdds, config_odds
 from .orquestrador import ConfigOrquestrador, Orquestrador, geometria_de
@@ -489,8 +487,8 @@ def rotular_declaracoes(bracos: list[BracoBase], catalogo: Catalogo, hashes: dic
     return contaminados
 
 
-# correcoes que mudam B, C, quant ou controles (docs/16 secao 2, rotulo v1.1 no manifesto)
-CORRECOES_V11 = ("C2", "C4", "C5", "C6", "C16", "C18")
+# correcoes que mudam B, C, quant ou controles (docs/16 secao 2, rotulo v1.1 no manifesto): CORRECOES_V11, em
+# decisao/correcoes.py (o pre-registro usa a mesma lista)
 
 
 def _sha(obj: Any) -> str:
@@ -501,20 +499,20 @@ def _sha(obj: Any) -> str:
 def hashes_planejador(fab: FabricaBracos, cfg: Mapping[str, Any]) -> dict[str, str]:
     """Hashes pre-registrados do braco planejador no manifesto (docs/16 4.3): esquemas, DSL de gestao, compilador,
     ``[planejador]``, ``[planejador.gatilhos]``, prazos do planejador e o conjunto de correcoes v1.1."""
+    from robowin.avaliacao.preregistro import hashes_codigo
     gat = dict(((cfg.get("planejador") or {}).get("gatilhos")) or {})
-    esquemas_gestao = {n: m.model_json_schema() for n, m in (("RegraGestao", RegraGestao),
-                                                             ("RegraCompilada", RegraCompilada),
-                                                             ("PlanoGestaoCompilado", PlanoGestaoCompilado))}
+    cod = hashes_codigo()  # os MESMOS hashes de codigo do pre-registro (fonte, nunca o texto do rotulo)
     return {
         "esquema:planejador": _sha(PlanoTradeIA.model_json_schema()),
         "esquema:revisor_plano": _sha(RevisaoPlanoIA.model_json_schema()),
-        "dsl_gestao:v1": _sha({"esquemas": esquemas_gestao, "fonte": _hash_arquivo(Path(gestao.__file__))}),
-        "compilador:v1": _sha({"versao": compilador_plano.VERSAO_COMPILADOR,
-                               "fonte": _hash_arquivo(Path(compilador_plano.__file__))}),
+        "dsl_gestao:v1": cod["dsl_gestao:v1"],
+        "compilador:v1": cod["compilador:v1"],
         "[planejador]": _sha(fab.cfg_planejador.model_dump(mode="json")),
         "[planejador.gatilhos]": _sha(gat),
         "prazos:planejador": _sha(asdict(fab.prazos_planejador)),
         "correcoes:v1.1": ",".join(CORRECOES_V11),
+        "correcoes:v1.1:hash": cod["correcoes:v1.1"],
+        "regra:sombra_trailing": cod["regra:sombra_trailing"],
     }
 
 

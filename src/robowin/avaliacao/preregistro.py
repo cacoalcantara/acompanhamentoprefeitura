@@ -226,9 +226,15 @@ def elegivel(pr: PreRegistro, *, data_pregao: str, hashes_variantes: Mapping[str
 
 
 # ================================================================================ hashes das variantes
-VERSOES_FIXAS = ("dsl_gestao:v1", "compilador:v1", "correcoes:v1.1")  # rotulos de versao do codigo (docs/16)
+# rotulos de versao do CODIGO (docs/16): o hash e o da FONTE (e dos esquemas), nunca o do texto do rotulo
+VERSOES_FIXAS = ("dsl_gestao:v1", "compilador:v1", "correcoes:v1.1")
 PROMPTS = {"planejador": "planejador_v1.md", "revisor_plano": "revisor_plano_v1.md"}
+# linha de base da H1 (C condicional; B usa o mesmo proponente): prompts e esquemas do proponente e do revisor
+PROMPTS_LINHA_BASE = {"proponente": "proponente_v1.md", "revisor": "revisor_v1.md"}
 COMPONENTES_SO_REVISOR = ("prompt:revisor_plano", "esquema:RevisaoPlanoIA")
+COMPONENTES_LINHA_BASE = ("prompt:proponente", "prompt:revisor", "esquema:PropostaIA", "esquema:RevisaoIA",
+                          "codigo:linha_de_base")
+SEED_PADRAO = 7  # mesma semente padrao do historico (``ParamsHistorico.seed``)
 
 
 def _sha(texto: str | bytes) -> str:
@@ -239,18 +245,53 @@ def _sha_json(v: Any) -> str:
     return _sha(json.dumps(v, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str))
 
 
-def hashes_componentes(raiz_config: Path = Path("config")) -> dict[str, str]:
-    """sha256 de cada componente pre-registrado do braco planejador: prompts, esquemas, secoes ``[planejador]``,
-    ``[planejador.gatilhos]`` e ``[prazos].planejador`` de ``robowin.toml`` e os rotulos de versao do codigo.
-    Arquivo ou secao ausente entra como ``ausente`` (o hash muda quando passar a existir)."""
+def _sha_fonte(modulo: str) -> str:
+    """sha256 da fonte de ``modulo`` (quebras de linha normalizadas: o mesmo codigo da o mesmo hash no Windows)."""
+    import importlib
+    arq = getattr(importlib.import_module(modulo), "__file__", None)
+    if not arq or not Path(arq).is_file():
+        return "ausente"
+    return _sha(Path(arq).read_bytes().replace(b"\r\n", b"\n"))
+
+
+def hashes_codigo() -> dict[str, str]:
+    """Hashes do CODIGO pre-registrado (os mesmos do manifesto da simulacao): DSL de gestao (esquemas + fonte de
+    ``decisao/gestao.py``), compilador (versao + fonte), ``correcoes:v1.1`` (lista + fonte dos modulos que as
+    implementam), regra da sombra trailing (regras + fonte de ``bracos/sombra.py``) e o codigo da linha de base."""
+    from robowin.avaliacao.contrafactual import TRAILING_FIXO
+    from robowin.core.tipos import PlanoGestaoCompilado, RegraCompilada, RegraGestao
+    from robowin.decisao import compilador_plano
+    from robowin.decisao.bracos.sombra import REGRA_TRAILING_FIXO
+    from robowin.decisao.correcoes import CORRECOES_V11, MODULOS_CORRECOES_V11
+
+    esquemas = {n: m.model_json_schema() for n, m in (("RegraGestao", RegraGestao), ("RegraCompilada", RegraCompilada),
+                                                      ("PlanoGestaoCompilado", PlanoGestaoCompilado))}
+    return {
+        "dsl_gestao:v1": _sha_json({"esquemas": esquemas, "fonte": _sha_fonte("robowin.decisao.gestao")}),
+        "compilador:v1": _sha_json({"versao": compilador_plano.VERSAO_COMPILADOR,
+                                    "fonte": _sha_fonte("robowin.decisao.compilador_plano")}),
+        "correcoes:v1.1": _sha_json({"correcoes": list(CORRECOES_V11),
+                                     "fontes": {m: _sha_fonte(m) for m in MODULOS_CORRECOES_V11}}),
+        "regra:sombra_trailing": _sha_json({"sombra": REGRA_TRAILING_FIXO, "contrafactual": TRAILING_FIXO,
+                                            "fonte": _sha_fonte("robowin.decisao.bracos.sombra")}),
+        "codigo:linha_de_base": _sha_json({m: _sha_fonte(m) for m in (
+            "robowin.decisao.bracos.llm", "robowin.decisao.bracos.claude", "robowin.decisao.bracos.claude_gpt")}),
+    }
+
+
+def hashes_componentes(raiz_config: Path = Path("config"), *, seed: int = SEED_PADRAO) -> dict[str, str]:
+    """sha256 de cada componente pre-registrado (docs/16 4.3): prompts e esquemas do planejador e do revisor do
+    plano, secoes ``[planejador]``, ``[planejador.gatilhos]`` e ``[prazos].planejador`` de ``robowin.toml``, o
+    CODIGO (``hashes_codigo``: DSL, compilador, correcoes v1.1, regra da sombra trailing), as seeds e a linha de
+    base da H1 (prompts, esquemas e codigo de B/C). Arquivo ou secao ausente entra como ``ausente``."""
     from robowin.ia.esquemas import ESQUEMAS_POR_PAPEL
 
     raiz = Path(raiz_config)
     out: dict[str, str] = {}
-    for papel, arq in PROMPTS.items():
+    for papel, arq in {**PROMPTS, **PROMPTS_LINHA_BASE}.items():
         p = raiz / "prompts" / arq
         out[f"prompt:{papel}"] = _sha(p.read_bytes()) if p.is_file() else "ausente"
-    for papel in ("planejador", "revisor_plano"):
+    for papel in ("planejador", "revisor_plano", "proponente", "revisor"):
         esq = ESQUEMAS_POR_PAPEL.get(papel)
         out[f"esquema:{esq.__name__}" if esq else f"esquema:{papel}"] = (
             _sha_json(esq.model_json_schema()) if esq else "ausente")
@@ -265,12 +306,16 @@ def hashes_componentes(raiz_config: Path = Path("config")) -> dict[str, str]:
     out["config:planejador"] = _sha_json(plan) if plan else "ausente"
     out["config:planejador.gatilhos"] = _sha_json(gat) if gat is not None else "ausente"
     out["config:prazos.planejador"] = _sha_json(prazos) if prazos is not None else "ausente"
-    for v in VERSOES_FIXAS:
-        out[v] = _sha(v)
+    out.update(hashes_codigo())
+    out["seeds"] = _sha_json({"seed": int(seed)})
     return out
 
 
 def variantes_padrao(componentes: Mapping[str, str]) -> dict[str, str]:
-    """Hash composto de cada variante de tratamento: P (sem o revisor) e PC (tudo)."""
-    p = {k: v for k, v in componentes.items() if k not in COMPONENTES_SO_REVISOR}
-    return {"planejador": _sha_json(p), "planejador_revisor": _sha_json(dict(componentes))}
+    """Hash composto de cada variante: P (sem o revisor do plano nem a linha de base), PC (P + revisor do plano) e
+    a linha de base da H1, ``claude_gpt_cond`` (prompts, esquemas e codigo de B/C, correcoes v1.1 e seeds): mudar
+    o prompt de C depois do registro tambem diverge."""
+    base = {k: v for k, v in componentes.items() if k not in COMPONENTES_LINHA_BASE}
+    p = {k: v for k, v in base.items() if k not in COMPONENTES_SO_REVISOR}
+    c = {k: componentes[k] for k in (*COMPONENTES_LINHA_BASE, "correcoes:v1.1", "seeds") if k in componentes}
+    return {"planejador": _sha_json(p), "planejador_revisor": _sha_json(base), "claude_gpt_cond": _sha_json(c)}

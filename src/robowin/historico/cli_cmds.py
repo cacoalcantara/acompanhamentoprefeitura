@@ -39,7 +39,7 @@ def _preregistro(a: argparse.Namespace) -> tuple[Any, Path | None, dict[str, str
     escolhido = [p for p in cadeia if a.experimento is None or p.id_experimento == a.experimento]
     if not escolhido:
         raise ErroConfig(f"experimento {a.experimento or '(qualquer)'} nao registrado em {pasta}")
-    hashes = pre.variantes_padrao(pre.hashes_componentes(Path(a.config).parent))
+    hashes = pre.variantes_padrao(pre.hashes_componentes(Path(a.config).parent, seed=a.seed))
     return escolhido[-1], pasta, hashes
 
 

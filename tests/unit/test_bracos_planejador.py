@@ -388,9 +388,13 @@ def test_hashes_do_planejador_no_manifesto():
     fab = _fabrica({"planejador": {"ativo": True}})
     h = hashes_planejador(fab, {"planejador": {"ativo": True, "gatilhos": {"periodo_s": 240}}})
     assert set(h) == {"esquema:planejador", "esquema:revisor_plano", "dsl_gestao:v1", "compilador:v1",
-                      "[planejador]", "[planejador.gatilhos]", "prazos:planejador", "correcoes:v1.1"}
+                      "[planejador]", "[planejador.gatilhos]", "prazos:planejador", "correcoes:v1.1",
+                      "correcoes:v1.1:hash", "regra:sombra_trailing"}
     assert all(len(v) == 64 for k, v in h.items() if k != "correcoes:v1.1")
     assert h["correcoes:v1.1"] == ",".join(CORRECOES_V11)
+    from robowin.avaliacao.preregistro import hashes_codigo
+    cod = hashes_codigo()  # manifesto e pre-registro concordam (hash da fonte, nao do rotulo)
+    assert h["dsl_gestao:v1"] == cod["dsl_gestao:v1"] and h["correcoes:v1.1:hash"] == cod["correcoes:v1.1"]
     h2 = hashes_planejador(fab, {"planejador": {"ativo": True, "gatilhos": {"periodo_s": 120}}})
     assert h2["[planejador.gatilhos]"] != h["[planejador.gatilhos]"] and h2["esquema:planejador"] == h[
         "esquema:planejador"]

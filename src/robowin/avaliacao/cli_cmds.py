@@ -205,7 +205,7 @@ def _experimento_registrar(a) -> int:
 
     from . import preregistro as prr
     try:
-        comp = prr.hashes_componentes(Path(a.raiz_config))
+        comp = prr.hashes_componentes(Path(a.raiz_config), seed=a.seed)
         variantes = {} if a.sem_padrao else prr.variantes_padrao(comp)
         variantes.update(_pares(a.variante, "--variante"))
         margens = _pares(a.margem, "--margem", float)
@@ -258,6 +258,7 @@ def _registrar_experimento(sub) -> None:
     r.add_argument("--alfa", type=float, default=0.05)
     r.add_argument("--n-pregoes", type=int, default=N_PREGOES_PADRAO, help="n de pregoes alvo (do piloto)")
     r.add_argument("--regra-parada", action="append", help="regra de parada (repetivel)")
+    r.add_argument("--seed", type=int, default=7, help="semente registrada (a mesma do historico --seed)")
     r.set_defaults(func=_experimento_registrar)
     v = s.add_parser("verificar", help="recalcula a cadeia; codigo != 0 se adulterada")
     v.add_argument("--dir", default="config/experimentos")
