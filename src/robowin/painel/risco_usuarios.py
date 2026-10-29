@@ -52,6 +52,7 @@ ROTULOS = {
     "tempo_min_livro_s": "Tempo mínimo de livro antes de entrar (s)",
     "volume_max_lotes": "Volume máximo por posição em lotes (forex/CFD; 0 = usa contratos)",
     "nocional_max_conta": "Nocional máximo por posição (moeda da conta; 0 = desligado)",
+    "tempo_max_posicao_s": "Tempo máximo de uma posição, desde a abertura (s)",
 }
 
 

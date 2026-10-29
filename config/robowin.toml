@@ -36,6 +36,16 @@ modelo = "anthropic:claude-opus-5-5"
 effort = "low"
 [ia.papeis.reflexao]               # licao escrita DEPOIS do resultado liquidado (memoria reflexiva; [reflexao])
 modelo = "anthropic:claude-haiku-5-5"
+# Braco PLANEJADOR (docs/16-decisao-completa-ia.md): a IA devolve o plano de trade INTEIRO (PlanoTradeIA: entrar ou
+# nao, lado, momento, faixa, quantidade ate o teto do envelope, stop/alvo, tempo, regras de gestao, reavaliacao). O
+# codigo compila o plano e o MOTOR DE RISCO mantem o veto final. Qualquer 'provedor:modelo' serve. Padrao: os mesmos
+# modelos do proponente e do revisor.
+[ia.papeis.planejador]
+modelo = "anthropic:claude-opus-5-5"
+effort = "low"
+[ia.papeis.revisor_plano]          # revisao do plano (RevisaoPlanoIA: coerente/dados_ok/regras_ok obrigatorios)
+modelo = "openai:gpt-6.1-sol"
+effort = "low"
 
 [decisao]
 # Maquina do Tempo (avaliacao/maquina_do_tempo.py): probabilidades do plano proposto entregues ao REVISOR como
@@ -54,6 +64,36 @@ odds_nucleo_dados = ""         # armazem de ticks; vazio = <[geral].dados>/ticks
 [prazos]
 imediato = { claude_s = 40, gpt_s = 12, validade_s = 60, desvio_max_ticks = 4 }
 condicional = { expira_min_max = 10 }
+planejador = { proponente_s = 60, revisor_s = 20, expira_min_max = 10 }
+
+# Braco PLANEJADOR (docs/16): parametros PRE-REGISTRADOS da variante (core.tipos.ConfigPlanejador). So RESTRINGEM o
+# que a IA pode pedir; nunca sao limite de risco (os limites vivem SO no armazem do usuario/conta, com aprovacao por
+# hash; qualquer campo de limite aqui e recusado). Mudar qualquer valor gera NOVA variante (outro hash no manifesto).
+[planejador]
+ativo = true
+# A IA ve SO o envelope DERIVADO dos limites, em pontos/unidades/segundos (unidades maximas, stop maximo por
+# quantidade, stop minimo, distancia minima de ajuste, tempo maximo, se ainda pode entrar); nunca valores em dinheiro,
+# arquivos, usuario ou conta. "nenhum": so entradas_possiveis, stop_min_pontos e dist_min_ajuste_pontos.
+expor_envelope = "envelope"
+k_custo = 1.0                    # alvo restante > k x custo de ida e volta (estresse) + 1 tick
+razao_liquida_min = 0.0          # 0 = desligado (sem geometria imposta)
+max_regras = 6                   # regras de gestao por plano
+tolerancia_max_ticks = 8         # faixa de execucao maxima (ticks)
+tolerancia_max_fracao_stop = 0.5 # faixa de execucao maxima como fracao do stop
+tempo_min_s = 30                 # tempo minimo de posicao pedido pela IA
+margem_zeragem_s = 120           # a posicao tem de terminar esta margem antes da zeragem
+expira_max_s = 600               # plano armado por no maximo isto
+reavaliar_min_s = 10             # intervalo minimo entre reavaliacoes pedidas pela IA
+passo_min_ticks = 1              # menor passo de ajuste do stop/alvo (simulacao)
+passo_min_ticks_espelhado = 2    # idem no braco espelhado na DEMO
+intervalo_ajuste_s = 2.0         # intervalo minimo entre ajustes automaticos de protecao
+reserva_gestao_frac = 0.3
+exigir_p_alvo = true             # o plano de entrada precisa declarar p_alvo (so pontuado; nunca libera nem bloqueia)
+
+[planejador.gatilhos]
+periodo_s = 240                         # chamada periodica (como os demais bracos com IA)
+eventos_posicao_permitidos = ["fechou"] # eventos de posicao que chamam a IA de novo
+perto_frac = 0.3                        # "perto do stop/alvo": fracao da distancia restante
 
 [mt5]
 plataforma = "mt5"      # "mt5" (B3, conta netting, livro L2, ticks em ms) | "mt4" (ponte EA: hedging, sem livro, tempo em s)
@@ -107,6 +147,18 @@ demo_mm = false   # ponte do market making para a conta demo (mm/ponte_demo.py);
 # id = "D_openrouter"
 # proponente = "openrouter:meta-llama/llama-3.3-70b-instruct"   # uma chave, centenas de modelos
 # modo = "condicional"
+
+# Bracos do PLANEJADOR (docs/16): com [planejador].ativo, a fabrica cria as variantes pre-registradas (planejador,
+# planejador_revisor, sombras e controle). Exemplo de variante extra com outro modelo (descomente e ajuste):
+# [[bracos]]
+# id = "planejador_sonnet"
+# tipo = "planejador"
+# proponente = "anthropic:claude-sonnet-5-5"   # papel (ou provedor:modelo) que cumpre o papel de planejador
+# [[bracos]]
+# id = "planejador_revisor_gemini"
+# tipo = "planejador"
+# proponente = "planejador"                    # papel de [ia.papeis]
+# revisor = "google:gemini-2.5-pro"            # opcional: plano + revisao (analogo do C; papel revisor_plano)
 
 # Braco EXPERIMENTAL de debate (pesquisadores altista/baixista + debate de risco + sintetizador). Desligado por
 # padrao; so existe no modo condicional (latencia). A saida e uma proposta comum: mesmos validadores, revisor

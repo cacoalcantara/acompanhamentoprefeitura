@@ -1,14 +1,15 @@
 """Esquemas de saida dos papeis (neutros quanto ao fornecedor).
 
-Os tres primeiros sao reexportados de core.tipos. Os demais (debate, parecer de risco, reflexao) sao do braco
-experimental ``debate`` e da memoria reflexiva: nenhum tem campo de raciocinio/thinking, so texto curto que
-a validacao deterministica limita e confere contra o dossie.
+Os tres primeiros sao reexportados de core.tipos, assim como os do braco ``planejador`` (PlanoTradeIA e
+RevisaoPlanoIA). Os demais (debate, parecer de risco, reflexao) sao do braco experimental ``debate`` e da memoria
+reflexiva: nenhum tem campo de raciocinio/thinking, so texto curto que a validacao deterministica limita e confere
+contra o dossie.
 """
 from typing import Literal
 
 from pydantic import Field
 
-from robowin.core.tipos import Base, ClassificacaoNoticia, PropostaIA, RevisaoIA
+from robowin.core.tipos import Base, ClassificacaoNoticia, PlanoTradeIA, PropostaIA, RevisaoIA, RevisaoPlanoIA
 
 
 class ArgumentoDebate(Base):
@@ -46,7 +47,9 @@ ESQUEMAS_POR_PAPEL = {
     "risco_neutro": ParecerRisco,
     "risco_conservador": ParecerRisco,
     "reflexao": ReflexaoIA,
+    "planejador": PlanoTradeIA,
+    "revisor_plano": RevisaoPlanoIA,
 }
 
-__all__ = ["ESQUEMAS_POR_PAPEL", "ArgumentoDebate", "ClassificacaoNoticia", "ParecerRisco", "PropostaIA",
-           "ReflexaoIA", "RevisaoIA"]
+__all__ = ["ESQUEMAS_POR_PAPEL", "ArgumentoDebate", "ClassificacaoNoticia", "ParecerRisco", "PlanoTradeIA",
+           "PropostaIA", "ReflexaoIA", "RevisaoIA", "RevisaoPlanoIA"]

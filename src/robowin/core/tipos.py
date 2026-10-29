@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 
 class Base(BaseModel):
@@ -113,6 +113,60 @@ class PlanoCondicional(Base):
     expira_ns: int
 
 
+# ---- gestao da posicao (braco planejador; docs/16) ------------------------------------------------------------
+# Adicoes opcionais: nenhum tipo antigo muda de comportamento. Tudo em PONTOS, UNIDADES e SEGUNDOS (nunca dinheiro).
+TipoRegraGestao = Literal["breakeven", "trailing", "parcial", "sem_progresso", "apertar_apos", "ao_vencer_tempo"]
+GatilhoReavaliacao = Literal["perto_do_stop", "perto_do_alvo", "metade_do_tempo", "regra_disparou",
+                             "lucro_acima_stop"]
+
+
+class RegraGestao(Base):
+    """Regra de gestao automatica declarada pela IA; executada a cada tick por codigo puro (decisao/gestao.py)."""
+    tipo: TipoRegraGestao
+    mfe_pontos: float | None = None  # excursao favoravel minima (pontos, desde a entrada) para ativar
+    apos_s: int | None = None  # segundos desde a abertura para ativar
+    distancia_pontos: float | None = None  # trailing/apertar_apos: distancia stop-preco (ou stop-extremo)
+    folga_ticks: int | None = None  # breakeven: entrada + custo ida e volta + folga
+    quantidade: int | None = None  # parcial: unidades a realizar (1..q-1)
+    acao_vencimento: Literal["encerrar", "proteger_e_estender"] | None = None
+    extensao_s: int | None = None
+
+
+class AjustePosicao(Base):
+    """So com acao=MANTER. Niveis em PONTOS DE RESULTADO desde o preco medio de entrada."""
+    stop_resultado_pontos: float | None = None  # -30 perde 30; 0 empate bruto; +10 trava 10
+    alvo_resultado_pontos: float | None = None
+    tempo_max_total_s: int | None = None  # total desde a abertura
+    reduzir_quantidade: int | None = None  # 1..q-1
+    substituir_gestao: tuple[RegraGestao, ...] | None = None
+
+
+class RegraCompilada(Base):
+    """Mesmos campos de RegraGestao, ja em pontos na grade do tick (decisao/compilador)."""
+    tipo: str
+    mfe_pontos: float | None = None
+    apos_s: int | None = None
+    distancia_pontos: float | None = None
+    folga_pontos: float | None = None
+    quantidade: int | None = None
+    acao_vencimento: str | None = None
+    extensao_s: int | None = None
+
+
+class PlanoGestaoCompilado(Base):
+    regras: tuple[RegraCompilada, ...] = ()
+    passo_min_pontos: float
+    intervalo_ajuste_s: float
+    reavaliar_em_s: int | None = None
+    reavaliar_se: tuple[str, ...] = ()
+    versao_dsl: int = 1
+
+
+# campos opcionais acrescentados a Intencao (docs/16, WP0): ausentes (None) NAO entram na serializacao, para que a
+# Intencao antiga serialize exatamente igual (intencao_json, auditoria e hashes de sessao nao mudam).
+CAMPOS_OPCIONAIS_INTENCAO = ("posicao_ticket", "quantidade_t0", "gestao", "ajuste", "ancora_t0", "p_alvo")
+
+
 class Intencao(Base):
     id: str
     braco: str
@@ -128,6 +182,21 @@ class Intencao(Base):
     proposta_id: str | None = None
     revisao_id: str | None = None
     t0_ns: int = 0
+    # adicoes opcionais (braco planejador): o padrao reproduz o comportamento atual
+    posicao_ticket: int | None = None  # ticket da posicao vista em t0 (MANTER/ENCERRAR presos a ela)
+    quantidade_t0: int | None = None  # quantidade da posicao vista em t0
+    gestao: PlanoGestaoCompilado | None = None
+    ajuste: AjustePosicao | None = None
+    ancora_t0: float | None = None  # presente => niveis da entrada ancorados no preco de t0
+    p_alvo: float | None = None  # so pontuada (Brier/calibracao); nunca libera nem bloqueia entrada
+
+    @model_serializer(mode="wrap")
+    def _serializar(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        d: dict[str, Any] = handler(self)
+        for k in CAMPOS_OPCIONAIS_INTENCAO:
+            if k in d and d[k] is None:
+                del d[k]
+        return d
 
 
 class DecisaoRisco(Base):
@@ -290,6 +359,44 @@ class RevisaoIA(Base):
     justificativa_curta: str = ""
 
 
+class PlanoTradeIA(Base):
+    """Esquema do papel ``planejador``: a decisao de trading inteira (docs/16 1.2). Nenhum campo chega a um limite
+    de risco (extra=forbid): o veto e sempre do motor de risco. Distancias em pontos a partir da referencia de t0."""
+    acao: Acao
+    hipoteses: tuple[str, ...] = ()
+    evidencias_a_favor: tuple[str, ...] = ()
+    evidencias_contra: tuple[str, ...] = ()
+    riscos: tuple[str, ...] = ()
+    invalidacoes: tuple[str, ...] = ()
+    justificativa_curta: str = ""
+    incerteza: float = Field(ge=0, le=1, default=0.5)
+    p_alvo: float | None = Field(default=None, ge=0, le=1)  # P(alvo antes do stop e do tempo); so pontuada
+    quantidade: int = 1
+    stop_pontos: float | None = None  # distancia a partir da referencia de t0 (nivel absoluto fixo)
+    alvo_pontos: float | None = None
+    tempo_max_s: int | None = None
+    gatilhos: tuple[Condicao, ...] = ()  # DSL existente; vazio = "agora" (dentro da faixa)
+    faixa_contra_pontos: float | None = None
+    faixa_favor_pontos: float | None = None
+    expira_s: int = 120
+    gestao: tuple[RegraGestao, ...] = ()
+    reavaliar_em_s: int | None = None
+    reavaliar_se: tuple[GatilhoReavaliacao, ...] = ()
+    manter_plano_vigente: bool = False
+    ajuste: AjustePosicao | None = None
+
+
+class RevisaoPlanoIA(Base):
+    """Revisao do plano (papel ``revisor_plano``). Os booleanos NAO tem padrao: aprovar exige declarar os tres."""
+    veredito: Literal["APROVAR", "REJEITAR"]
+    coerente: bool
+    dados_ok: bool
+    regras_ok: bool
+    afirmacoes_sem_suporte: tuple[str, ...] = ()
+    p_alvo_revisor: float | None = Field(default=None, ge=0, le=1)
+    justificativa_curta: str = ""
+
+
 class ClassificacaoNoticia(Base):
     relevancia: float = Field(ge=0, le=1)
     direcao: Literal["alta", "baixa", "neutra"]
@@ -383,6 +490,57 @@ class ConfigRisco(Base):
     # vale `contratos_max` em unidades do perfil (1 contrato no WIN; 1 lote minimo em forex/CFD).
     volume_max_lotes: float = 0.0  # volume maximo do terminal (lotes) por posicao/exposicao
     nocional_max_conta: float = 0.0  # nocional maximo (preco x valor do ponto x quantidade), moeda da conta
+    # adicao opcional: teto do usuario para o tempo TOTAL de uma posicao (segundos desde a abertura). O padrao e o
+    # maior tempo fixo de antes (LLM com 300 s): arquivo aprovado sem o campo continua valendo, com o mesmo hash.
+    tempo_max_posicao_s: int = 300
+
+
+class EnvelopeDecisao(Base):
+    """Envelope DERIVADO dos limites, somente leitura, em pontos/unidades/segundos (nunca dinheiro). Calculado SO
+    por ``MotorRiscoPadrao.envelope`` (mesma funcao que o motor usa no veto)."""
+    unidades_max: int
+    stop_max_pontos_por_q: tuple[float, ...]  # indice q-1; ja descontados perda op/dia/semana, folga e fator
+    stop_min_pontos: float
+    dist_min_ajuste_pontos: float
+    tempo_max_s: int  # total desde a abertura (posicao atual ou nova)
+    entradas_possiveis: bool
+    motivos_sem_entrada: tuple[str, ...] = ()  # codigos, sem valores numericos
+
+
+class ConfigPlanejador(Base):
+    """``[planejador]``: parametros PRE-REGISTRADOS da variante. So restringem a IA; nunca sao limite de risco."""
+    ativo: bool = False
+    expor_envelope: Literal["envelope", "nenhum"] = "envelope"
+    k_custo: float = 1.0  # alvo restante > k*custo_ida_volta_estresse + 1 tick
+    razao_liquida_min: float = 0.0  # 0 = desligado (sem geometria imposta)
+    max_regras: int = 6
+    tolerancia_max_ticks: int = 8
+    tolerancia_max_fracao_stop: float = 0.5
+    tempo_min_s: int = 30
+    margem_zeragem_s: int = 120
+    expira_max_s: int = 600
+    reavaliar_min_s: int = 10
+    passo_min_ticks: int = 1
+    passo_min_ticks_espelhado: int = 2
+    intervalo_ajuste_s: float = 2.0
+    reserva_gestao_frac: float = 0.3
+    exigir_p_alvo: bool = True
+
+
+class PreRegistro(Base):
+    """Cadeia de hash do experimento (avaliacao/preregistro grava e verifica)."""
+    id_experimento: str
+    t_registro_ns: int
+    inicio_avaliacao: str
+    variantes: dict[str, str]
+    comparacoes_primarias: tuple[str, ...]
+    margens_nao_inferioridade: dict[str, float]
+    metrica_unidade: Literal["pregao"] = "pregao"
+    alfa: float = 0.05
+    n_pregoes_alvo: int
+    regras_parada: tuple[str, ...] = ()
+    hash_anterior: str = ""
+    hash_registro: str = ""
 
 
 class RegistroAprovacao(Base):

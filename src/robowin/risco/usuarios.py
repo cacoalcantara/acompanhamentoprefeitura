@@ -212,7 +212,8 @@ def config_de_formulario(valores: Mapping[str, Any]) -> ConfigRisco:
 def modelo_inicial(perfil: PerfilInstrumento) -> ConfigRisco:
     """Modelo MUITO conservador para o usuario EDITAR e aprovar (nunca vale sem aprovacao): 1 contrato, stop curto
     derivado do perfil do ativo, perda por operacao = pior caso desse stop + folga, dia = 2 operacoes, semana = 5,
-    3 operacoes/dia, para apos 2 perdas seguidas e pausa de 15 min. Horarios: os da sessao padrao do ConfigRisco."""
+    3 operacoes/dia, para apos 2 perdas seguidas e pausa de 15 min, posicao de no maximo 300 s. Horarios: os da
+    sessao padrao do ConfigRisco."""
     base = ConfigRisco()
     stop = min(perfil.stop_max_pontos, 4 * perfil.stop_padrao_pontos)
     folga = perfil.slippage_folga_pontos
@@ -221,7 +222,7 @@ def modelo_inicial(perfil: PerfilInstrumento) -> ConfigRisco:
         "contratos_max": 1, "perda_max_operacao_brl": op, "perda_max_dia_brl": 2 * op, "perda_max_semana_brl": 5 * op,
         "dd_alerta_brl": 6 * op, "dd_max_brl": 8 * op, "operacoes_dia_max": 3, "perdas_seguidas_max": 2,
         "pausa_apos_perda_s": 900, "stop_max_pontos": float(stop), "slippage_folga_pontos": float(folga),
-        "bloqueio_evento_min": 15, "ordens_min_max": 6,
+        "bloqueio_evento_min": 15, "ordens_min_max": 6, "tempo_max_posicao_s": 300,
         # forex/CFD (lote fracionario): 1 unidade = 1 lote minimo; o teto em lotes fica explicito no modelo
         "volume_max_lotes": float(perfil.volume_unidade) if perfil.volume_min is not None else 0.0})
     return validar_coerencia(cfg)
@@ -645,12 +646,13 @@ def adicionar_args(p: Any) -> None:
 
 
 # ====================================================================== isolamento da IA ==============
-SECOES_IA = ("ia", "bracos", "reflexao", "prazos", "decisao")
+SECOES_IA = ("ia", "bracos", "reflexao", "prazos", "decisao", "planejador")
 
 
 def validar_ia_sem_limites(cfg: Mapping[str, Any]) -> None:
     """A configuracao de IA/LLM NAO pode carregar limites de risco: qualquer campo de ConfigRisco (ou `risco`,
-    `limites`, `usuario`, `conta_negociacao`) dentro de [ia], [[bracos]], [reflexao], [prazos] ou [decisao] e recusado.
+    `limites`, `usuario`, `conta_negociacao`) dentro de [ia], [[bracos]], [reflexao], [prazos], [decisao] ou
+    [planejador] e recusado.
     Os limites vivem SO no armazem do usuario/conta (ou no arquivo unico) e sao aplicados pelo veto deterministico."""
     proibidos = set(CAMPOS_RISCO) | {"risco", "limites", "limites_risco", "usuario", "conta_negociacao", "aprovacao"}
     achados: list[str] = []

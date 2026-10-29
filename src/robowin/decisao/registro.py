@@ -12,11 +12,12 @@ from typing import Any
 
 from robowin.core.protocolos import Banco, RegistroAuditoria
 from robowin.core.tipos import CarimboLatencia, ChamadaLLM, Execucao, ManifestoExperimento, Trade
-from robowin.dados import features_ciclo
+from robowin.dados import decisao_ia, features_ciclo
 from robowin.execucao.oms import OrdemOMS
 from robowin.risco.tempo import dia_sp
 
 ORIGEM_SINTETICO = "dados_sinteticos"  # mesma origem que o painel usa para acender a faixa SINTETICO
+_MESCLAVEIS = (decisao_ia.EPISODIOS, decisao_ia.PREVISOES)  # linhas completadas depois (mesmo id)
 
 
 def _json(obj: Any) -> str | None:
@@ -35,6 +36,8 @@ class Registro:
         self._n = itertools.count(1)
         self.contagem: dict[str, int] = {}
         self._features_ok: bool | None = None  # migracao de ``features_ciclo`` aplicada? (None: ainda nao tentada)
+        self._decisao_ia_ok: bool | None = None  # idem para as tabelas de ``dados/decisao_ia.py``
+        self._linhas_decisao_ia: dict[tuple[str, str], dict[str, Any]] = {}  # (tabela, id) -> linha ja gravada
 
     def novo_id(self, prefixo: str) -> str:
         return f"{self.sessao_id}-{prefixo}-{next(self._n):07d}"
@@ -89,6 +92,40 @@ class Registro:
             id=f"{ciclo_id}-fe", t_ns=t_ns, sessao=self.sessao_id, ciclo_id=ciclo_id, bracos=bracos,
             gatilhos=gatilhos, valores=valores))
         return True
+
+    # ---- decisao completa pela IA (braco planejador; tabelas de dados/decisao_ia.py) ----------------------
+    def _decisao_ia(self, tabela: str, prefixo: str, campos: dict[str, Any]) -> str | None:
+        """Grava uma linha de ``tabela``. Em episodios e previsoes, chamar de novo com o mesmo ``id`` MESCLA os campos
+        novos na linha ja gravada (episodio aberto e depois fechado; previsao resolvida depois). Fora da auditoria de proposito: nao muda a cadeia
+        de hash nem os hashes de dossie/resultado. Banco sem suporte a migracao (duble) => nao grava, devolve None."""
+        if self._decisao_ia_ok is None:
+            self._decisao_ia_ok = decisao_ia.garantir_tabelas(self.banco)
+        if not self._decisao_ia_ok:
+            return None
+        id_ = str(campos.get("id") or self.novo_id(prefixo))
+        chave = (tabela, id_)
+        anterior = self._linhas_decisao_ia.get(chave, {})
+        ln = decisao_ia.linha(tabela, {**anterior, **{k: v for k, v in campos.items() if v is not None}, "id": id_})
+        if tabela in _MESCLAVEIS:
+            self._linhas_decisao_ia[chave] = {k: v for k, v in ln.items() if v is not None}
+        self._ins(tabela, ln)
+        return id_
+
+    def episodio(self, **campos: Any) -> str | None:
+        """Episodio de posicao (``posicoes_episodio``): abertura e, depois, fechamento com o MESMO id."""
+        return self._decisao_ia(decisao_ia.EPISODIOS, "epi", campos)
+
+    def gestao_evento(self, **campos: Any) -> str | None:
+        """Ajuste de protecao da IA ou automatico (``gestao_eventos``), aplicado ou nao."""
+        return self._decisao_ia(decisao_ia.GESTAO, "ges", campos)
+
+    def previsao_ia(self, **campos: Any) -> str | None:
+        """Previsao declarada (``previsoes_ia``); a resolucao (y_alvo, fonte_y, resolvido_ns) usa o MESMO id."""
+        return self._decisao_ia(decisao_ia.PREVISOES, "prv", campos)
+
+    def contrafactual(self, **campos: Any) -> str | None:
+        """Politica alternativa sobre a mesma decisao (``contrafactuais``): so diagnostico."""
+        return self._decisao_ia(decisao_ia.CONTRAFACTUAIS, "ctf", campos)
 
     # ---- risco, incidentes ----------------------------------------------------------------------
     def evento_risco(self, *, t_ns: int, braco: str, tipo: str, detalhe: str = "", critico: bool = False) -> None:

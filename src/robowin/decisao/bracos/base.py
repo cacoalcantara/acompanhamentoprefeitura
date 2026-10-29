@@ -16,7 +16,15 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
-from robowin.core.tipos import Acao, CarimboLatencia, ChamadaLLM, Intencao, PlanoCondicional, Posicao
+from robowin.core.tipos import (
+    Acao,
+    CarimboLatencia,
+    ChamadaLLM,
+    EnvelopeDecisao,
+    Intencao,
+    PlanoCondicional,
+    Posicao,
+)
 
 NS = 1_000_000_000
 DESVIO_MAX_TICKS = 4.0  # desvio maximo do preco entre a decisao e o envio, em TICKS do ativo
@@ -48,6 +56,12 @@ class ContextoDecisao:
     gatilhos: tuple[str, ...] = ()
     # Maquina do Tempo (decisao/odds.py): callable (ctx, lado, stop_pontos, alvo_pontos) -> AvaliacaoOdds | None
     odds: Any = None
+    # adicoes opcionais (braco planejador; docs/16). O braco ve o envelope DERIVADO dos limites (pontos, unidades,
+    # segundos), nunca o ConfigRisco: os demais bracos ignoram estes campos.
+    envelope: EnvelopeDecisao | None = None
+    custo_ida_volta_pontos: float = 0.0
+    plano_vigente: bool = False  # ha um plano condicional armado deste braco
+    latencia_ia_s: tuple[float, float] | None = None  # (p50, p95) da latencia observada do papel de IA
 
 
 @dataclass
@@ -66,7 +80,7 @@ class ResultadoDecisao:
     t0_ns: int
     ciclo_id: str
     acao: Acao
-    # entrada | plano | saida | manter | nao_operar | bloqueada
+    # entrada | plano | saida | manter | ajuste | manter_sem_ajuste | nao_operar | bloqueada
     resultado: str
     intencao: Intencao | None = None
     proposta: dict[str, Any] | None = None
@@ -82,6 +96,12 @@ class ResultadoDecisao:
     desvio_max_pts: float = float("inf")  # sempre preenchido por `_resultado` (ticks do ativo x tick)
     plano: PlanoCondicional | None = None  # ABSOLUTO (ver plano_condicional.converter_plano)
     gatilhos: tuple[str, ...] = ()
+    # adicoes opcionais: posicao vista em t0 (MANTER/ENCERRAR presos a ela) e pedidos de reavaliacao do planejador
+    posicao_ticket_t0: int | None = None
+    quantidade_t0: int = 0
+    reavaliar_em_s: int | None = None
+    reavaliar_se: tuple[str, ...] = ()
+    p_alvo: float | None = None
 
     @property
     def eh_entrada(self) -> bool:
@@ -142,6 +162,8 @@ class BracoBase:
     # --- auxiliares ----------------------------------------------------------------------------------
     def _resultado(self, ctx: ContextoDecisao, acao: Acao, resultado: str, **kw: Any) -> ResultadoDecisao:
         kw.setdefault("desvio_max_pts", DESVIO_MAX_TICKS * ctx.tick_pontos)
+        kw.setdefault("posicao_ticket_t0", ctx.posicao.ticket)
+        kw.setdefault("quantidade_t0", ctx.posicao.quantidade)
         return ResultadoDecisao(braco=self.id, modo=self.modo, t0_ns=ctx.t0_ns, ciclo_id=ctx.ciclo_id, acao=acao,
                                 resultado=resultado, hash_dossie=ctx.hash_dossie, preco_ref=ctx.preco_ref,
                                 gatilhos=ctx.gatilhos, **kw)
@@ -149,12 +171,15 @@ class BracoBase:
     def _intencao(self, ctx: ContextoDecisao, acao: Acao, *, stop: float | None, alvo: float | None,
                   tempo_max_s: int | None, validade_ns: int, plano: PlanoCondicional | None = None,
                   sufixo: str = "", proposta_id: str | None = None, revisao_id: str | None = None,
-                  modo_intencao: Literal["imediato", "condicional", "quant"] | None = None) -> Intencao:
+                  modo_intencao: Literal["imediato", "condicional", "quant"] | None = None, quantidade: int = 1,
+                  **extras: Any) -> Intencao:
+        """``extras``: campos opcionais da Intencao (posicao_ticket, quantidade_t0, gestao, ajuste, ancora_t0,
+        p_alvo). Sem eles a Intencao e identica a de antes."""
         return Intencao(
-            id=f"{ctx.ciclo_id}:{self.id}{sufixo}", braco=self.id, acao=acao, quantidade=1, stop_pontos=stop,
-            alvo_pontos=alvo, tempo_max_s=tempo_max_s, validade_ns=validade_ns,
+            id=f"{ctx.ciclo_id}:{self.id}{sufixo}", braco=self.id, acao=acao, quantidade=quantidade,
+            stop_pontos=stop, alvo_pontos=alvo, tempo_max_s=tempo_max_s, validade_ns=validade_ns,
             modo=modo_intencao or self.modo, plano=plano, preco_referencia=ctx.preco_ref,
-            proposta_id=proposta_id, revisao_id=revisao_id, t0_ns=ctx.t0_ns)
+            proposta_id=proposta_id, revisao_id=revisao_id, t0_ns=ctx.t0_ns, **extras)
 
     def _bloqueada(self, ctx: ContextoDecisao, motivos: tuple[str, ...], **kw: Any) -> ResultadoDecisao:
         return self._resultado(ctx, kw.pop("acao", Acao.NAO_OPERAR), "bloqueada", motivos=motivos, **kw)
