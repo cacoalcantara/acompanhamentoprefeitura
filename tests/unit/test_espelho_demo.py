@@ -232,13 +232,13 @@ def test_ack_none_10012_10031_viram_incerta_no_espelho_sem_reenvio(resposta):
     sim = Posicao(simbolo="WINZ26", lado=Lado.COMPRA, quantidade=1, preco_medio=130005.0)
     from robowin.core.tipos import Acao, Intencao
     it = Intencao(id="i1", braco="a", acao=Acao.COMPRAR, stop_pontos=60.0, validade_ns=rel.agora_ns() + 10**11)
-    r = e.espelhar_entrada(rel.agora_ns(), sim, it, 60.0, None, 600)
+    r = e.espelhar_entrada(rel.agora_ns(), sim, it, 60.0, None, 300)
     assert r.enviado and r.estado == EstadoOrdem.INCERTA.value
     assert [m for m in canal.enviados if m["tipo"] == "ordem"][0]["cmd"]["sl"] == 129945.0  # SL obrigatorio
     assert e.oms.incertas() and e.oms.bloqueado(e.braco_demo) == "ordem_incerta_pendente"
     # uma segunda tentativa (mesmo com tudo livre) NAO reenvia: OMS bloqueia entradas com INCERTA pendente
     it2 = it.model_copy(update={"id": "i2"})
-    r2 = e.espelhar_entrada(rel.agora_ns() + NS, sim, it2, 60.0, None, 600)
+    r2 = e.espelhar_entrada(rel.agora_ns() + NS, sim, it2, 60.0, None, 300)
     assert not r2.enviado and len([m for m in canal.enviados if m["tipo"] == "ordem"]) == 1
 
 
@@ -253,20 +253,20 @@ def test_espelho_so_envia_entrada_com_conta_zerada_sl_e_veto_de_risco():
     it = Intencao(id="i1", braco="a", acao=Acao.COMPRAR, stop_pontos=60.0, validade_ns=rel.agora_ns() + 10**11)
     sim = Posicao(simbolo="WINZ26", lado=Lado.COMPRA, quantidade=1, preco_medio=130005.0)
     # veto de risco: stop acima do maximo => NADA e enviado (mesmo motor/config do braco)
-    r = e.espelhar_entrada(rel.agora_ns(), sim, it, 500.0, None, 600)
+    r = e.espelhar_entrada(rel.agora_ns(), sim, it, 500.0, None, 300)
     assert not r.enviado and "vetada" in r.motivo and "stop_acima_do_maximo" in r.motivo
     # sem stop: veto
-    r = e.espelhar_entrada(rel.agora_ns(), sim, it, None, None, 600)
+    r = e.espelhar_entrada(rel.agora_ns(), sim, it, None, None, 300)
     assert not r.enviado and "stop_obrigatorio" in r.motivo
     assert not [m for m in canal.enviados if m["tipo"] == "ordem"]
     # conta demo NAO zerada => recusa
     canal.respostas["snapshot"] = {**SNAP_VAZIO, "orders": [{"ticket": 1, "symbol": "WINZ26", "type": 2, "magic": 7,
                                                               "volume_current": 1.0, "price_open": 1.0, "sl": 0.0, "tp": 0.0,
                                                               "time_setup_msc": 1}]}
-    r = e.espelhar_entrada(rel.agora_ns(), sim, it.model_copy(update={"id": "i3"}), 60.0, None, 600)
+    r = e.espelhar_entrada(rel.agora_ns(), sim, it.model_copy(update={"id": "i3"}), 60.0, None, 300)
     assert not r.enviado and r.motivo == "conta_demo_nao_zerada"
     canal.respostas["snapshot"] = SNAP_VAZIO
-    ok = e.espelhar_entrada(rel.agora_ns() + NS, sim, it.model_copy(update={"id": "i4"}), 60.0, 80.0, 600)
+    ok = e.espelhar_entrada(rel.agora_ns() + NS, sim, it.model_copy(update={"id": "i4"}), 60.0, 80.0, 300)
     assert ok.enviado and ok.estado == "EXECUTADA"
     cmd_env = [m for m in canal.enviados if m["tipo"] == "ordem"][0]["cmd"]
     assert cmd_env["tipo"] == "mercado" and cmd_env["sl"] == 129945.0 and cmd_env["tp"] == 130085.0
@@ -438,7 +438,7 @@ def test_espelho_e_kill_zera_pelo_gateway_in_process(tmp_path):
     it = Intencao(id="i1", braco="a", acao=Acao.COMPRAR, stop_pontos=60.0, validade_ns=g.rel.agora_ns() + 10**11)
     ask = float(g.d.symbol_info_tick(SIMB).ask)
     r = e.espelhar_entrada(g.rel.agora_ns(), Posicao(simbolo=SIMB, lado=Lado.COMPRA, quantidade=1, preco_medio=ask), it, 60.0,
-                           None, 600)
+                           None, 300)
     assert r.enviado and g.d.posicao_liquida(SIMB) == 1.0
     assert e.crenca.ticket == int(g.d.positions_get()[0].ticket)
     orq.contas["a"].kill.acionar("teste", "manual_cli", g.rel.agora_ns())  # efeito do kill => espelho.ao_kill
@@ -477,7 +477,7 @@ def _espelho_com_entrada(tmp_path):
     it = Intencao(id="i1", braco="a", acao=Acao.COMPRAR, stop_pontos=60.0, validade_ns=g.rel.agora_ns() + 10**11)
     ask = float(g.d.symbol_info_tick(SIMB).ask)
     r = e.espelhar_entrada(g.rel.agora_ns(), Posicao(simbolo=SIMB, lado=Lado.COMPRA, quantidade=1, preco_medio=ask), it,
-                           60.0, 80.0, 600)
+                           60.0, 80.0, 300)
     assert r.enviado and e.crenca.ticket is not None
     return g, e, banco, ask
 
@@ -572,7 +572,7 @@ def test_espelhar_entrada_limita_pela_unidade_maxima_do_motor():
     assert orq.cfg.risco.contratos_max == 1
     it = Intencao(id="i1", braco="a", acao=Acao.COMPRAR, stop_pontos=60.0, validade_ns=rel.agora_ns() + 10**11)
     sim = Posicao(simbolo="WINZ26", lado=Lado.COMPRA, quantidade=3, preco_medio=130005.0)
-    r = e.espelhar_entrada(rel.agora_ns(), sim, it, 60.0, None, 600)
+    r = e.espelhar_entrada(rel.agora_ns(), sim, it, 60.0, None, 300)
     assert r.enviado and [m for m in canal.enviados if m["tipo"] == "ordem"][0]["cmd"]["quantidade"] == 2
     assert e.crenca.quantidade == 2
 
