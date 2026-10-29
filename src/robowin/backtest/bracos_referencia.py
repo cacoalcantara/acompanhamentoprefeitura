@@ -27,7 +27,7 @@ class ControleAleatorio:
     rotulo = ROTULO_CONTROLE
 
     def __init__(self, seed: int, id: str = "controle_aleatorio", p_entrada: float = 0.01,
-                 stop_pontos: float = 100.0, alvo_pontos: float | None = 100.0, tempo_max_s: int | None = 900,
+                 stop_pontos: float = 100.0, alvo_pontos: float | None = 100.0, tempo_max_s: int | None = 300,
                  validade_s: int = 60) -> None:
         self.id = id
         self.seed = seed
@@ -86,5 +86,5 @@ class BracoSonda:
                             validade_ns=t_ns + self.validade_s * NS, modo="quant", t0_ns=t_ns)
         acao = Acao.COMPRAR if h < self.p_operar / 2 else Acao.VENDER
         return Intencao(id=f"{self.id}-{self._n:06d}", braco=self.id, acao=acao, quantidade=1,
-                        stop_pontos=self.stop_pontos, alvo_pontos=self.alvo_pontos, tempo_max_s=600,
+                        stop_pontos=self.stop_pontos, alvo_pontos=self.alvo_pontos, tempo_max_s=300,
                         validade_ns=t_ns + self.validade_s * NS, modo="quant", t0_ns=t_ns)

@@ -235,7 +235,7 @@ from robowin.execucao.ponte_gateway import TravaEspelho  # noqa: E402
 
 
 def braco_entra_uma_vez(id: str = "a", stop: float = 60.0, alvo: float | None = None) -> BracoRoteirizado:
-    return BracoRoteirizado(id, [lambda s, c: s.entrada(c, stop=stop, alvo=alvo, tempo=3600), lambda s, c: s.nada(c)])
+    return BracoRoteirizado(id, [lambda s, c: s.entrada(c, stop=stop, alvo=alvo, tempo=300), lambda s, c: s.nada(c)])
 
 
 class NucleoE2E:

@@ -141,7 +141,7 @@ async def test_saida_por_tempo_tem_um_unico_dono_e_nao_inverte():
 
 
 async def test_reivindicacoes_concorrentes_de_saida_sao_recusadas():
-    arm = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=60.0, alvo=None, tempo=600), lambda s, c: s.nada(c)])
+    arm = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=60.0, alvo=None, tempo=300), lambda s, c: s.nada(c)])
     orq, banco, _ = montar_orq([arm])
     await alimentar(orq, serie([130000.0] * 5))
     conta = orq.contas["a"]
@@ -158,7 +158,7 @@ async def test_reivindicacoes_concorrentes_de_saida_sao_recusadas():
 
 async def test_encerrar_da_ia_com_saida_ja_reivindicada_e_ignorado():
     def entra_e_encerra(self, ctx):
-        return self.encerrar(ctx) if ctx.posicao.quantidade else self.entrada(ctx, stop=60.0, alvo=None, tempo=600)
+        return self.encerrar(ctx) if ctx.posicao.quantidade else self.entrada(ctx, stop=60.0, alvo=None, tempo=300)
     arm = BracoRoteirizado("a", [entra_e_encerra])
     orq, banco, _ = montar_orq([arm])
     await alimentar(orq, serie([130000.0] * 12))
@@ -180,7 +180,7 @@ async def test_stop_e_saida_por_tempo_concorrentes_resultam_em_uma_so_saida():
 async def test_anti_martingale_preservado_apos_perda():
     def passo(self, ctx):
         if self.i == 1:
-            return self.entrada(ctx, stop=30.0, alvo=None, tempo=600)
+            return self.entrada(ctx, stop=30.0, alvo=None, tempo=300)
         if self.i >= 40:
             return self.entrada(ctx, quantidade=2, stop=30.0, alvo=None, tempo=60)  # tenta dobrar apos a perda
         return self.nada(ctx)
@@ -240,7 +240,7 @@ async def test_falha_de_ia_nao_para_a_protecao_da_posicao_aberta():
 
 
 async def test_kill_switch_zera_e_bloqueia_novas_entradas():
-    arm = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=60.0, alvo=None, tempo=600)])
+    arm = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=60.0, alvo=None, tempo=300)])
     orq, banco, _ = montar_orq([arm])
     await alimentar(orq, serie([130000.0] * 4))
     assert orq.sim.posicao("a").quantidade == 1
@@ -255,7 +255,7 @@ async def test_kill_switch_zera_e_bloqueia_novas_entradas():
 
 
 async def test_um_braco_nunca_depende_do_outro_contas_separadas():
-    a = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=30.0, alvo=None, tempo=600)])
+    a = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=30.0, alvo=None, tempo=300)])
     b = BracoRoteirizado("b", [lambda s, c: s.nada(c)])
     orq, _, _ = montar_orq([a, b])
     await alimentar(orq, serie([130000.0] * 4))

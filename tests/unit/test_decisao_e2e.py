@@ -208,7 +208,7 @@ def _msg_tick(t_ns: int, bid: float, ask: float, extra: dict | None = None) -> t
 
 async def test_nucleo_consome_o_gateway_bloqueia_na_lacuna_e_envia_heartbeat():
     from robowin.decisao.nucleo import FonteLista, Nucleo
-    arm = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=60.0, alvo=None, tempo=600), lambda s, c: s.nada(c)])
+    arm = BracoRoteirizado("a", [lambda s, c: s.entrada(c, stop=60.0, alvo=None, tempo=300), lambda s, c: s.nada(c)])
     orq, banco, _ = montar_orq([arm], modo_tempo="real")
     msgs = [_msg_tick(T0 + i * 1_000_000_000, 130000.0, 130005.0) for i in range(8)]
     msgs.insert(3, ("heartbeat", {"origem": "gateway", "hb": 1, "t_ns": T0}))
