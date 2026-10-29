@@ -73,3 +73,28 @@ def log_loss_multiclasse(p: np.ndarray, y: np.ndarray) -> float:
 def brier(p: np.ndarray, y: np.ndarray) -> float:
     p = np.asarray(p, float)
     return float(np.mean((p - np.asarray(y, float)) ** 2))
+
+
+def decomposicao_brier(p: np.ndarray, y: np.ndarray, bins: int = 10) -> dict[str, float]:
+    """Decomposicao de Murphy (binario): Brier ~= confiabilidade - resolucao + incerteza, por faixas de `p`.
+
+    Exata quando `p` e constante dentro de cada faixa; senao sobra o termo `residuo` (variancia intra-faixa)."""
+    p = np.asarray(p, float)
+    y = np.asarray(y, float)
+    n = len(p)
+    if n == 0:
+        nan = float("nan")
+        return {"brier": nan, "confiabilidade": nan, "resolucao": nan, "incerteza": nan, "residuo": nan, "n": 0}
+    base = float(y.mean())
+    idx = np.minimum((p * bins).astype(int), bins - 1)
+    rel = res = 0.0
+    for b in range(bins):
+        m = idx == b
+        if m.any():
+            nk, pk, ok = int(m.sum()), float(p[m].mean()), float(y[m].mean())
+            rel += nk * (pk - ok) ** 2
+            res += nk * (ok - base) ** 2
+    bs = brier(p, y)
+    rel, res, unc = rel / n, res / n, base * (1 - base)
+    return {"brier": bs, "confiabilidade": rel, "resolucao": res, "incerteza": unc,
+            "residuo": bs - (rel - res + unc), "n": n}
