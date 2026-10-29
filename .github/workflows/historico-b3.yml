@@ -2,8 +2,11 @@
 # SOMENTE SIMULACAO: nenhuma ordem e enviada a lugar nenhum. O lado agressor e INFERIDO (regra do tick) e nao ha
 # livro de ofertas. Sem ANTHROPIC_API_KEY/OPENAI_API_KEY nos secrets, a IA roda com o provedor FALSO (rotulado).
 # Com as duas chaves, `--provedor auto` usa as APIs reais (custo real, limitado por [ia].orcamento_mensal_usd).
+# A B3 so guarda ~20-30 pregoes online: o agendamento diario + o cache (60 pregoes) acumulam a amostra (docs/16 4.3).
 name: historico-b3
 on:
+  schedule:
+    - cron: "17 23 * * 1-5"  # dias uteis, ~20h17 de Brasilia (depois do fechamento e da publicacao da B3)
   workflow_dispatch:
     inputs:
       dias:
@@ -50,11 +53,12 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p relatorios
-          # DIAS simulados + 5 anteriores so de treino ([historico].dias_treino): o 1o dia simulado ja tem modelo
-          uv run robowin dados baixar-b3 --ativo WIN --ultimos "$((DIAS + 5))" --saida dados_b3 --json relatorios/download.json \
+          # DIAS simulados + 25 anteriores (treino do modelo e Maquina do Tempo, que exige MIN_SESSOES=20 sessoes
+          # completas anteriores; com +5 ela nunca ficava disponivel no CI - C22)
+          uv run robowin dados baixar-b3 --ativo WIN --ultimos "$((DIAS + 25))" --saida dados_b3 --json relatorios/download.json \
             2>&1 | tee relatorios/download.log
-          # mantem no cache so os 40 pregoes mais recentes (~40 MB cada)
-          find dados_b3 -name '*.zip' -printf '%f %p\n' | sort | head -n -40 | cut -d' ' -f2 | xargs -r rm -f
+          # mantem no cache so os 60 pregoes mais recentes (~40 MB cada)
+          find dados_b3 -name '*.zip' -printf '%f %p\n' | sort | head -n -60 | cut -d' ' -f2 | xargs -r rm -f
       - name: importar (streaming, cancelamentos fora, lado inferido, agregacao ms+preco)
         shell: bash
         run: |
@@ -66,9 +70,21 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # --contrafactuais: grava dias/<pregao>/contrafactuais.json e resolve previsoes_ia (so diagnostico)
           uv run robowin historico --ativo WIN --armazem dados_hist/ticks --dias "$DIAS" \
-            --provedor "$PROVEDOR" --saida relatorios/historico 2>&1 | tee relatorios/historico.log
+            --provedor "$PROVEDOR" --contrafactuais --saida relatorios/historico 2>&1 | tee relatorios/historico.log
           echo "tempo do passo: ${SECONDS}s"
+      - name: previsoes da IA e contrafactuais (artefatos por pregao)
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p relatorios/decisao_ia
+          for f in relatorios/historico/dias/*/previsoes_ia.json relatorios/historico/dias/*/contrafactuais.json; do
+            [ -f "$f" ] || continue
+            d=$(basename "$(dirname "$f")")
+            cp "$f" "relatorios/decisao_ia/${d}_$(basename "$f")"
+          done
+          ls relatorios/decisao_ia | sed 's/^/  /' || true
       - name: resumo no job e consolidado no log
         if: always()
         shell: bash

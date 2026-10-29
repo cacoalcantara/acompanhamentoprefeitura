@@ -904,3 +904,71 @@ Rodar na raiz `/home/user/acompanhamentoprefeitura`:
     - a ordem do veto (IA, validador, compilador e ancoragem, motor, aprovação por hash, OMS, guardião);
     - as variantes e hipóteses;
     - as pendências a confirmar com o usuário: o padrão `expor_envelope`; `[planejador].ativo` ligado na config; aumentar `tempo_max_posicao_s` só com edição do usuário e nova aprovação por hash.
+
+---
+
+## 6. Resumo para revisão: pedido, contrato, veto, variantes e pendências
+
+Esta seção resume a especificação acima para a revisão manual do critério 13 da seção 5. Se houver divergência, valem as seções 1 a 5.
+
+### 6.1 O pedido
+
+A IA passa a decidir o trade inteiro: entrar ou não, lado, momento (agora ou por gatilho), faixa de execução assimétrica, quantidade até o teto do envelope, stop, alvo, tempo máximo, regras de gestão, quando ser chamada de novo e `p_alvo`. Com posição aberta, ela pode encerrar, manter ou ajustar: apertar o stop, mover o alvo, mudar o tempo, fazer parcial ou trocar a gestão. A lista completa está na seção 1.2.
+
+O risco determinístico continua com o **veto final**. A IA nunca lê `ConfigRisco`, arquivos, hashes, usuário ou conta. Ela recebe no máximo o `EnvelopeDecisao`, em pontos, unidades e segundos, calculado pela mesma função que o motor usa.
+
+### 6.2 O contrato
+
+- **Saída da IA.** `PlanoTradeIA`, papel `planejador`, com `extra="forbid"`. Nenhum campo chega a um limite.
+- **Revisor opcional.** `RevisaoPlanoIA`, papel `revisor_plano`. Os booleanos `coerente`, `dados_ok` e `regras_ok` são obrigatórios.
+- **Compilação.** O plano vira `PlanoCondicional` mais `PlanoGestaoCompilado`, com níveis ancorados em t0. Ajustes da IA viram `AjustePosicao`, em pontos de resultado a partir do preço médio.
+- **Registro.** Os resultados vão para as tabelas `posicoes_episodio`, `gestao_eventos`, `previsoes_ia` e `contrafactuais`, fora do esquema congelado M0.
+- **Esquemas legados.** `PropostaIA` e `RevisaoIA` estão congelados, com sha256 conferido em teste.
+
+### 6.3 A ordem do veto
+
+Cada etapa só restringe; nenhuma desfaz o veto da anterior.
+
+1. **IA.** Propõe o plano ou o ajuste. `p_alvo` nunca libera nem bloqueia.
+2. **Validador** (`validar_plano_trade`). Confere o esquema, números finitos, evidências com valor conferido, sanitização (`texto_seguro`) e os limites do envelope.
+3. **Compilador e ancoragem** (`compilar_plano`, `ajustar_entrada_ancorada`). Arredonda para o tick e aplica a faixa assimétrica. Recusa preço fora da faixa, alvo restante abaixo do custo e plano expirado.
+4. **Motor de risco** (`MotorRiscoPadrao.avaliar`). Veto final e *fail-closed*. Cobre stop mínimo e só apertando, distância mínima, perdas, operações, janelas, tempo máximo e posição presa ao ticket de t0.
+5. **Aprovação por hash** dos limites do usuário+conta (`risco_para` e `resolver_aprovacao`). Sem aprovação válida, o resultado sai rotulado `risco_nao_aprovado`; ao vivo, a operação é recusada.
+6. **OMS.** Envia só a ordem da intenção aprovada e registra o estado dela.
+7. **Guardião do gateway** no espelho DEMO, inclusive `modificar_sltp`. A conta REAL fica sempre bloqueada e `order_send` existe só em `mt5/execucao_demo.py`.
+
+### 6.4 As variantes e as hipóteses
+
+As variantes estão na seção 4.1: P, PC, `sombra_sem_gestao`, `sombra_trailing_fixo`, `controle_aleatorio_plano`, `nao_operar`, `controle_aleatorio` e as linhas de base C v1.1, B, quant e, opcionalmente, `quant_v2`.
+
+As hipóteses estão na seção 4.2: H1 P > C, H2 P > controle do plano e H3 P > sombra sem gestão, com Holm m=3 e mais a não inferioridade de risco. A métrica primária é o líquido por pregão, já descontado o custo de API.
+
+O relatório (`avaliacao/relatorio.py`, `historico/relatorio.py`) mostra:
+
+- aviso de acerto por braço, com a geometria realizada;
+- seção "injetado (FALSO)", fora de qualquer comparação;
+- tentativas contra episódios;
+- gestão por posição;
+- diferenças pareadas por entrada com as sombras (`comparacao.diferencas_por_entrada`), com `nao_inferioridade` disponível para as margens pré-registradas;
+- dias encerrados por perdas seguidas.
+
+O selo é **recusado** para:
+
+- pregão com data igual ou anterior ao registro;
+- hash de variante divergente;
+- provedor FALSO;
+- cadeia de pré-registro quebrada (`decidir_selo(..., preregistro=..., dir_preregistro=...)`).
+
+### 6.5 Pendências
+
+**A confirmar com o usuário:**
+
+- **`[planejador].expor_envelope`.** O padrão é `"envelope"`. A alternativa `"nenhum"` existe para o caso de "a IA nunca lê limites" ser literal.
+- **`[planejador].ativo = true`** na configuração. Isso liga P, PC, as sombras e o controle do plano nas simulações.
+- **`tempo_max_posicao_s`.** O padrão é 300 s. Aumentar exige edição do usuário e **nova aprovação por hash**: nem a IA nem esta mudança alteram `config/risco.toml` ou `config/aprovacoes/`.
+
+**Técnicas, registradas para o próximo ciclo:**
+
+- **Prompts v1 com WIN fixo.** `config/prompts/proponente_v1.md` e os demais prompts v1 citam WIN, B3 e "R$ 0,20" (C27). Eles ficam congelados pelo pré-registro dos braços B e C. Generalizá-los cria uma variante nova (`*_v2`) com registro novo. Só os prompts do planejador já são genéricos.
+- **Pareamento com as sombras.** O pareamento por entrada usa `intencao_id`. Uma sombra cujo id deriva do id de referência (prefixo seguido de separador) casa com ele. Se a fábrica de sombras usar outro esquema de id, ajuste a chave em `secao_sombras`.
+- **Backtest.** O backtest recusa o braço `planejador` (`ErroConfig`). O planejador roda só no Orquestrador (`robowin simular`, `robowin historico`).

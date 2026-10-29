@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -156,3 +158,62 @@ def resumo(trades: Sequence[Trade]) -> ResumoMetricas:
         slippage_total_brl=float(sum(t.slippage_brl for t in ts)),
         slippage_medio_brl=float(np.mean([t.slippage_brl for t in ts])),
     )
+
+
+# ---------------------------------------------------------------- episodios (uma posicao = um episodio)
+def _ids_do_episodio(ep: Mapping[str, Any]) -> list[str]:
+    bruto = ep.get("trades_json")
+    if not bruto:
+        return []
+    try:
+        v = json.loads(bruto) if isinstance(bruto, str) else bruto
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(v, (list, tuple)):
+        return []
+    return [str(x.get("id")) if isinstance(x, Mapping) else str(x) for x in v]
+
+
+def agrupar_por_episodio(trades: Sequence[Trade], episodios: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Agrupa as operacoes (parciais e fechamento) por EPISODIO (linhas de ``posicoes_episodio``).
+
+    Cada trade vai para o episodio que o lista em ``trades_json``; sem essa lista, para o episodio do MESMO braco
+    cujo intervalo ``[t_aberta_ns, t_fechada_ns]`` contem a saida do trade. Trade sem episodio vira um episodio
+    proprio (``id`` = id do trade, ``origem = "trade_avulso"``): sem parciais, episodio = operacao, como hoje.
+    Devolve uma linha por episodio, com o liquido somado, em ordem de fechamento."""
+    eps = sorted(episodios, key=lambda e: (int(e.get("t_aberta_ns") or 0), str(e.get("id"))))
+    por_id: dict[str, list[Trade]] = {str(e.get("id")): [] for e in eps}
+    dono: dict[str, str] = {}
+    for e in eps:
+        for tid in _ids_do_episodio(e):
+            dono.setdefault(tid, str(e.get("id")))
+    avulsos: list[Trade] = []
+    for t in ordenar(trades):
+        eid = dono.get(t.id)
+        if eid is None:
+            for e in eps:
+                ini, fim = e.get("t_aberta_ns"), e.get("t_fechada_ns")
+                if (str(e.get("braco")) == t.braco and ini is not None and int(ini) <= t.t_saida_ns
+                        and (fim is None or t.t_saida_ns <= int(fim)) and not _ids_do_episodio(e)):
+                    eid = str(e.get("id"))
+                    break
+        if eid is None:
+            avulsos.append(t)
+        else:
+            por_id[eid].append(t)
+    out: list[dict[str, Any]] = []
+    for e in eps:
+        eid = str(e.get("id"))
+        ts = por_id[eid]
+        liq = float(sum(t.liquido_brl for t in ts)) if ts else float(e.get("liquido_total") or 0.0)
+        fim = max((t.t_saida_ns for t in ts), default=int(e.get("t_fechada_ns") or e.get("t_aberta_ns") or 0))
+        np_ep = e.get("n_parciais")
+        out.append({"id": eid, "braco": str(e.get("braco")), "origem": "episodio", "n_trades": len(ts),
+                    "n_parciais": int(np_ep) if np_ep is not None else max(len(ts) - 1, 0),
+                    "liquido_brl": liq, "t_fechada_ns": fim, "motivo_final": e.get("motivo_final"),
+                    "sombra_de": e.get("sombra_de"), "trades": [t.id for t in ts]})
+    for t in avulsos:
+        out.append({"id": t.id, "braco": t.braco, "origem": "trade_avulso", "n_trades": 1, "n_parciais": 0,
+                    "liquido_brl": t.liquido_brl, "t_fechada_ns": t.t_saida_ns, "motivo_final": t.motivo_saida,
+                    "sombra_de": None, "trades": [t.id]})
+    return sorted(out, key=lambda x: (x["t_fechada_ns"], x["id"]))

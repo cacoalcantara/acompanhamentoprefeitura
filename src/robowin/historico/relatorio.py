@@ -14,7 +14,7 @@ from typing import Any
 
 from robowin.avaliacao import relatorio as aval
 from robowin.core.instrumentos import PerfilInstrumento
-from robowin.core.tipos import ConfigRisco, Trade
+from robowin.core.tipos import ConfigRisco, PreRegistro, Trade
 
 from .runner import CONTROLE, SELO, ResultadoDia, ResultadoHistorico, quantis, salvar_json
 
@@ -62,10 +62,29 @@ def markdown_dia(r: ResultadoDia, res: ResultadoHistorico) -> str:
              + ("disponivel" if mtd["disponivel"] else "indisponivel (evidencia nao entregue ao revisor)"))
     L.append("- Tempos (s): " + ", ".join(f"{k} {v}" for k, v in r.tempos_s.items()))
     L += ["", *_linha_bracos(r.resumo), ""]
+    falsos = aval.bracos_falsos(r.bloqueios, r.modelos_servidos, provedor_falso=res.provedor == "falso")
+    injetados: dict[str, dict[str, int]] = {}
     if r.bloqueios:
         L += ["Bloqueios e vetos por braco:", ""]
         for b, c in r.bloqueios.items():
-            L.append(f"- {b}: " + ", ".join(f"{k} x{v}" for k, v in sorted(c.items(), key=lambda x: -x[1])))
+            reais = {k: v for k, v in c.items() if b not in falsos or not aval.eh_motivo_injetado(k)}
+            inj = {k: v for k, v in c.items() if k not in reais}
+            if inj:
+                injetados[b] = inj
+            if reais:
+                L.append(f"- {b}: " + ", ".join(f"{k} x{v}" for k, v in sorted(reais.items(), key=lambda x: -x[1])))
+        L.append("")
+    if injetados:
+        L += ["Injetado (FALSO; falhas sorteadas por seed, fora de qualquer comparacao):", ""]
+        L += [f"- {b}: " + ", ".join(f"{k} x{v}" for k, v in sorted(c.items())) for b, c in injetados.items()]
+        L.append("")
+    if r.posicoes:
+        L += ["| braco | posicoes | parciais | ajustes IA | ajustes auto | gestao nao aplicada | liquido | motivos |",
+              "|---|---|---|---|---|---|---|---|"]
+        for b, x in r.posicoes.items():
+            L.append(f"| {b} | {x['episodios']} | {x['parciais']} | {x['ajustes_ia']} | {x['ajustes_auto']} | "
+                     f"{x['gestao_nao_aplicada']} | {_brl(x['liquido_total'])} | "
+                     + ", ".join(f"{k} x{v}" for k, v in sorted(x["motivos_final"].items())) + " |")
         L.append("")
     if r.latencias:
         L += ["| etapa | n | p50 (ms) | p95 (ms) | max (ms) |", "|---|---|---|---|---|"]
@@ -75,19 +94,61 @@ def markdown_dia(r: ResultadoDia, res: ResultadoHistorico) -> str:
     return "\n".join(L) + "\n"
 
 
-def consolidar(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: ConfigRisco | None = None) -> dict[str, Any]:
+def _servidos(res: ResultadoHistorico) -> dict[str, list[str]]:
+    out: dict[str, set[str]] = {}
+    for r in res.dias:
+        for b, ms in r.modelos_servidos.items():
+            out.setdefault(b, set()).update(ms)
+    return {b: sorted(ms) for b, ms in sorted(out.items())}
+
+
+def dias_perdas_seguidas(res: ResultadoHistorico) -> dict[str, list[str]]:
+    """Pregoes em que o braco ficou bloqueado por perdas seguidas (o dia "encerrou" para ele)."""
+    out: dict[str, list[str]] = {}
+    for r in res.dias:
+        for b, c in r.bloqueios.items():
+            if any("perdas_seguidas" in k for k in c):
+                out.setdefault(b, []).append(r.data.isoformat())
+    return out
+
+
+def consolidar(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: ConfigRisco | None = None, *,
+               preregistro: PreRegistro | None = None, dir_preregistro: Path | None = None,
+               hashes_variantes: Mapping[str, str] | None = None) -> dict[str, Any]:
     bracos = sorted({b for r in res.dias for b in r.trades})
     trades: dict[str, list[Trade]] = {b: [t for r in res.dias for t in r.trades.get(b, [])] for b in bracos}
     contaminado: bool | None = any(r.contaminacao == "contaminado" for r in res.dias) if res.dias else None
-    rel = aval.gerar_relatorio(trades, controle=CONTROLE if CONTROLE in trades else None, sintetico=False,
-                               contaminado=contaminado, tentativas=max(1, len(bracos)), n_boot=res.params.n_boot,
-                               seed=res.params.seed, perfil=perfil, risco=risco,
-                               titulo=f"Historico causal {res.ativo} - consolidado ({len(res.dias)} pregoes)")
+    geometrias: dict[str, tuple[float, float]] = {}
+    for b in bracos:
+        g = aval.geometria_mediana([par for r in res.dias for par in r.geometrias.get(b, [])])
+        if g is not None:
+            geometrias[b] = g
     soma: dict[str, Counter[str]] = {}
-    tot: dict[str, Counter[str]] = {}
     for r in res.dias:
         for b, c in r.bloqueios.items():
             soma.setdefault(b, Counter()).update(c)
+    servidos = _servidos(res)
+    tentativas: Counter[str] = Counter()
+    for r in res.dias:
+        tentativas.update(r.tentativas_entrada)
+    rel = aval.gerar_relatorio(trades, controle=CONTROLE if CONTROLE in trades else None, sintetico=False,
+                               contaminado=contaminado, tentativas=max(1, len(bracos)), n_boot=res.params.n_boot,
+                               seed=res.params.seed, perfil=perfil, risco=risco,
+                               titulo=f"Historico causal {res.ativo} - consolidado ({len(res.dias)} pregoes)",
+                               geometrias=geometrias, preregistro=preregistro, dir_preregistro=dir_preregistro,
+                               datas_pregoes=[r.data.isoformat() for r in res.dias],
+                               provedor_falso=res.provedor == "falso", hashes_variantes=hashes_variantes,
+                               injetados={b: dict(c) for b, c in soma.items()}, modelos_servidos=servidos,
+                               tentativas_entrada=dict(tentativas),
+                               episodios=[e for r in res.dias for e in r.episodios],
+                               eventos_gestao=[e for r in res.dias for e in r.eventos_gestao],
+                               dias_perdas_seguidas=dias_perdas_seguidas(res))
+    falsos = set(rel["injetados"]["falsos"])
+    tot: dict[str, Counter[str]] = {}
+    for b in list(soma):  # falhas INJETADAS pelo FALSO saem dos bloqueios (ficam so na secao "injetado (FALSO)")
+        if b in falsos:
+            soma[b] = Counter({k: v for k, v in soma[b].items() if not aval.eh_motivo_injetado(k)})
+    for r in res.dias:
         for b, x in r.resumo.items():
             tot.setdefault(b, Counter()).update({k: x[k] for k in ("decisoes", "entradas", "vetadas", "bloqueadas",
                                                                     "trades", "chamadas_ia")})
@@ -105,7 +166,11 @@ def consolidar(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: Config
             "pulados": res.pulados, "bloqueios": {b: dict(c) for b, c in soma.items()},
             "totais_por_braco": {b: dict(c) for b, c in tot.items()}, "tempos_s": res.tempos_s,
             "limpos": sum(r.contaminacao == "limpo" for r in res.dias),
-            "contaminados": sum(r.contaminacao == "contaminado" for r in res.dias)}
+            "contaminados": sum(r.contaminacao == "contaminado" for r in res.dias),
+            "injetados": rel["injetados"],
+            "posicoes_por_dia": {r.data.isoformat(): r.posicoes for r in res.dias if r.posicoes},
+            "previsoes_ia": sum(len(r.previsoes_ia) for r in res.dias),
+            "contrafactuais": sum(len(r.contrafactuais) for r in res.dias)}
 
 
 def markdown_consolidado(c: Mapping[str, Any], res: ResultadoHistorico) -> str:
@@ -140,6 +205,9 @@ def markdown_consolidado(c: Mapping[str, Any], res: ResultadoHistorico) -> str:
               "| etapa | n | p50 (ms) | p95 (ms) | max (ms) |", "|---|---|---|---|---|"]
         for e, v in c["latencias"].items():
             L.append(f"| {e} | {int(v.get('n', 0))} | {v.get('p50_ms')} | {v.get('p95_ms')} | {v.get('max_ms')} |")
+    if c.get("previsoes_ia") or c.get("contrafactuais"):
+        L += ["", f"Previsoes da IA registradas: {c.get('previsoes_ia', 0)}; contrafactuais (so diagnostico): "
+                  f"{c.get('contrafactuais', 0)} (arquivos por pregao em dias/<pregao>/)."]
     pico = c["tempos_s"].get("memoria_pico_mb")
     L += ["", f"Tempo total: {c['tempos_s'].get('total')} s" + (f"; pico de memoria {pico} MB." if pico else "."),
           "", "---", ""]
@@ -147,15 +215,24 @@ def markdown_consolidado(c: Mapping[str, Any], res: ResultadoHistorico) -> str:
     return "\n".join(L) + "\n"
 
 
-def escrever(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: ConfigRisco | None = None) -> dict[str, Path]:
-    """Grava saida/dias/<D>/relatorio.{md,json} e saida/consolidado.{md,json}. Devolve os caminhos principais."""
+def escrever(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: ConfigRisco | None = None, *,
+             preregistro: PreRegistro | None = None, dir_preregistro: Path | None = None,
+             hashes_variantes: Mapping[str, str] | None = None) -> dict[str, Path]:
+    """Grava saida/dias/<D>/relatorio.{md,json} (+ ``previsoes_ia.json`` e ``contrafactuais.json`` quando houver) e
+    saida/consolidado.{md,json}. Devolve os caminhos principais."""
     saida = Path(res.params.saida)
+    saida.mkdir(parents=True, exist_ok=True)
     for r in res.dias:
         d = saida / "dias" / r.data.isoformat()
         d.mkdir(parents=True, exist_ok=True)
         (d / "relatorio.md").write_text(markdown_dia(r, res), encoding="utf-8")
         salvar_json(d / "relatorio.json", r.como_dict())
-    c = consolidar(res, perfil, risco)
+        if r.previsoes_ia:
+            salvar_json(d / "previsoes_ia.json", r.previsoes_ia)
+        if r.contrafactuais:
+            salvar_json(d / "contrafactuais.json", r.contrafactuais)
+    c = consolidar(res, perfil, risco, preregistro=preregistro, dir_preregistro=dir_preregistro,
+                   hashes_variantes=hashes_variantes)
     md = markdown_consolidado(c, res)
     (saida / "consolidado.md").write_text(md, encoding="utf-8")
     salvar_json(saida / "consolidado.json", c)

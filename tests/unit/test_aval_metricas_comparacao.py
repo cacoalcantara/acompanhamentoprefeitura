@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import math
 
 import numpy as np
@@ -139,3 +140,58 @@ def test_controle_aleatorio_e_teste_contra_controle():
     # braco igual ao controle: nao significativo
     assert comp.comparar_com_controle(225, 300, 225, 300)["p_valor_braco_maior"] > 0.4
     assert comp.comparar_com_controle(8, 10, 7, 10, n_preregistrado=300)["status"] == "amostra_insuficiente"
+
+
+# ================================================================== docs/16 (WP8): episodios, por entrada, NI
+def test_agrupar_por_episodio_soma_parciais_e_mantem_trade_avulso():
+    parcial, fecho = mk(1, 12.0, braco="P", hora=10), mk(2, -2.0, braco="P", hora=10)
+    por_intervalo = mk(3, 5.0, braco="P", hora=11)
+    avulso = mk(4, -7.0, braco="Q", hora=11)
+    outro_braco = mk(5, 1.0, braco="Q", hora=12)
+    eps = [{"id": "ep-a", "braco": "P", "t_aberta_ns": parcial.t_entrada_ns, "t_fechada_ns": fecho.t_saida_ns,
+            "trades_json": json.dumps([parcial.id, {"id": fecho.id}]), "n_parciais": 1, "motivo_final": "stop"},
+           {"id": "ep-b", "braco": "P", "t_aberta_ns": por_intervalo.t_entrada_ns,
+            "t_fechada_ns": por_intervalo.t_saida_ns, "motivo_final": "alvo"},
+           {"id": "ep-vazio", "braco": "P", "t_aberta_ns": 1, "t_fechada_ns": 2, "liquido_total": 3.5}]
+    g = {x["id"]: x for x in metricas.agrupar_por_episodio([fecho, avulso, parcial, por_intervalo, outro_braco], eps)}
+    assert g["ep-a"]["liquido_brl"] == pytest.approx(10.0) and g["ep-a"]["n_trades"] == 2
+    assert g["ep-a"]["n_parciais"] == 1 and g["ep-a"]["trades"] == [parcial.id, fecho.id]
+    assert g["ep-b"]["liquido_brl"] == pytest.approx(5.0) and g["ep-b"]["n_parciais"] == 0
+    assert g["ep-vazio"]["liquido_brl"] == pytest.approx(3.5) and g["ep-vazio"]["n_trades"] == 0  # do episodio
+    assert g[avulso.id]["origem"] == "trade_avulso" and g[outro_braco.id]["origem"] == "trade_avulso"
+    # nenhum trade conta duas vezes; sem episodios, episodio = operacao (comportamento de hoje)
+    assert sum(x["n_trades"] for x in g.values()) == 5
+    assert [x["id"] for x in metricas.agrupar_por_episodio([avulso], [])] == [avulso.id]
+
+
+def test_diferencas_por_entrada_so_pares_completos_e_prefixo_da_sombra():
+    ref = [{"intencao_id": f"it{i}", "liquido_total": float(v)} for i, v in enumerate([10, -4, 6, 8, 3])]
+    sombra = [{"intencao_id": f"it{i}:sombra_sem_gestao", "liquido_total": float(v)}
+              for i, v in enumerate([7, -6, 1, 9])] + [{"intencao_id": "orfa", "liquido_total": 50.0}]
+    r = comp.diferencas_por_entrada(ref, sombra, n_boot=200)
+    assert r["n_pares"] == 4 and r["pares"] == {"it0": 3.0, "it1": 2.0, "it2": 5.0, "it3": -1.0}
+    assert r["media_dif"] == pytest.approx(2.25)
+    assert r["incompletos_ref"] == 1 and r["incompletos_sombra"] == 1
+    assert r["taxa_incompletos"] == pytest.approx(2 / 6)
+    # chave por funcao e objetos com atributos tambem servem
+    class E:
+        def __init__(self, k, v):
+            self.k, self.liquido_brl = k, v
+    r2 = comp.diferencas_por_entrada([E("a", 1.0), E("b", 2.0)], [E("a", 0.0), E("b", 0.5)], lambda x: x.k, n_boot=50)
+    assert r2["media_dif"] == pytest.approx(1.25)
+    assert comp.diferencas_por_entrada(ref[:1], sombra[:1])["status"] == "amostra_insuficiente"
+
+
+def test_nao_inferioridade_com_margem_pre_registrada():
+    rng = np.random.default_rng(1)
+    d = rng.normal(-0.2, 1.0, 400)  # um pouco pior, mas bem dentro da margem 1
+    r = comp.nao_inferioridade(d, margem=1.0)
+    se = d.std(ddof=1) / math.sqrt(d.size)
+    assert r["status"] == "ok" and r["nao_inferior"] is True
+    assert r["limite_inferior"] == pytest.approx(d.mean() - stats.t.ppf(0.95, d.size - 1) * se)
+    assert r["p_valor"] == pytest.approx(stats.t.sf((d.mean() + 1.0) / se, d.size - 1))
+    assert comp.nao_inferioridade(d - 1.5, margem=1.0)["nao_inferior"] is False  # pior que a margem
+    assert comp.nao_inferioridade({"2026-11-03": 1.0}, margem=1.0)["status"] == "amostra_insuficiente"
+    assert comp.nao_inferioridade(d, margem=1.0, n_preregistrado=1000)["nao_inferior"] is False
+    with pytest.raises(ValueError):
+        comp.nao_inferioridade(d, margem=-1.0)
