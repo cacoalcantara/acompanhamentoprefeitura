@@ -153,6 +153,7 @@ class Gateway:
         self.executor = ExecucaoDemo(
             self.t, ConfigDemo(login=self.cfg.login, servidor=self.cfg.servidor, simbolo=simbolo,
                                modo_config=self.cfg.modo_config, msgs_por_min=self.cfg.msgs_por_min,
+                               contratos_max=self.cfg.guardiao.contratos_max,
                                espera_incerta_s=self.cfg.espera_incerta_s, lote=perfil.volume_unidade,
                                conta=self.caps.conta, modo_mm=self.cfg.modo_mm),
             self.relogio, alerta=self._alerta, registrar=registrar, relogio_srv=self.rs)
