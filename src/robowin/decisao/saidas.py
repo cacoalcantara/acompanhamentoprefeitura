@@ -6,13 +6,17 @@ a posicao so tem UMA reivindicacao de saida por vez; reivindicacoes concorrentes
 A reivindicacao vive ate a posicao fechar (ou a ordem de saida terminar sem fechar).
 
 Nenhuma saida depende de IA: o dono e sempre codigo deterministico.
+
+Braco planejador (docs/16): ``gestao`` (regra de gestao que encerra, ex.: ``sem_progresso``) e ``parcial`` (reducao
+da quantidade, da IA ou automatica). A reducao so acontece SEM dono vigente: ela reivindica a posicao como qualquer
+saida e a reivindicacao e liberada quando a parcial executa (ou a ordem termina sem executar).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 # prioridade informativa (a primeira reivindicacao vence; a prioridade so e usada para registrar o conflito)
-MOTIVOS_SAIDA = ("kill", "zeragem", "tempo", "encerrar")
+MOTIVOS_SAIDA = ("kill", "zeragem", "tempo", "encerrar", "gestao", "parcial")
 
 
 @dataclass(frozen=True)
@@ -50,3 +54,11 @@ class GestorSaidas:
 
     def tem_dono(self, braco: str) -> bool:
         return braco in self._dono
+
+    def liberar_se(self, braco: str, motivo: str, intencao_id: str | None = None) -> Reivindicacao | None:
+        """Libera a reivindicacao SO se ela for deste motivo (e desta intencao, se informada): a parcial executada
+        ou recusada nunca solta a reivindicacao de outra saida."""
+        atual = self._dono.get(braco)
+        if atual is None or atual.motivo != motivo or (intencao_id is not None and atual.intencao_id != intencao_id):
+            return None
+        return self._dono.pop(braco)
