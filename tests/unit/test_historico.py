@@ -285,3 +285,25 @@ def test_custo_api_por_pregao_na_moeda_da_conta_pela_cotacao_registrada():
     assert custo_api_por_pregao(res, "USD")[0]["planejador"]["2026-11-03"] == 0.5
     sem = NS_(dias=dias, params=NS_(cotacao_usd_conta=None))
     assert custo_api_por_pregao(sem, "BRL") == ({}, True)  # sem cotacao: nada descontado, e o relatorio avisa
+
+
+def test_consolidar_passa_o_n_pregoes_alvo_do_preregistro(tmp_path, monkeypatch):
+    """--preregistro: o n pre-registrado (em pregoes) chega ao selo (antes: n_alvo None => nunca concedido)."""
+    from perfis_teste import WIN as PERFIL
+
+    from robowin.avaliacao import relatorio as aval
+    from robowin.core.tipos import PreRegistro
+    from robowin.historico import relatorio as hrel
+    from robowin.historico.runner import ParamsHistorico
+    visto = {}
+    real = aval.gerar_relatorio
+
+    def espiao(*a, **kw):
+        visto.update(kw)
+        return real(*a, **kw)
+    monkeypatch.setattr(aval, "gerar_relatorio", espiao)
+    pr = PreRegistro(id_experimento="e", t_registro_ns=0, inicio_avaliacao="2026-01-01", variantes={},
+                     comparacoes_primarias=("B-C",), margens_nao_inferioridade={}, n_pregoes_alvo=33)
+    res = _resultado_vazio(ParamsHistorico(armazem=tmp_path, saida=tmp_path / "s"))
+    hrel.consolidar(res, PERFIL, preregistro=pr)
+    assert visto["n_alvo"] == 33

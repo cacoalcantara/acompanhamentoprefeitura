@@ -467,3 +467,23 @@ def test_falso_do_planejador_contamina_as_sombras_e_o_controle_do_plano():
         assert s["selo"] == "recusado" and any("FALSO" in m for m in s["motivos"])
     h = rel["hipoteses"]["hipoteses"]
     assert all(x.get("injetado_falso") and not x["rejeita_h0"] for x in h.values())
+
+
+def test_selo_com_preregistro_usa_n_pregoes_alvo_em_pregoes(tmp_path):
+    """Com pre-registro, o n alvo e o n_pregoes_alvo do registro e a comparacao e com PREGOES (antes: n_alvo None
+    => 'n pre-registrado nao informado' para sempre; e com n_alvo, comparava com o numero de operacoes)."""
+    pr10, pasta = _registro(tmp_path, "2026-10-29")  # n_pregoes_alvo=10, variante B=hB
+    ts = {"B": _por_dia("B", [10, -5, 20, 15, -3, 12, 9, 11])}  # 8 operacoes em 8 pregoes
+    datas = sorted({relatorio.dia_pregao(t) for t in ts["B"]})
+    kw = dict(sintetico=False, contaminado=False, n_alvo=None, exp_ic_inf=1.0, fator_lucro=2.0, dsr=0.99,
+              pregoes=8, dir_preregistro=pasta, datas_pregoes=datas, hashes_variantes={"B": "hB"})
+    curto = relatorio.decidir_selo(n=500, preregistro=pr10, **kw)
+    assert curto["selo"] == "nao_validado"
+    assert not any("n pre-registrado nao informado" in m for m in curto["motivos"])
+    assert any("pregoes=8 < n pre-registrado=10" in m for m in curto["motivos"])  # 500 operacoes nao bastam
+    pr5 = pr10.model_copy(update={"n_pregoes_alvo": 5})
+    ok = relatorio.decidir_selo(n=8, preregistro=pr5, **{**kw, "dir_preregistro": None})
+    assert not any("amostra insuficiente" in m or "n pre-registrado" in m for m in ok["motivos"])
+    rel = relatorio.gerar_relatorio(ts, tentativas=1, n_boot=50, preregistro=pr10, datas_pregoes=datas)
+    am = rel["bracos"]["B"]["amostra"]
+    assert am["unidade"] == "pregao" and am["n"] == 8 and am["n_alvo"] == 10 and am["suficiente"] is False

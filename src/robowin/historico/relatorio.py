@@ -149,7 +149,10 @@ def consolidar(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: Config
     for r in res.dias:
         tentativas.update(r.tentativas_entrada)
     custos_api, sem_cotacao = custo_api_por_pregao(res, perfil.moeda)
+    # n pre-registrado (em pregoes) do registro escolhido: sem ele o selo nunca diria quando a amostra basta
+    n_alvo = int(preregistro.n_pregoes_alvo) if preregistro is not None else None
     rel = aval.gerar_relatorio(trades, controle=CONTROLE if CONTROLE in trades else None, sintetico=False,
+                               n_alvo=n_alvo,
                                contaminado=contaminado, tentativas=max(1, len(bracos)), n_boot=res.params.n_boot,
                                seed=res.params.seed, perfil=perfil, risco=risco,
                                titulo=f"Historico causal {res.ativo} - consolidado ({len(res.dias)} pregoes)",

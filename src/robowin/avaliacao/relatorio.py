@@ -146,6 +146,18 @@ def motivos_preregistro(preregistro: PreRegistro | None, *, datas_pregoes: Seque
     return motivos, tentativas
 
 
+def unidade_amostra(n_operacoes: int, pregoes: int, n_alvo: int | None,
+                    preregistro: PreRegistro | None) -> tuple[str, int, int | None]:
+    """(unidade, n observado, n alvo). Com pre-registro, a unidade e a dele (``metrica_unidade``, "pregao") e o n
+    alvo, se nao informado, e ``n_pregoes_alvo``; sem pre-registro, operacoes contra ``n_alvo`` (legado)."""
+    if preregistro is not None:
+        alvo = n_alvo if n_alvo is not None else int(preregistro.n_pregoes_alvo)
+        if preregistro.metrica_unidade == "pregao":
+            return "pregao", int(pregoes), alvo
+        return "operacao", int(n_operacoes), alvo
+    return "operacao", int(n_operacoes), n_alvo
+
+
 def decidir_selo(*, sintetico: bool | None, contaminado: bool | None, n: int, n_alvo: int | None, exp_ic_inf: float,
                  fator_lucro: float, dsr: float, pregoes: int = 0, tentativas: int = 1,
                  var_sr_tentativas: float | None = None, preregistro: PreRegistro | None = None,
@@ -172,10 +184,13 @@ def decidir_selo(*, sintetico: bool | None, contaminado: bool | None, n: int, n_
         motivos.append("dados contaminados (periodo anterior ao corte de conhecimento dos LLMs)")
     if motivos:
         return {"selo": "recusado", "motivos": motivos}
+    # na unidade pregao conta todo pregao avaliado (inclusive os sem operacao do braco: a frequencia e da IA)
+    unidade, n_cmp, n_alvo = unidade_amostra(n, max(pregoes, len(set(datas_pregoes))), n_alvo, preregistro)
     if n_alvo is None:
         motivos.append("n pre-registrado nao informado")
-    elif n < n_alvo:
-        motivos.append(f"amostra insuficiente (n={n} < n pre-registrado={n_alvo})")
+    elif n_cmp < n_alvo:
+        rot = "pregoes" if unidade == "pregao" else "n"
+        motivos.append(f"amostra insuficiente ({rot}={n_cmp} < n pre-registrado={n_alvo})")
     if pregoes < MIN_PREGOES:
         motivos.append(f"poucos pregoes ({pregoes} < {MIN_PREGOES})")
     if tentativas < 1:
@@ -221,10 +236,16 @@ def _relatorio_braco(nome: str, trades: Sequence[Trade], *, n_alvo: int | None, 
         "resultado_apos_ir": (impostos.resultado_apos_ir(trades, cfg_ir) if calcula_tributo
                               else {"antes_ir_brl": r.lucro_liquido_brl, "ir_estimado_brl": None, "depois_ir_brl": None}),
         "tributo": "brasil_day_trade" if calcula_tributo else "tributo nao calculado",
-        "amostra": {"n": r.n, "n_alvo": n_alvo,
-                    "suficiente": None if n_alvo is None else not comp.amostra_insuficiente(r.n, n_alvo)},
+        "amostra": _amostra(r.n, max(int(bs.get("pregoes", 0)), len(set((selo_kw or {}).get("datas_pregoes", ())))),
+                            n_alvo, (selo_kw or {}).get("preregistro")),
         "selo": selo,
     }
+
+
+def _amostra(n: int, pregoes: int, n_alvo: int | None, preregistro: PreRegistro | None) -> dict[str, Any]:
+    unidade, n_cmp, alvo = unidade_amostra(n, pregoes, n_alvo, preregistro)
+    return {"n": n_cmp, "n_operacoes": n, "pregoes": pregoes, "unidade": unidade, "n_alvo": alvo,
+            "suficiente": None if alvo is None else not comp.amostra_insuficiente(n_cmp, alvo)}
 
 
 # ---------------------------------------------------------------- secoes novas (docs/16, WP8)
@@ -718,7 +739,8 @@ def renderizar_markdown(rel: Mapping[str, Any]) -> str:
             L.append(f"- Aviso de acerto: {aviso_b}")
         am = b["amostra"]
         if am["suficiente"] is False:
-            L.append(f"- **Amostra insuficiente**: n={am['n']} < n pre-registrado={am['n_alvo']}; sem conclusao.")
+            rot = "pregoes" if am.get("unidade") == "pregao" else "n"
+            L.append(f"- **Amostra insuficiente**: {rot}={am['n']} < n pre-registrado={am['n_alvo']}; sem conclusao.")
         if nome in rel["comparacoes_com_controle"]:
             c = rel["comparacoes_com_controle"][nome]
             if "p_controle" in c:
