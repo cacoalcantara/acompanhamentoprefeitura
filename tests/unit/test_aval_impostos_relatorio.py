@@ -487,3 +487,25 @@ def test_selo_com_preregistro_usa_n_pregoes_alvo_em_pregoes(tmp_path):
     rel = relatorio.gerar_relatorio(ts, tentativas=1, n_boot=50, preregistro=pr10, datas_pregoes=datas)
     am = rel["bracos"]["B"]["amostra"]
     assert am["unidade"] == "pregao" and am["n"] == 8 and am["n_alvo"] == 10 and am["suficiente"] is False
+
+
+def test_cli_avaliar_le_falso_geometria_e_tentativas_do_banco(tmp_path):
+    """``robowin avaliar`` num banco do historico com IA FALSA: o selo e recusado pelo FALSO (lido de chamadas_llm)
+    e sai o aviso de acerto por braco (C1) com a geometria realizada (antes: selo podia sair 'validado')."""
+    banco = tmp_path / "f.db"
+    _criar_banco(banco, _trades(400, ganho=30, perda=-10))
+    con = sqlite3.connect(banco)
+    con.execute("INSERT INTO chamadas_llm(id, t_ns, braco, papel, modelo_servido) VALUES ('c1', 0, 'B', "
+                "'proponente', 'claude-x-FALSO')")
+    con.execute("INSERT INTO decisoes(id, t_ns, braco, acao, intencao_json, resultado) VALUES ('d1', 0, 'B', "
+                "'COMPRAR', ?, 'executada')", (json.dumps({"id": "i1", "stop_pontos": 50, "alvo_pontos": 100}),))
+    con.commit()
+    con.close()
+    arq = tmp_path / "f.md"
+    assert main(["avaliar", "--banco", str(banco), "--saida", str(arq), "--n-alvo", "30", "--tentativas", "1",
+                 "--dados-reais", "--nao-contaminado", "--n-boot", "100"]) == 0
+    js = json.loads(arq.with_suffix(".json").read_text(encoding="utf-8"))
+    selo = js["bracos"]["B"]["selo"]
+    assert selo["selo"] == "recusado" and any("FALSO" in m for m in selo["motivos"])
+    assert "B" in js["avisos_acerto_por_braco"] and "stop 50" in js["avisos_acerto_por_braco"]["B"]
+    assert js["tentativas_episodios"]["B"]["tentativas"] == 1

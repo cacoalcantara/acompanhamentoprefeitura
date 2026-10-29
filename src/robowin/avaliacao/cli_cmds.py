@@ -93,6 +93,66 @@ def origem_declarada_real(banco: str | Path) -> bool:
     return "historico_real" in _origem_manifestos(banco)
 
 
+class _LeituraBanco:
+    """``consultar`` somente leitura (``mode=ro``) sobre o arquivo do banco: nunca cria nem migra nada."""
+
+    def __init__(self, banco: str | Path) -> None:
+        self.banco = banco
+
+    def consultar(self, sql: str, params: tuple = ()) -> list[dict]:
+        con = sqlite3.connect(f"file:{self.banco}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in con.execute(sql, params)]
+        finally:
+            con.close()
+
+
+def contexto_do_banco(banco: str | Path) -> dict:
+    """O que o ``robowin avaliar`` le do banco para o relatorio igualar o do historico: modelos servidos por braco
+    (o FALSO e reconhecido pelo sufixo ``-FALSO`` e contamina os derivados), geometrias realizadas (aviso de
+    acerto por braco, C1), tentativas de entrada, episodios e eventos de gestao. Tabela ausente: fica de fora."""
+    from robowin.dados import decisao_ia
+    lb = _LeituraBanco(banco)
+    out: dict = {}
+    try:
+        servidos: dict[str, list[str]] = {}
+        for r in lb.consultar("SELECT DISTINCT braco, modelo_servido FROM chamadas_llm ORDER BY braco"):
+            if r["modelo_servido"]:
+                servidos.setdefault(str(r["braco"]), []).append(str(r["modelo_servido"]))
+        out["modelos_servidos"] = servidos
+    except sqlite3.Error:
+        pass
+    try:
+        geo, tent = relatorio.geometrias_e_tentativas(lb)
+        out["geometrias"] = {b: g for b in geo if (g := relatorio.geometria_mediana(geo[b])) is not None}
+        out["tentativas_entrada"] = tent
+    except sqlite3.Error:
+        pass
+    eps = decisao_ia.ler(Path(banco), decisao_ia.EPISODIOS)
+    if eps:
+        out["episodios"] = eps
+        out["eventos_gestao"] = decisao_ia.ler(Path(banco), decisao_ia.GESTAO)
+    return out
+
+
+def _preregistro_cli(a) -> tuple:
+    """(PreRegistro, pasta, hashes atuais das variantes) com ``--preregistro``; (None, None, None) sem ele."""
+    if not getattr(a, "preregistro", None):
+        return None, None, None
+    from . import preregistro as prr
+    pasta = Path(a.preregistro)
+    try:
+        cadeia = prr.verificar(pasta)
+    except prr.ErroPreRegistro as e:
+        raise ValueError(f"pre-registro invalido em {pasta}: {e}") from e
+    escolhido = [p for p in cadeia if a.experimento is None or p.id_experimento == a.experimento]
+    if not escolhido:
+        raise ValueError(f"experimento {a.experimento or '(qualquer)'} nao registrado em {pasta}")
+    hashes = prr.variantes_padrao(prr.hashes_componentes(Path(a.config).parent, seed=a.seed_experimento))
+    return escolhido[-1], pasta, hashes
+
+
 def _avaliar(a) -> int:
     if a.ticks and not a.simbolo:
         print("ERRO: --ticks exige --simbolo")
@@ -113,9 +173,16 @@ def _avaliar(a) -> int:
     except ErroConfig as e:
         print(f"ERRO: {e}")
         return 2
+    try:
+        pr, dir_pr, hashes = _preregistro_cli(a)
+    except ValueError as e:
+        print(f"ERRO: {e}")
+        return 2
+    ctx = contexto_do_banco(a.banco)
     rel = relatorio.gerar_relatorio(trades, perfil=perfil, controle=a.controle, sintetico=sint, contaminado=cont,
                                     n_alvo=a.n_alvo, tentativas=a.tentativas, var_sr_tentativas=a.var_sr_tentativas,
-                                    n_boot=a.n_boot, seed=a.seed)
+                                    n_boot=a.n_boot, seed=a.seed, provedor_falso=a.provedor_falso,
+                                    preregistro=pr, dir_preregistro=dir_pr, hashes_variantes=hashes, **ctx)
     saida = Path(a.saida)
     if saida.suffix:
         md, js = saida, saida.with_suffix(".json")
@@ -174,6 +241,12 @@ def registrar(sub):
                         "features ou proxies")
     p.add_argument("--sem-incidente", action="store_true",
                    help="nao grava o incidente 'deriva_features' no banco (o relatorio continua mostrando o PSI)")
+    p.add_argument("--provedor-falso", action="store_true",
+                   help="afirma que a IA foi o provedor FALSO (sem isso, o FALSO e reconhecido em chamadas_llm)")
+    p.add_argument("--preregistro", default=None, metavar="PASTA",
+                   help="confere o selo contra a cadeia de pre-registro (config/experimentos)")
+    p.add_argument("--experimento", default=None, help="id do experimento na cadeia (padrao: o ultimo registrado)")
+    p.add_argument("--seed-experimento", type=int, default=7, help="semente registrada no experimento")
     p.set_defaults(func=_avaliar)
     from .cli_maquina import registrar_comando
     registrar_comando(sub)
