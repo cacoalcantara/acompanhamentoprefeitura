@@ -137,8 +137,8 @@ class GerenciadorGatilhos:
         ev_pos = tuple(e for e in est.eventos_posicao if e in c.eventos_posicao_permitidos)
         if c.evento_posicao and ev_pos:
             out.append(Disparo("evento_posicao", ",".join(ev_pos)))
-        for e in dict.fromkeys(est.eventos_gestao):  # sem repetir, na ordem de chegada
-            out.append(Disparo(f"gestao:{e}"))
+        for ev in dict.fromkeys(est.eventos_gestao):  # sem repetir, na ordem de chegada
+            out.append(Disparo(f"gestao:{ev}"))
         if est.reavaliacao_ns is not None and t >= est.reavaliacao_ns:
             out.append(Disparo("reavaliacao_programada", f"pedida_para={est.reavaliacao_ns}"))
         if est.plano_terminou:
