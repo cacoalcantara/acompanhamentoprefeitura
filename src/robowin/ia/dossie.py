@@ -225,10 +225,14 @@ def _limpar(x: Any) -> Any:
         return {str(k): _limpar(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)):
         return [_limpar(v) for v in x]
-    if isinstance(x, bool) or x is None or isinstance(x, (int, str)):
+    if isinstance(x, (bool, np.bool_)):
+        return bool(x)
+    if x is None or isinstance(x, str):
         return x
-    if isinstance(x, float):
-        return _r(x, 6)
+    if isinstance(x, (int, np.integer)):
+        return int(x)
+    if isinstance(x, (float, np.floating)):
+        return _r(float(x), 6)
     raise ErroDossie(f"valor nao serializavel no dossie: {type(x).__name__}")
 
 

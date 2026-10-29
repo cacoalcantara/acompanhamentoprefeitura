@@ -474,5 +474,5 @@ def validar_plano_trade(
 
 def revisao_plano_aprova(r: RevisaoPlanoIA | None) -> bool:
     """Aprovacao do revisor do plano: veredito APROVAR e os tres booleanos (sem padrao) verdadeiros."""
-    return (r is not None and r.veredito == "APROVAR" and r.coerente is True and r.dados_ok is True
-            and r.regras_ok is True)
+    return (r is not None and getattr(r, "veredito", None) == "APROVAR"
+            and all(getattr(r, c, None) is True for c in ("coerente", "dados_ok", "regras_ok")))
