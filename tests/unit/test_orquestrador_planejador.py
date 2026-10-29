@@ -507,3 +507,33 @@ def test_retorno_da_decisao_bloqueada_leva_so_o_codigo():
     assert _codigo_retorno("ia:quantidade_fora_do_envelope: 3 (1..2)") == "quantidade_fora_do_envelope"
     assert _codigo_retorno("ia:entrada_impossivel: perda_diaria_atingida") == "entrada_impossivel"
     assert _codigo_retorno("veto_por_odds: p=0.1") == "veto_por_odds"
+
+
+async def test_saida_total_com_parcial_em_voo_nao_queima_o_id_e_sai_depois():
+    """Parcial ACEITA no OMS + saida por tempo no mesmo tick: a saida total espera a parcial e sai depois
+    (antes: o OMS recusava com saida_ja_em_andamento, o id ficava gasto e todo retry voltava 'idempotente')."""
+    from robowin.core.tipos import Tick
+    from robowin.decisao.gestao import Reduzir
+    tp = 0.00001
+    b = BracoRoteirizado("a", [lambda s, c: _entrada(c, s, stop=30 * tp, alvo=300 * tp, q=2, tempo=300), _nada])
+    orq, banco, t0, _ = _orq_forex([b])
+
+    def f(i: int) -> Tick:
+        t = t0 + i * NS
+        return Tick(t_servidor_ms=t // 1_000_000, t_utc_ns=t, t_recebido_ns=t, bid=1.08, ask=1.08 + 2 * tp, last=0.0,
+                    volume=0.0, flags=6)
+
+    await alimentar(orq, [f(i) for i in range(3)])
+    conta = orq.contas["a"]
+    pos = orq.sim.posicao("a")
+    assert pos.quantidade == 2
+    t = orq.t_ultimo_ns
+    orq._acao_gestao_auto(conta, Reduzir(q=1, regra="parcial"), t, orq.ultimo_tick)  # parcial fica em voo
+    assert any(not o.eh_entrada for o in conta.oms.abertas("a"))
+    assert orq._sair(conta, "tempo", t) is False  # espera a parcial, sem enviar
+    assert conta.saida_adiada == ("tempo", pos.ticket, "")
+    assert not conta.oms.por_intencao(f"saida-tempo-a-{pos.ticket}")  # o id nao foi gasto
+    await alimentar(orq, [f(i) for i in range(3, 7)])  # a parcial executa e a saida adiada sai pelo id intacto
+    assert orq.sim.posicao("a").quantidade == 0
+    assert conta.saida_adiada is None
+    assert len(_db(banco, "SELECT * FROM trades WHERE braco='a'")) == 2

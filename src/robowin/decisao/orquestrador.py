@@ -197,6 +197,9 @@ class ContaBraco:
     retorno: dict[str, Any] = field(default_factory=dict)  # codigos do ultimo desfecho (dossie v2, sem numeros)
     ultimo_veto: tuple[str, ...] | None = None  # deduplicacao de vetos repetidos (tentativas x episodios)
     n_gestao: int = 0
+    # saida total (tempo/ENCERRAR/gestao) adiada porque uma saida parcial ainda estava em voo no OMS:
+    # (motivo, ticket, detalhe), refeita a cada tick ate sair ou a posicao mudar
+    saida_adiada: tuple[str, int, str] | None = None
 
 
 @dataclass
@@ -704,12 +707,18 @@ class Orquestrador:
         for conta in self.contas.values():
             pos = self.sim.posicao(conta.braco.id)
             if pos.quantidade <= 0:
+                conta.saida_adiada = None
                 continue
             precisa, motivo = conta.motor.precisa_zerar(pos, t)
             if precisa:
                 self._sair(conta, "kill" if motivo == "kill_switch" else "zeragem", t, forcado=True, detalhe=motivo)
             elif conta.meta is not None and t - pos.aberta_ns >= self._teto_tempo_s(conta) * NS:
                 self._sair(conta, "tempo", t)
+            elif (ad := conta.saida_adiada) is not None:
+                if ad[1] != pos.ticket:
+                    conta.saida_adiada = None  # a posicao mudou: a saida adiada era de outra posicao
+                else:
+                    self._sair(conta, ad[0], t, detalhe=ad[2], ticket_esperado=ad[1])
 
     def _sair(self, conta: ContaBraco, motivo: str, t: int, *, forcado: bool = False, detalhe: str = "",
               ticket_esperado: int | None = None) -> bool:
@@ -722,6 +731,14 @@ class Orquestrador:
             return False
         if ticket_esperado is not None and pos.ticket != ticket_esperado:
             conta.stats["saidas_ticket_divergente"] += 1
+            return False
+        dono = self.saidas.dono(braco)
+        dono_total = dono is not None and dono.ticket == pos.ticket and dono.motivo != "parcial"
+        if not forcado and not dono_total and any(not o.eh_entrada for o in conta.oms.abertas(braco)):
+            # uma saida (ex.: parcial) ainda em voo no OMS: enviar agora seria recusado (saida_ja_em_andamento).
+            # Espera o desfecho dela e tenta de novo no proximo tick, sem gastar o id idempotente desta saida.
+            conta.stats["saidas_aguardando_voo"] += 1
+            conta.saida_adiada = (motivo, pos.ticket, detalhe)
             return False
         self.saidas.liberar_se(braco, "parcial")  # a saida total prevalece sobre a reducao pendente
         iid = f"saida-{motivo}-{braco}-{pos.ticket}"
@@ -741,6 +758,7 @@ class Orquestrador:
         if not enviado:  # nao saiu (ex.: recuo do OMS): libera para tentar de novo no proximo tick
             self.saidas.liberar(braco)
             return False
+        conta.saida_adiada = None
         if conta.meta is not None:
             conta.meta.detalhe_saida = detalhe
         conta.stats[f"saida_{motivo}"] += 1
@@ -1227,8 +1245,10 @@ class Orquestrador:
             return
         if res.resultado == "saida":
             ok = self._sair(conta, "encerrar", agora, ticket_esperado=res.posicao_ticket_t0)
-            self._gravar_decisao(res, "executada" if ok else "ignorada",
-                                 motivos=() if ok else ("saida_ja_reivindicada",), gatilho=gat)
+            adiada = not ok and conta.saida_adiada is not None and conta.saida_adiada[0] == "encerrar"
+            self._gravar_decisao(res, "executada" if ok else ("adiada" if adiada else "ignorada"),
+                                 motivos=() if ok else (("saida_parcial_em_voo",) if adiada
+                                                        else ("saida_ja_reivindicada",)), gatilho=gat)
             return
         it2 = it.model_copy(update={"preco_referencia": self._preco_saida(pos, self.ultimo_tick, meio)})
         if res.resultado == "ajuste" and it2.ajuste is not None:

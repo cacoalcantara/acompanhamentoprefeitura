@@ -187,6 +187,8 @@ class OMS:
         motivo = self._motivo_bloqueio(o, agora)
         if motivo:
             self._transitar(o, E.REJEITADA, motivo)
+            if not o.eh_entrada:  # saida recusada aqui nunca saiu: o retry da MESMA intencao precisa poder enviar
+                del self._por_chave[chave]
             return ResultadoEnvio(o, None, False, motivo)
         if o.eh_entrada:
             self._recentes[self._chave_dup(o)] = agora

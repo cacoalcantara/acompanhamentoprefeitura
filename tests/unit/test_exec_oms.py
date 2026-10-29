@@ -276,3 +276,17 @@ def test_saidas_nao_sao_bloqueadas_por_recuo_algotrading_ou_duplicata(oms, rel):
     ex3 = Exec(ack(10009, 5), ack(10009, 6))
     assert oms.enviar(cmd("s3", lado=Lado.VENDA, tipo="saida"), ex3).enviado
     assert oms.enviar(cmd("s4", lado=Lado.VENDA, tipo="saida"), ex3).enviado
+
+
+def test_saida_recusada_por_outra_saida_em_voo_nao_gasta_a_chave_idempotente(oms):
+    """Uma saida recusada aqui (saida_ja_em_andamento) nunca saiu: o retry da MESMA intencao precisa enviar quando a
+    outra saida terminar (antes: a chave ficava gasta e todo retry voltava 'idempotente', para sempre)."""
+    ex = Exec(ack(10008, order=5))
+    r1 = oms.enviar(cmd("parcial", lado=Lado.VENDA, tipo="saida"), ex)
+    assert r1.enviado
+    r2 = oms.enviar(cmd("total", lado=Lado.VENDA, tipo="saida", q=2), ex)
+    assert not r2.enviado and r2.motivo == "saida_ja_em_andamento"
+    oms.ao_cancelada(5)  # a parcial terminou
+    r3 = oms.enviar(cmd("total", lado=Lado.VENDA, tipo="saida", q=2), ex)
+    assert r3.motivo != "idempotente" and r3.enviado
+    assert oms.enviar(cmd("total", lado=Lado.VENDA, tipo="saida", q=2), ex).motivo == "idempotente"
