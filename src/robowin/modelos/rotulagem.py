@@ -4,21 +4,31 @@ Para cada instante de decisao t e cada lado, simula a operacao: entrada na prime
 t >= t + atraso (compra paga o ask, venda recebe o bid), saida na primeira barreira tocada.
 O rotulo so e CONHECIDO em `t_fim_ns` (toque da barreira ou fim do horizonte); o purgado do
 walk-forward usa esse instante. Amostras cujo horizonte ultrapassa o fim dos dados nao sao rotuladas.
+
+`ConfigBarreiras.modelo_execucao` (docs/16 C23):
+* ``"toque"`` (padrao, variante ``quant`` v1, pre-registrada): o alvo sai quando a cotacao de saida TOCA o nivel e o
+  stop paga 1 tick de slippage;
+* ``"simulador"`` (variante ``quant_v2``): coerente com ``execucao/simulador.py`` - o alvo (ordem limitada) so sai
+  quando a cotacao de saida ATRAVESSA o nivel (estritamente; nao ha volume na cotacao para estimar a fila) e o stop
+  paga o slippage MEDIO do modelo Pareto do simulador (``Custos.do_perfil(..., modelo_execucao="simulador")``).
 """
 from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
 from robowin.core.instrumentos import PerfilInstrumento
 from robowin.core.tipos import Tick
+from robowin.execucao.preenchimento import ParamsSlippage
 
 ALVO, STOP, TEMPO = 0, 1, 2
 NOMES_CLASSES = ("alvo", "stop", "tempo")
 NS = 1_000_000_000
+ModeloExecucao = Literal["toque", "simulador"]
+MODELOS_EXECUCAO: tuple[str, ...] = ("toque", "simulador")
 
 
 @dataclass(frozen=True)
@@ -30,6 +40,11 @@ class ConfigBarreiras:
     atraso_ns: int = 300_000_000  # latencia ate a entrada
     quantidade: int = 1
     gap_max_s: float = 30.0  # lacuna maxima de cotacoes tolerada na entrada e na saida por tempo
+    modelo_execucao: ModeloExecucao = "toque"  # "simulador" = variante quant_v2 (alvo atravessado, slippage medio)
+
+    def __post_init__(self) -> None:
+        if self.modelo_execucao not in MODELOS_EXECUCAO:
+            raise ValueError(f"modelo_execucao invalido: {self.modelo_execucao!r} (use {', '.join(MODELOS_EXECUCAO)})")
 
     @classmethod
     def do_perfil(cls, perfil: PerfilInstrumento, **kw: Any) -> ConfigBarreiras:
@@ -46,10 +61,26 @@ class Custos:
     slippage_stop_pontos: float  # saida a mercado no stop paga 1 tick adicional
 
     @classmethod
-    def do_perfil(cls, perfil: PerfilInstrumento, d: dt.date | None = None) -> Custos:
+    def do_perfil(cls, perfil: PerfilInstrumento, d: dt.date | None = None, *,
+                  modelo_execucao: ModeloExecucao = "toque", slippage: ParamsSlippage | None = None) -> Custos:
         """Tarifas B3 do perfil (2 lados, vigentes em `d`; padrao: a mais recente) ou comissao por lote (forex/CFD)
-        + 1 tick de slippage no stop."""
-        return cls(tarifas_corretagem_brl=2 * perfil.custo_lado_unidade(d), slippage_stop_pontos=perfil.tick_pontos)
+        + slippage no stop: 1 tick (``toque``) ou o slippage MEDIO do modelo Pareto do simulador (``simulador``)."""
+        if modelo_execucao == "simulador":
+            slip = slippage_medio_pontos(slippage or ParamsSlippage(), perfil.tick_pontos)
+        else:
+            slip = perfil.tick_pontos
+        return cls(tarifas_corretagem_brl=2 * perfil.custo_lado_unidade(d), slippage_stop_pontos=slip)
+
+
+def slippage_medio_pontos(p: ParamsSlippage, tick_pontos: float) -> float:
+    """E[slippage] do simulador: min(minimo + floor(escala*X), maximo) ticks, X ~ Lomax(alpha) (``rng.pareto``).
+
+    E[floor(sX) truncado] = soma_{k=1..max-min} P(sX >= k) = soma (1 + k/s)^-alpha (exato, sem amostragem)."""
+    m = max(0, p.maximo_ticks - p.minimo_ticks)
+    if p.escala <= 0 or m == 0:
+        return min(p.minimo_ticks, p.maximo_ticks) * tick_pontos
+    k = np.arange(1, m + 1, dtype=float)
+    return float(p.minimo_ticks + np.sum((1.0 + k / p.escala) ** (-p.alpha))) * tick_pontos
 
 
 @dataclass(frozen=True)
@@ -103,16 +134,19 @@ def rotular_um(q: Cotacoes, t_decisao_ns: int, lado: int, cfg: ConfigBarreiras, 
     j1 = int(np.searchsorted(q.t_ns, t_end, side="right"))  # cotacoes com t <= t_end
     if t_end - int(q.t_ns[j1 - 1]) > int(cfg.gap_max_s * NS):
         return None  # lacuna no fim do horizonte (sessao encerrou): nao rotula
+    atravessar = cfg.modelo_execucao == "simulador"  # limitada so sai se a cotacao passar do nivel
     if lado > 0:
         entrada = q.ask[i0]
         saida_px = q.bid[i0 + 1:j1]
-        hit_alvo = saida_px >= entrada + cfg.alvo_pontos
+        nivel = entrada + cfg.alvo_pontos
+        hit_alvo = saida_px > nivel if atravessar else saida_px >= nivel
         hit_stop = saida_px <= entrada - cfg.stop_pontos
         ult = q.bid[j1 - 1]
     else:
         entrada = q.bid[i0]
         saida_px = q.ask[i0 + 1:j1]
-        hit_alvo = saida_px <= entrada - cfg.alvo_pontos
+        nivel = entrada - cfg.alvo_pontos
+        hit_alvo = saida_px < nivel if atravessar else saida_px <= nivel
         hit_stop = saida_px >= entrada + cfg.stop_pontos
         ult = q.ask[j1 - 1]
     ia = int(np.argmax(hit_alvo)) if hit_alvo.any() else None
