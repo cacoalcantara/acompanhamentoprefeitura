@@ -29,6 +29,20 @@ Braco EXPERIMENTAL de debate (desligado por padrao; so no modo condicional; ver 
     debatedor_risco = "debatedor_risco"     # papel/modelo dos tres debatedores de risco (padrao: o proponente)
     rodadas = 1                             # 1 ou 2 rodadas de pesquisa
     veto_unanime_risco = true               # tres pareceres 'nao_operar' => NAO_OPERAR
+
+Braco PLANEJADOR (docs/16; a IA decide o trade inteiro, sempre no modo condicional)::
+
+    [[bracos]]
+    id = "planejador_sonnet"
+    tipo = "planejador"
+    proponente = "anthropic:<modelo>"       # papel (ou 'provedor:modelo') que cumpre o papel planejador
+    revisor = "revisor_plano"               # opcional: plano + revisao do plano compilado (analogo do C)
+    sombras = true                          # opcional: sombras sem_gestao e trailing_fixo deste braco
+    controle_plano = true                   # opcional: controle aleatorio com o plano compilado deste braco
+
+Com ``[planejador].ativo`` a fabrica cria as variantes pre-registradas (``planejadores_padrao``): ``planejador`` (P),
+``planejador_revisor`` (PC), ``sombra_sem_gestao``, ``sombra_trailing_fixo`` (referencia P) e
+``controle_aleatorio_plano``.
 """
 from __future__ import annotations
 
@@ -37,13 +51,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from robowin.core.tipos import Papel
+from pydantic import ValidationError
+
+from robowin.core.tipos import ConfigPlanejador, Papel
 from robowin.ia.catalogo import Catalogo, dividir_modelo
 
-from ..validade import Prazos, prazos_de_config
-from .base import MODOS, Geometria, Modo
+from ..validade import PRAZOS_PLANEJADOR, Prazos, prazos_de_config
+from .base import MODOS, BracoBase, Geometria, Modo
 from .claude import BracoProponente
 from .claude_gpt import BracoProponenteRevisor
+from .controles import BracoAleatorioPlano
 from .debate import (
     ETAPAS_PESQUISA,
     ETAPAS_RISCO,
@@ -53,12 +70,33 @@ from .debate import (
     ServicoPropostaDebate,
 )
 from .llm import BracoLLM, ServicoProposta, ServicoRevisao
+from .planejador import BracoPlanejador, ServicoPlanejamento, ServicoRevisaoPlano
+from .sombra import BracoSombra
 
-TIPOS_BRACO = ("llm", "debate")
+TIPOS_BRACO = ("llm", "debate", "planejador")
+# ids pre-registrados das variantes do planejador (docs/16 4.1)
+ID_PLANEJADOR = "planejador"
+ID_PLANEJADOR_REVISOR = "planejador_revisor"
+ID_SOMBRA_SEM_GESTAO = "sombra_sem_gestao"
+ID_SOMBRA_TRAILING = "sombra_trailing_fixo"
+ID_CONTROLE_PLANO = "controle_aleatorio_plano"
+PAPEL_PLANEJADOR = "planejador"
+PAPEL_REVISOR_PLANO = "revisor_plano"
 
 
 class ErroConfigBraco(Exception):
     pass
+
+
+def config_planejador(cfg: Mapping[str, Any] | None) -> ConfigPlanejador:
+    """``[planejador]`` (sem a subtabela ``gatilhos``) -> ``ConfigPlanejador``. Campo desconhecido (inclusive
+    qualquer nome de limite de risco) e recusado: o esquema e ``extra="forbid"``."""
+    sec = dict((cfg or {}).get("planejador", {}) or {})
+    sec.pop("gatilhos", None)
+    try:
+        return ConfigPlanejador(**sec)
+    except ValidationError as e:
+        raise ErroConfigBraco(f"[planejador] invalido: {e}") from e
 
 
 @dataclass(frozen=True)
@@ -77,6 +115,8 @@ class ConfigBracoExtra:
     effort_debatedor_risco: str | None = None
     rodadas: int = 1
     veto_unanime_risco: bool = True
+    sombras: bool = False  # so tipo=planejador: sombras sem_gestao e trailing_fixo deste braco
+    controle_plano: bool = False  # so tipo=planejador: controle aleatorio com o plano compilado deste braco
 
 
 def extras_de_config(cfg: Mapping[str, Any]) -> list[ConfigBracoExtra]:
@@ -86,17 +126,21 @@ def extras_de_config(cfg: Mapping[str, Any]) -> list[ConfigBracoExtra]:
     for b in cfg.get("bracos", []) or []:
         if "id" not in b or "proponente" not in b:
             raise ErroConfigBraco(f"[[bracos]] exige 'id' e 'proponente': {b}")
-        modo = b.get("modo", "imediato")
+        tipo = b.get("tipo", "llm")
+        modo = b.get("modo", "condicional" if tipo == "planejador" else "imediato")
         if modo not in MODOS:
             raise ErroConfigBraco(f"braco {b['id']}: modo invalido {modo!r}")
         if b["id"] in ids:
             raise ErroConfigBraco(f"braco duplicado: {b['id']}")
         ids.add(b["id"])
-        tipo = b.get("tipo", "llm")
         if tipo not in TIPOS_BRACO:
             raise ErroConfigBraco(f"braco {b['id']}: tipo invalido {tipo!r} (use {TIPOS_BRACO})")
         if tipo == "debate" and modo != "condicional":
             raise ErroConfigBraco(f"braco {b['id']}: o debate so existe no modo condicional")
+        if tipo == "planejador" and modo != "condicional":
+            raise ErroConfigBraco(f"braco {b['id']}: o planejador so existe no modo condicional")
+        if tipo != "planejador" and (b.get("sombras") or b.get("controle_plano")):
+            raise ErroConfigBraco(f"braco {b['id']}: 'sombras'/'controle_plano' so valem para tipo='planejador'")
         rodadas = int(b.get("rodadas", 1))
         if tipo == "debate" and not 1 <= rodadas <= 2:
             raise ErroConfigBraco(f"braco {b['id']}: rodadas deve ser 1 ou 2")
@@ -106,7 +150,8 @@ def extras_de_config(cfg: Mapping[str, Any]) -> list[ConfigBracoExtra]:
             tempo_max_s=b.get("tempo_max_s"), tipo=tipo, pesquisador=b.get("pesquisador"),
             debatedor_risco=b.get("debatedor_risco"), effort_pesquisador=b.get("effort_pesquisador"),
             effort_debatedor_risco=b.get("effort_debatedor_risco"), rodadas=rodadas,
-            veto_unanime_risco=bool(b.get("veto_unanime_risco", True))))
+            veto_unanime_risco=bool(b.get("veto_unanime_risco", True)), sombras=bool(b.get("sombras", False)),
+            controle_plano=bool(b.get("controle_plano", False))))
     return out
 
 
@@ -122,8 +167,11 @@ class FabricaBracos:
         self.stop_max_pontos = stop_max_pontos
         self.prazos = dict(prazos) if prazos is not None else prazos_de_config(dict(cfg or {}))
         self.geometria = geometria
+        self.cfg_planejador = config_planejador(cfg)
         self._props: dict[tuple[str, str | None], ServicoProposta] = {}
         self._revs: dict[tuple[str, str | None], ServicoRevisao] = {}
+        self._plans: dict[tuple[str, str | None], ServicoPlanejamento] = {}
+        self._revs_plano: dict[tuple[str, str | None], ServicoRevisaoPlano] = {}
 
     # --- resolucao de papeis/modelos -----------------------------------------------------------------
     def resolver(self, valor: str, effort: str | None = None) -> tuple[str, str | None]:
@@ -160,6 +208,28 @@ class FabricaBracos:
                                            diretorio_prompts=self.diretorio_prompts)
         return self._revs[k]
 
+    def servico_planejamento(self, valor: str, effort: str | None = None) -> ServicoPlanejamento:
+        ref, eff = self.resolver(valor, effort)
+        k = (ref, eff)
+        if k not in self._plans:
+            prov, _ = dividir_modelo(ref)
+            self._plans[k] = ServicoPlanejamento(self.provedores[prov], ref, effort=eff, cfg=self.cfg_planejador,
+                                                 diretorio_prompts=self.diretorio_prompts)
+        return self._plans[k]
+
+    def servico_revisao_plano(self, valor: str, effort: str | None = None) -> ServicoRevisaoPlano:
+        ref, eff = self.resolver(valor, effort)
+        k = (ref, eff)
+        if k not in self._revs_plano:
+            prov, _ = dividir_modelo(ref)
+            self._revs_plano[k] = ServicoRevisaoPlano(self.provedores[prov], ref, effort=eff,
+                                                      diretorio_prompts=self.diretorio_prompts)
+        return self._revs_plano[k]
+
+    @property
+    def prazos_planejador(self) -> Prazos:
+        return self.prazos.get("planejador", PRAZOS_PLANEJADOR)
+
     # --- construcao ----------------------------------------------------------------------------------
     def braco(self, id: str, proponente: str, revisor: str | None = None, modo: Modo = "imediato", *,
               effort_proponente: str | None = None, effort_revisor: str | None = None,
@@ -192,11 +262,52 @@ class FabricaBracos:
         rev = self.servico_revisao(e.revisor, e.effort_revisor) if e.revisor else None
         return BracoDebate(e.id, serv, rev, e.modo, g, self.prazos[e.modo])
 
-    def extras(self, cfg: Mapping[str, Any]) -> list[BracoLLM]:
-        out: list[BracoLLM] = []
+    def braco_planejador(self, e: ConfigBracoExtra) -> BracoPlanejador:
+        """Braco planejador de ``[[bracos]]`` (``tipo = "planejador"``): P sem revisor, PC com ``revisor``."""
+        if e.modo != "condicional":
+            raise ErroConfigBraco(f"braco {e.id}: o planejador so existe no modo condicional")
+        serv = self.servico_planejamento(e.proponente, e.effort_proponente)
+        rev = self.servico_revisao_plano(e.revisor, e.effort_revisor) if e.revisor else None
+        return BracoPlanejador(e.id, serv, rev, cfg=self.cfg_planejador, prazos=self.prazos_planejador)
+
+    def derivados_planejador(self, referencia: str, *, sombras: bool = True, controle: bool = True, seed: int = 0,
+                             sufixo: str = "") -> list[BracoBase]:
+        """Sombras (``sem_gestao`` e ``trailing_fixo``) e controle do plano de um braco planejador de referencia."""
+        out: list[BracoBase] = []
+        if sombras:
+            out.append(BracoSombra(f"{ID_SOMBRA_SEM_GESTAO}{sufixo}", referencia, "sem_gestao",
+                                   intervalo_ajuste_s=self.cfg_planejador.intervalo_ajuste_s))
+            out.append(BracoSombra(f"{ID_SOMBRA_TRAILING}{sufixo}", referencia, "trailing_fixo",
+                                   intervalo_ajuste_s=self.cfg_planejador.intervalo_ajuste_s))
+        if controle:
+            out.append(BracoAleatorioPlano(f"{ID_CONTROLE_PLANO}{sufixo}", referencia=referencia, seed=seed))
+        return out
+
+    def planejadores_padrao(self, cfg: Mapping[str, Any] | None = None, *, seed: int = 0) -> list[BracoBase]:
+        """Variantes pre-registradas do planejador (docs/16 4.1), so com ``[planejador].ativo``: ``planejador`` (P,
+        papel ``planejador``), ``planejador_revisor`` (PC, + papel ``revisor_plano``), as sombras de P e o
+        ``controle_aleatorio_plano``. Sem o papel ``planejador`` em ``[ia.papeis]``, nada e criado; sem
+        ``revisor_plano``, o PC fica de fora."""
+        cfg_p = self.cfg_planejador if cfg is None else config_planejador(cfg)
+        if not cfg_p.ativo or PAPEL_PLANEJADOR not in self.papeis:
+            return []
+        serv = self.servico_planejamento(PAPEL_PLANEJADOR)
+        pz = self.prazos_planejador
+        out: list[BracoBase] = [BracoPlanejador(ID_PLANEJADOR, serv, None, cfg=cfg_p, prazos=pz)]
+        if PAPEL_REVISOR_PLANO in self.papeis:
+            out.append(BracoPlanejador(ID_PLANEJADOR_REVISOR, serv, self.servico_revisao_plano(PAPEL_REVISOR_PLANO),
+                                       cfg=cfg_p, prazos=pz))
+        return out + self.derivados_planejador(ID_PLANEJADOR, seed=seed)
+
+    def extras(self, cfg: Mapping[str, Any], *, seed: int = 0) -> list[BracoBase]:
+        out: list[BracoBase] = []
         for e in extras_de_config(cfg):
             if e.tipo == "debate":
                 out.append(self.braco_debate(e))
+            elif e.tipo == "planejador":
+                out.append(self.braco_planejador(e))
+                out += self.derivados_planejador(e.id, sombras=e.sombras, controle=e.controle_plano, seed=seed,
+                                                 sufixo=f"_{e.id}")
             else:
                 out.append(self.braco(e.id, e.proponente, e.revisor, e.modo, effort_proponente=e.effort_proponente,
                                       effort_revisor=e.effort_revisor, tempo_max_s=e.tempo_max_s))

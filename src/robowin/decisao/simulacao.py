@@ -9,14 +9,18 @@
   dossie, latencia e falhas injetadas com seed; tudo rotulado ``-FALSO``). ``--provedor real`` usa os SDKs
   oficiais, so se houver chaves de API no ambiente.
 * Saida: banco SQLite (esquema congelado), auditoria com cadeia de hash e resumo rotulado.
+* Braco planejador (docs/16): ``plano_falso``/``revisao_plano_falsa`` (rotulados FALSO) exercitam entrada com faixa,
+  breakeven, ``sem_progresso``, ``reavaliar_se``, ``MANTER`` com ``stop_resultado_pontos=0``, ``ENCERRAR`` no fim do
+  tempo e parcial com q>=2 (perfil com mais de uma unidade). O manifesto ganha os hashes do planejador.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -31,13 +35,19 @@ from robowin.core.protocolos import ModeloPreditivo, SinalStatArb
 from robowin.core.relogio import RelogioSimulado
 from robowin.core.tipos import (
     Acao,
+    AjustePosicao,
     Condicao,
     Instrumento,
     LivroSnapshot,
     ManifestoExperimento,
     PlanoCondicional,
+    PlanoGestaoCompilado,
+    PlanoTradeIA,
     PropostaIA,
+    RegraCompilada,
+    RegraGestao,
     RevisaoIA,
+    RevisaoPlanoIA,
     Tick,
 )
 from robowin.dados.banco import BancoSQLite
@@ -59,10 +69,12 @@ from robowin.risco.politica import ERRO_APROVACAO_PENDENTE, stop_maximo_efetivo_
 from robowin.risco.tempo import dia_sp
 from robowin.statarb.sinais import SinalStatArbPadrao
 
+from . import compilador_plano, gestao
 from .bracos.base import BracoBase, Geometria, Modo
 from .bracos.controles import BracoAleatorio, BracoNaoOperar
 from .bracos.fabrica import FabricaBracos, extras_de_config
 from .bracos.llm import ServicoLLM
+from .bracos.planejador import BracoPlanejador
 from .bracos.quant import BracoQuant
 from .gatilhos import ConfigGatilhos
 from .odds import AvaliadorOdds, config_odds
@@ -142,6 +154,98 @@ def revisao_falsa(mensagem: str, dossie: dict[str, Any]) -> RevisaoIA:
     return RevisaoIA(veredito="APROVAR" if ok else "REJEITAR", justificativa_curta="[FALSO] revisor de demonstracao")
 
 
+def _num(x: Any) -> float | None:
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(float(x)):
+        return None
+    return float(x)
+
+
+def _grade_cima(x: float, tick: float) -> float:
+    return round(math.ceil(x / tick - 1e-9) * tick, 10)
+
+
+def _grade_baixo(x: float, tick: float) -> float:
+    return round(math.floor(x / tick + 1e-9) * tick, 10)
+
+
+def _nao_operar_falso(motivo: str) -> PlanoTradeIA:
+    return PlanoTradeIA(acao=Acao.NAO_OPERAR, incerteza=0.8, justificativa_curta=f"FALSO: sem entrada ({motivo})")
+
+
+def plano_falso(dossie: dict[str, Any]) -> PlanoTradeIA:
+    """Planejador FALSO e deterministico (so encanamento; nao e estrategia), lido do dossie v2.
+
+    * posicao aberta: ``ENCERRAR`` com resultado negativo e menos de 30 s de tempo restante; ``MANTER`` com
+      ``stop_resultado_pontos = 0`` (trava o empate) quando o resultado ja cobre a distancia do stop; senao ``MANTER``
+      sem ajuste;
+    * zerado: segue o movimento de 60 s com spread curto, entrada "agora" com faixa assimetrica, breakeven,
+      ``sem_progresso`` e ``reavaliar_se``; com o envelope permitindo 2 unidades (perfil forex), q=2 e parcial de 1.
+    Tudo dentro do envelope DERIVADO publicado no dossie (o validador e o motor de risco conferem de novo)."""
+    pos = dossie.get("posicao") or {}
+    if int(pos.get("quantidade") or 0) > 0:
+        res = _num(pos.get("resultado_pontos"))
+        stop_res = _num(pos.get("stop_resultado_pontos"))
+        restante = _num(pos.get("tempo_restante_s"))
+        dmin = _num((dossie.get("envelope") or {}).get("dist_min_ajuste_pontos")) or 0.0
+        if res is not None and res < 0 and restante is not None and restante < 30:
+            return PlanoTradeIA(acao=Acao.ENCERRAR, evidencias_a_favor=("posicao.resultado_pontos abaixo de zero",),
+                                justificativa_curta="FALSO: encerra perto do fim do tempo com resultado negativo")
+        if res is not None and stop_res is not None and stop_res < 0 and res >= -stop_res and res >= dmin:
+            return PlanoTradeIA(acao=Acao.MANTER, ajuste=AjustePosicao(stop_resultado_pontos=0.0),
+                                evidencias_a_favor=("posicao.resultado_pontos acima da distancia do stop",),
+                                justificativa_curta="FALSO: trava o empate")
+        return PlanoTradeIA(acao=Acao.MANTER, justificativa_curta="FALSO: mantem o plano")
+    env = dossie.get("envelope") or {}
+    if not env.get("entradas_possiveis"):
+        return _nao_operar_falso("envelope")
+    mov = dossie.get("movimento") or {}
+    ret = _num(mov.get("ret_60s_pts"))
+    spread = _num((dossie.get("microestrutura") or {}).get("spread_ticks"))
+    tick = _num((dossie.get("instrumento") or {}).get("tick_pontos")) or 0.0
+    if ret is None or spread is None or abs(ret) < 10 or spread > 2 or tick <= 0:
+        return _nao_operar_falso("sem_sinal")
+    custos = dossie.get("custos") or {}
+    custo = max(_num(custos.get("ida_volta_pontos_estresse")) or 0.0, _num(custos.get("ida_volta_pontos_base")) or 0.0)
+    stop_min = _num(env.get("stop_min_pontos")) or tick
+    stops = [x for x in (_num(s) for s in env.get("stop_max_pontos_por_q") or []) if x is not None]
+    umax = int(env.get("unidades_max") or 0)
+    tempo_env = int(env.get("tempo_max_s") or 0)
+    q = 2 if umax >= 2 and len(stops) >= 2 else 1
+    if umax < 1 or len(stops) < q or tempo_env < 30:
+        return _nao_operar_falso("envelope")
+    favor = tick
+    stop = min(max(6 * tick, _grade_cima(stop_min, tick) + 2 * tick), _grade_baixo(stops[q - 1] - favor, tick))
+    contra = min(2 * tick, _grade_baixo(stop - stop_min, tick))
+    if stop + 1e-9 < stop_min or contra < 0:
+        return _nao_operar_falso("stop_fora_do_envelope")
+    alvo = max(8 * tick, _grade_cima(custo, tick) + 4 * tick)
+    tempo = min(120, tempo_env)
+    meio_alvo = _grade_cima(alvo / 2, tick)
+    regras = [RegraGestao(tipo="breakeven", mfe_pontos=meio_alvo, folga_ticks=1),
+              RegraGestao(tipo="sem_progresso", apos_s=tempo // 2, mfe_pontos=2 * tick)]
+    if q >= 2:
+        regras.append(RegraGestao(tipo="parcial", mfe_pontos=meio_alvo, quantidade=1))
+    return PlanoTradeIA(
+        acao=Acao.COMPRAR if ret > 0 else Acao.VENDER,
+        hipoteses=("FALSO: continuacao do movimento recente",),
+        evidencias_a_favor=(f"movimento.ret_60s_pts = {ret:.2f}",),
+        evidencias_contra=(f"microestrutura.spread_ticks = {spread:.2f}",),
+        riscos=("reversao",), invalidacoes=("movimento.ret_60s_pts muda de sinal",),
+        justificativa_curta="FALSO: momentum de 60 s (regra de demonstracao)", incerteza=0.55, p_alvo=0.45,
+        quantidade=q, stop_pontos=stop, alvo_pontos=alvo, tempo_max_s=tempo, faixa_contra_pontos=contra,
+        faixa_favor_pontos=favor, expira_s=120, gestao=tuple(regras), reavaliar_em_s=max(tempo // 2, 10),
+        reavaliar_se=("perto_do_stop", "metade_do_tempo", "regra_disparou"))
+
+
+def revisao_plano_falsa(mensagem: str, dossie: dict[str, Any]) -> RevisaoPlanoIA:
+    """Revisor do plano FALSO: aprova planos com spread curto, rejeitando ~25% por um hash da mensagem."""
+    spread = _num((dossie.get("microestrutura") or {}).get("spread_ticks"))
+    h = int(hashlib.sha256(mensagem.encode()).hexdigest()[:4], 16)
+    ok = spread is not None and spread <= 2 and h % 4 != 0
+    return RevisaoPlanoIA(veredito="APROVAR" if ok else "REJEITAR", coerente=True, dados_ok=spread is not None,
+                          regras_ok=ok, justificativa_curta="FALSO: revisor do plano de demonstracao")
+
+
 class ProvedorFalsoSessao(ProvedorFalso):
     """FALSO para a simulacao em tempo simulado: respostas lidas do dossie, latencia e falhas INJETADAS
     (seed), todas rotuladas. ``nome_emulado`` faz o adaptador valer como 'anthropic', 'openai'... no catalogo."""
@@ -163,6 +267,10 @@ class ProvedorFalsoSessao(ProvedorFalso):
             obj: BaseModel = proposta_falsa(_dossie_da_mensagem(mensagem), modo)
         elif schema is RevisaoIA:
             obj = revisao_falsa(mensagem, _dossie_da_mensagem(mensagem))
+        elif schema is PlanoTradeIA:
+            obj = plano_falso(_dossie_da_mensagem(mensagem))
+        elif schema is RevisaoPlanoIA:
+            obj = revisao_plano_falsa(mensagem, _dossie_da_mensagem(mensagem))
         elif schema is ArgumentoDebate:
             obj = argumento_falso(_dossie_da_mensagem(mensagem), mensagem.split("LADO:", 1)[1].split()[0])
         elif schema is ParecerRisco:
@@ -177,7 +285,8 @@ class ProvedorFalsoSessao(ProvedorFalso):
 
     async def gerar_estruturado(self, **kw: Any) -> tuple[BaseModel | None, Any]:
         obj, ch = await super().gerar_estruturado(**kw)
-        mediana = (self.mediana_revisor_s if kw["schema"] in (RevisaoIA, ArgumentoDebate, ParecerRisco, ReflexaoIA)
+        mediana = (self.mediana_revisor_s
+                   if kw["schema"] in (RevisaoIA, RevisaoPlanoIA, ArgumentoDebate, ParecerRisco, ReflexaoIA)
                    else self.mediana_proponente_s)
         lat_s = mediana * float(np.exp(self.sigma * self._rng.gauss(0, 1)))
         u = self._rng.random()
@@ -380,6 +489,35 @@ def rotular_declaracoes(bracos: list[BracoBase], catalogo: Catalogo, hashes: dic
     return contaminados
 
 
+# correcoes que mudam B, C, quant ou controles (docs/16 secao 2, rotulo v1.1 no manifesto)
+CORRECOES_V11 = ("C2", "C4", "C5", "C6", "C16", "C18")
+
+
+def _sha(obj: Any) -> str:
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                                     default=str).encode("utf-8")).hexdigest()
+
+
+def hashes_planejador(fab: FabricaBracos, cfg: Mapping[str, Any]) -> dict[str, str]:
+    """Hashes pre-registrados do braco planejador no manifesto (docs/16 4.3): esquemas, DSL de gestao, compilador,
+    ``[planejador]``, ``[planejador.gatilhos]``, prazos do planejador e o conjunto de correcoes v1.1."""
+    gat = dict(((cfg.get("planejador") or {}).get("gatilhos")) or {})
+    esquemas_gestao = {n: m.model_json_schema() for n, m in (("RegraGestao", RegraGestao),
+                                                             ("RegraCompilada", RegraCompilada),
+                                                             ("PlanoGestaoCompilado", PlanoGestaoCompilado))}
+    return {
+        "esquema:planejador": _sha(PlanoTradeIA.model_json_schema()),
+        "esquema:revisor_plano": _sha(RevisaoPlanoIA.model_json_schema()),
+        "dsl_gestao:v1": _sha({"esquemas": esquemas_gestao, "fonte": _hash_arquivo(Path(gestao.__file__))}),
+        "compilador:v1": _sha({"versao": compilador_plano.VERSAO_COMPILADOR,
+                               "fonte": _hash_arquivo(Path(compilador_plano.__file__))}),
+        "[planejador]": _sha(fab.cfg_planejador.model_dump(mode="json")),
+        "[planejador.gatilhos]": _sha(gat),
+        "prazos:planejador": _sha(asdict(fab.prazos_planejador)),
+        "correcoes:v1.1": ",".join(CORRECOES_V11),
+    }
+
+
 def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str],
                      origem_dados: str = "sinteticos", sigma_brl: float = 35.0, mde_brl: float = 5.0,
                      ativo: str = "") -> ManifestoExperimento:
@@ -409,6 +547,10 @@ def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo
     if any(b.familia == "debate" for b in bracos):
         hipoteses += ("H4 (experimental): o debate (pesquisadores + risco + sintese) difere do proponente unico "
                       "no modo condicional, com Holm e custo/latencia",)
+    if any(b.familia == "planejador" for b in bracos):  # docs/16 4.2 (Holm m=3, unilaterais, por pregao)
+        hipoteses += ("P1: planejador - C condicional > 0 (liquido por pregao descontado o custo de API)",
+                      "P2: planejador - controle_aleatorio_plano > 0 (direcao e momento alem do plano)",
+                      "P3: planejador - sombra_sem_gestao > 0 (a gestao agrega valor)")
     return ManifestoExperimento(
         id=sessao_id,
         hipoteses=hipoteses,
@@ -459,10 +601,14 @@ def construir_orquestrador(
     statarb: SinalStatArb | None, precos_aux: Any, sintetico: bool, modo_tempo: str, sessao_id: str,
     t_ref_ns: int, cfg: dict[str, Any] | None = None, catalogo: Catalogo | None = None,
     piscina_odds: PiscinaSessoes | None = None, ids_bracos: Collection[str] | None = None,
+    espelhar: str | None = None,
 ) -> Montagem:
-    """Bracos (A, B, C, controles e extras de ``[[bracos]]``), provedores com orcamento e orquestrador.
+    """Bracos (A, B, C, planejador, sombras, controles e extras de ``[[bracos]]``), provedores com orcamento e
+    orquestrador.
 
-    ``ids_bracos`` (opcional): so esses bracos, MAIS os controles (aleatorio e nao operar), que ficam sempre."""
+    ``ids_bracos`` (opcional): so esses bracos, MAIS os controles (aleatorio e nao operar), que ficam sempre, e as
+    sombras dos bracos pedidos. ``espelhar`` (ou ``[geral].espelhar``): o braco espelhado na DEMO precisa ser
+    espelhavel (``espelho.validar_braco_espelhavel``: nunca sombra, controle ou braco passivo)."""
     if cfg is None or catalogo is None:
         cfg, catalogo = carregar_ambiente(p)
     papeis = carregar_papeis(cfg) if cfg.get("ia", {}).get("papeis") else {}
@@ -490,7 +636,9 @@ def construir_orquestrador(
         bracos.append(BracoQuant(f"quant{suf}", modo, modelo=modelo.nome, theta_brl=p.theta_brl, geometria=g))
     if papeis:
         bracos += fab.padrao(modos)
-    bracos += fab.extras(cfg)
+        if "condicional" in modos:  # o planejador so existe no modo condicional
+            bracos += fab.planejadores_padrao(seed=p.seed)
+    bracos += fab.extras(cfg, seed=p.seed)
     bracos.append(BracoNaoOperar())
     for modo in modos:
         suf = "" if modo == "imediato" else "_cond"
@@ -500,8 +648,18 @@ def construir_orquestrador(
         desconhecidos = pedidos - {b.id for b in bracos}
         if desconhecidos:
             raise ErroConfig(f"braco(s) inexistente(s): {sorted(desconhecidos)}; disponiveis: {[b.id for b in bracos]}")
-        bracos = [b for b in bracos if b.id in pedidos or b.familia == "controle" or isinstance(b, BracoNaoOperar)]
+        bracos = [b for b in bracos if b.id in pedidos or b.familia == "controle" or isinstance(b, BracoNaoOperar)
+                  or getattr(b, "referencia", None) in pedidos]
+    alvo_espelho = (espelhar if espelhar is not None else str((cfg.get("geral") or {}).get("espelhar", "") or "")).strip()
+    if alvo_espelho:
+        from .espelho import validar_braco_espelhavel
+        espelhado = next((b for b in bracos if b.id == alvo_espelho), None)
+        validar_braco_espelhavel(espelhado if espelhado is not None else alvo_espelho)  # ErroConfig se nao espelhavel
+        if isinstance(espelhado, BracoPlanejador):
+            espelhado.espelhado = True  # passo minimo de ajuste maior na DEMO
     hashes = {**{f"prompt:{k}": v for k, v in hashes_prompts().items()}, "perfil": perfil.hash()}
+    if any(isinstance(b, BracoPlanejador) for b in bracos):
+        hashes.update(hashes_planejador(fab, cfg))
     contaminados = rotular_declaracoes(bracos, catalogo, hashes)
     memoria_reflexiva, servico_reflexao = montar_reflexao(cfg, fab, provedores, ativo=bool(papeis))
     if memoria_reflexiva is not None and servico_reflexao is not None:
