@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 from scipy import stats
@@ -62,6 +63,98 @@ def diferencas_pareadas(a: Mapping[str, float], b: Mapping[str, float], n_boot: 
            "p_valor_bilateral": p2, "p_valor_unilateral": p1, "ic_bootstrap": est.ic_percentil(reps, conf)}
     if ins:
         res["status"] = STATUS_AMOSTRA_INSUFICIENTE
+        res["aviso"] = ins["mensagem"]
+    return res
+
+
+SEPARADORES_SOMBRA = (":", "-", "_", "|", "/", "@")
+
+
+def _valor(item: Any, campo: str) -> Any:
+    if isinstance(item, Mapping):
+        return item.get(campo)
+    return getattr(item, campo, None)
+
+
+def _extrator(campo: str) -> Callable[[Any], Any]:
+    return lambda item: _valor(item, campo)
+
+
+def _liquido(item: Any, campo: str | None) -> float | None:
+    for c in ((campo,) if campo else ("liquido_total", "liquido_brl", "liquido")):
+        v = _valor(item, c)
+        if v is not None:
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                return None
+            return x if math.isfinite(x) else None
+    return None
+
+
+def diferencas_por_entrada(ref: Iterable[Any], sombra: Iterable[Any], chave: str | Callable[[Any], Any] = "intencao_id",
+                           *, campo: str | None = None, n_boot: int = 2000, conf: float = 0.95, seed: int = 0,
+                           n_preregistrado: int | None = None) -> dict:
+    """Diferenca ``ref - sombra`` pareada POR ENTRADA (H3: a gestao agrega valor), so com pares completos.
+
+    ``ref``/``sombra``: episodios (linhas de ``posicoes_episodio``, dicts ou objetos) com a chave da entrada
+    (padrao ``intencao_id``) e o liquido (``campo``; padrao ``liquido_total``/``liquido_brl``/``liquido``). Uma chave
+    da sombra que nao exista em ``ref`` casa com a chave de ``ref`` que for seu prefixo seguido de um separador
+    (a sombra deriva o id da intencao de referencia). Entradas sem par ficam fora do teste e sao CONTADAS
+    (``taxa_incompletos``): pares incompletos nunca viram zero."""
+    pega = chave if callable(chave) else _extrator(chave)
+    a: dict[str, float] = {}
+    for it in ref:
+        k, v = pega(it), _liquido(it, campo)
+        if k is not None and v is not None:
+            a[str(k)] = a.get(str(k), 0.0) + v
+    ordenadas = sorted(a, key=len, reverse=True)
+    b: dict[str, float] = {}
+    for it in sombra:
+        k, v = pega(it), _liquido(it, campo)
+        if k is None or v is None:
+            continue
+        ks = str(k)
+        if ks not in a:
+            ks = next((r for r in ordenadas if ks.startswith(r) and ks[len(r):len(r) + 1] in SEPARADORES_SOMBRA), ks)
+        b[ks] = b.get(ks, 0.0) + v
+    comuns = set(a) & set(b)
+    total = len(set(a) | set(b))
+    res = diferencas_pareadas(a, b, n_boot=n_boot, conf=conf, seed=seed, n_preregistrado=n_preregistrado)
+    res.update({"n_ref": len(a), "n_sombra": len(b), "incompletos_ref": len(set(a) - comuns),
+                "incompletos_sombra": len(set(b) - comuns),
+                "taxa_incompletos": (total - len(comuns)) / total if total else math.nan,
+                "pares": {k: a[k] - b[k] for k in sorted(comuns)}})
+    return res
+
+
+def nao_inferioridade(dif: Mapping[str, float] | Sequence[float], margem: float, alfa: float = 0.05,
+                      n_preregistrado: int | None = None) -> dict:
+    """Teste de NAO INFERIORIDADE sobre diferencas pareadas ``d = tratamento - referencia`` (maior = melhor).
+
+    H0: media(d) <= -margem contra H1: media(d) > -margem (t unilateral). ``nao_inferior`` exige o limite inferior
+    unilateral (1 - alfa) acima de ``-margem``. Para metricas em que MENOR e melhor (pior dia em perda, drawdown,
+    perda media), passe ``referencia - tratamento``. A margem vem do ``PreRegistro`` (nunca escolhida depois)."""
+    if not (math.isfinite(margem) and margem >= 0):
+        raise ValueError("margem de nao inferioridade deve ser finita e >= 0")
+    xs = list(dif.values()) if isinstance(dif, Mapping) else list(dif)
+    d = np.array([float(x) for x in xs if x is not None and math.isfinite(float(x))], dtype=float)
+    n = int(d.size)
+    ins = _insuficiente(n, n_preregistrado)
+    if n < 2:
+        return ins or {"status": STATUS_AMOSTRA_INSUFICIENTE, "n": n, "margem": margem, "nao_inferior": False}
+    media, sd = float(d.mean()), float(d.std(ddof=1))
+    if sd == 0:
+        lim_inf = media
+        p = 0.0 if media > -margem else 1.0
+    else:
+        se = sd / math.sqrt(n)
+        lim_inf = media - float(stats.t.ppf(1 - alfa, n - 1)) * se
+        p = float(stats.t.sf((media + margem) / se, n - 1))
+    res = {"status": STATUS_AMOSTRA_INSUFICIENTE if ins else "ok", "n": n, "margem": margem, "alfa": alfa,
+           "media_dif": media, "desvio_dif": sd, "limite_inferior": lim_inf, "p_valor": p,
+           "nao_inferior": bool(lim_inf > -margem) and not ins}
+    if ins:
         res["aviso"] = ins["mensagem"]
     return res
 
