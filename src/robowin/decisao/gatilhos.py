@@ -5,6 +5,12 @@ de posicao (abertura/fechamento). A CADENCIA sai do uso medido de tokens (custo 
 movel) e do orcamento de IA: o teto diario de chamadas e ``floor(verba restante do dia / custo medio)`` e o
 periodo efetivo espalha as chamadas restantes pelo que falta do pregao. O INTERVALO MINIMO entre chamadas e
 fixo. Nada aqui depende de IA: e codigo deterministico, testavel com relogio simulado.
+
+Braco planejador (docs/16): eventos de gestao da posicao (``gestao:<evento>``, pedidos pela IA em ``reavaliar_se``
+e emitidos uma vez por posicao por decisao/gestao.py), ``reavaliacao_programada`` (``reavaliar_em_s``) e
+``plano_terminou``. Os eventos de posicao que chamam a IA sao filtrados por ``eventos_posicao_permitidos`` e,
+sem posicao, so se gasta ``(1 - reserva_gestao_frac)`` das chamadas restantes (o resto fica para gerir a posicao).
+O intervalo minimo e o teto diario valem para TODOS os disparos, inclusive a reavaliacao pedida pela IA.
 """
 from __future__ import annotations
 
@@ -30,6 +36,10 @@ class ConfigGatilhos(Base):
     max_chamadas_dia: int | None = 400  # teto fixo opcional (alem do derivado do orcamento)
     custo_medio_inicial_usd: float = 0.02
     suavizacao_custo: float = 0.2  # peso da observacao nova na media movel do custo por ciclo
+    # adicoes opcionais (braco planejador): os padroes reproduzem o comportamento atual
+    eventos_posicao_permitidos: tuple[str, ...] = ("abriu", "fechou")
+    reserva_gestao_frac: float = 0.0  # fracao das chamadas restantes reservada a quem tem posicao
+    perto_frac: float = 0.3  # "perto do stop/alvo" (repassado a decisao/gestao.py)
 
 
 @dataclass(frozen=True)
@@ -40,11 +50,18 @@ class EstadoGatilho:
     noticias_novas: Sequence[float] = ()  # relevancia das noticias que ficaram disponiveis desde a ultima avaliacao
     eventos_posicao: Sequence[str] = ()
     segundos_restantes: float = 3600.0  # ate o fim da janela de entradas
+    # adicoes opcionais (braco planejador)
+    eventos_gestao: Sequence[str] = ()  # eventos emitidos por decisao/gestao.py (perto_do_stop, ...)
+    reavaliacao_ns: int | None = None  # instante pedido pela IA (reavaliar_em_s) para ser chamada de novo
+    com_posicao: bool = False  # algum braco do grupo esta posicionado (pode usar a reserva de gestao)
+    plano_terminou: bool = False  # o plano condicional armado expirou/foi invalidado/cancelado
 
 
 @dataclass(frozen=True)
 class Disparo:
-    nome: str  # periodico | limiar_modelo | zscore_statarb | noticia_relevante | evento_posicao
+    # periodico | limiar_modelo | zscore_statarb | noticia_relevante | evento_posicao | gestao:<evento> |
+    # reavaliacao_programada | plano_terminou
+    nome: str
     detalhe: str = ""
 
 
@@ -89,9 +106,18 @@ class GerenciadorGatilhos:
         r = self.chamadas_restantes(t_ns)
         return self.chamadas_dia + (r if r < 10**9 else 10**9)
 
-    def intervalo_periodico_s(self, t_ns: int, segundos_restantes: float) -> float:
+    def chamadas_utilizaveis(self, t_ns: int, com_posicao: bool = True) -> int:
+        """Chamadas que este disparo pode gastar: com posicao, todas as restantes; sem posicao, so
+        ``floor((1 - reserva_gestao_frac) x restantes)`` (a reserva fica para gerir a posicao)."""
+        r = self.chamadas_restantes(t_ns)
+        frac = min(max(self.cfg.reserva_gestao_frac, 0.0), 1.0)
+        if com_posicao or frac <= 0.0 or r >= 10**9:
+            return r
+        return int(math.floor((1.0 - frac) * r + 1e-9))
+
+    def intervalo_periodico_s(self, t_ns: int, segundos_restantes: float, com_posicao: bool = True) -> float:
         """Periodo efetivo: nunca menor que o base nem que o minimo; espalha as chamadas que a verba paga."""
-        restantes = self.chamadas_restantes(t_ns)
+        restantes = self.chamadas_utilizaveis(t_ns, com_posicao)
         if restantes <= 0:
             return math.inf
         espalhado = segundos_restantes / restantes if segundos_restantes > 0 else 0.0
@@ -101,15 +127,22 @@ class GerenciadorGatilhos:
     def avaliar(self, est: EstadoGatilho) -> tuple[Disparo, ...]:
         """Disparos neste instante (vazio = nao chamar). NAO consome a chamada: use ``marcar_chamada``."""
         t = est.t_ns
-        if self.chamadas_restantes(t) <= 0:
+        if self.chamadas_utilizaveis(t, est.com_posicao) <= 0:
             self.bloqueios_orcamento += 1
             return ()
         if self.ultimo_ns is not None and t - self.ultimo_ns < self.cfg.intervalo_min_s * NS:
             return ()
         out: list[Disparo] = []
         c = self.cfg
-        if c.evento_posicao and est.eventos_posicao:
-            out.append(Disparo("evento_posicao", ",".join(est.eventos_posicao)))
+        ev_pos = tuple(e for e in est.eventos_posicao if e in c.eventos_posicao_permitidos)
+        if c.evento_posicao and ev_pos:
+            out.append(Disparo("evento_posicao", ",".join(ev_pos)))
+        for e in dict.fromkeys(est.eventos_gestao):  # sem repetir, na ordem de chegada
+            out.append(Disparo(f"gestao:{e}"))
+        if est.reavaliacao_ns is not None and t >= est.reavaliacao_ns:
+            out.append(Disparo("reavaliacao_programada", f"pedida_para={est.reavaliacao_ns}"))
+        if est.plano_terminou:
+            out.append(Disparo("plano_terminou"))
         if est.noticias_novas and max(est.noticias_novas) >= c.noticia_relevancia_min:
             out.append(Disparo("noticia_relevante", f"relevancia={max(est.noticias_novas):.2f}"))
         e = max(est.modelo_saida.get("e_brl_compra", -math.inf), est.modelo_saida.get("e_brl_venda", -math.inf))
@@ -117,7 +150,7 @@ class GerenciadorGatilhos:
             out.append(Disparo("limiar_modelo", f"e_brl={e:.2f}"))
         if abs(est.z_statarb) >= c.z_statarb_min and self._rearmado("zscore_statarb", t):
             out.append(Disparo("zscore_statarb", f"z={est.z_statarb:.2f}"))
-        per = self.intervalo_periodico_s(t, est.segundos_restantes)
+        per = self.intervalo_periodico_s(t, est.segundos_restantes, est.com_posicao)
         if not out and (self.ultimo_ns is None or t - self.ultimo_ns >= per * NS):
             out.append(Disparo("periodico", f"intervalo={per:.0f}s"))
         for d in out:

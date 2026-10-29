@@ -1,6 +1,7 @@
 """Plano condicional (plano 5.2): UM plano armado por braco.
 
-Ciclo de vida: armar -> (disparado | expirado | invalidado | cancelado). Cancelam o plano: mudanca de
+Ciclo de vida: armar -> (disparado | expirado | invalidado | cancelado). Se uma invalidacao ja estiver ativa no
+instante de armar (``estado_atual``), o plano NAO e armado e o evento e ``invalidado_ao_armar``. Cancelam o plano: mudanca de
 posicao, kill switch e janela de evento (calendario). No disparo o RISCO E REFEITO com o preco real de
 execucao e o stop e recalculado a partir dele (o plano guarda apenas DISTANCIAS em pontos). A idade do
 plano no disparo e registrada.
@@ -25,7 +26,8 @@ from .dsl_plano import (
 )
 
 NS = 1_000_000_000
-TipoEventoPlano = Literal["armado", "substituido", "disparado", "cancelado", "expirado", "invalidado"]
+TipoEventoPlano = Literal["armado", "substituido", "disparado", "cancelado", "expirado", "invalidado",
+                          "invalidado_ao_armar"]
 
 
 def converter_plano(plano_relativo: PlanoCondicional, t0_ns: int) -> PlanoCondicional:
@@ -95,20 +97,28 @@ class GerenciadorPlano:
     # ------------------------------------------------------------------------------------------
     def armar(self, base: Intencao, plano_abs: PlanoCondicional, *, ref: float, t0_ns: int, t_ns: int,
               assinatura: AssinaturaPosicao, decisao_id: str = "", hash_dossie: str = "",
-              ) -> list[EventoPlano]:
-        """Arma o plano (substituindo o anterior, se houver). Recusa plano fora da DSL/expirado."""
+              estado_atual: EstadoPlano | None = None) -> list[EventoPlano]:
+        """Arma o plano (substituindo o anterior, se houver). Recusa plano fora da DSL/expirado.
+
+        Com ``estado_atual`` (mercado no instante de armar), uma invalidacao JA ativa impede o armamento: devolve so o
+        evento ``invalidado_ao_armar`` e o plano anterior (se houver) continua armado, intocado."""
         erros = validar_dsl_absoluto(plano_abs, t0_ns)
         if plano_abs.expira_ns <= t_ns:
             erros.append("plano ja expirado ao armar")
         if erros:
             raise ValueError("plano invalido: " + "; ".join(erros))
-        out: list[EventoPlano] = []
-        if self.armado is not None:
-            out.append(self._registrar("substituido", self.armado, t_ns, "novo_plano"))
         novo = PlanoArmado(
             braco=self.braco, plano=plano_abs, base=base, ref=ref, t0_ns=t0_ns, t_armado_ns=t_ns,
             assinatura=assinatura, proposta_id=base.proposta_id, revisao_id=base.revisao_id,
             decisao_id=decisao_id, hash_dossie=hash_dossie)
+        if estado_atual is not None:
+            inv = invalidacao_ativa(plano_abs, ref=ref, est=estado_atual, t_armado_ns=t_ns,
+                                    tick_pontos=self.tick_pontos)
+            if inv is not None:
+                return [self._registrar("invalidado_ao_armar", novo, t_ns, descrever(inv))]
+        out: list[EventoPlano] = []
+        if self.armado is not None:
+            out.append(self._registrar("substituido", self.armado, t_ns, "novo_plano"))
         self.armado = novo
         out.append(self._registrar("armado", novo, t_ns))
         return out
