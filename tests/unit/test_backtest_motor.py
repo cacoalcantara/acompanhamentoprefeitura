@@ -327,3 +327,72 @@ def test_cli_backtest_sinteticos_escreve_relatorios_e_recusa_selo(tmp_path, caps
     main(["backtest", "--dados", "sinteticos", "--saida", str(tmp_path / "s2"), "--n-ticks", "3000",
           "--intervalo-s", "30", "--p-entrada", "0.2", "--n-boot", "100"])
     assert json.loads((tmp_path / "s2" / "resultado.json").read_text())["hash_resultado"] == h1
+
+
+# ============================================================================================== docs/16 (WP8)
+class _BracoPlanejadorFalso:
+    """So o necessario para a recusa: o backtest nao roda a familia planejador."""
+    id, familia = "planejador", "planejador"
+
+    def decidir(self, t_ns, dossie):
+        return None
+
+
+def test_backtest_recusa_braco_planejador_com_erro_de_config():
+    from robowin.core.config import ErroConfig
+    ticks = serie(lambda t: 130000.0, ate=(9, 5))
+    with pytest.raises(ErroConfig, match="Orquestrador/historico"):
+        MotorBacktest(FonteMemoria(ticks), [NaoOperar(), _BracoPlanejadorFalso()], cfg())
+
+    class PorTipo(_BracoPlanejadorFalso):
+        id, familia, tipo = "p2", "base", "planejador"
+    with pytest.raises(ErroConfig):
+        MotorBacktest(FonteMemoria(ticks), [PorTipo()], cfg())
+    MotorBacktest(FonteMemoria(ticks), [NaoOperar()], cfg())  # os demais bracos seguem aceitos
+
+
+def _chaves_do_ao_vivo() -> tuple[set[str] | None, set[str]]:
+    """(chaves de `limites`, ou None se o ao vivo ja usa limites_legado; chaves de `posicao`) do Orquestrador._dossie."""
+    src = (RAIZ.parent / "decisao" / "orquestrador.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "_dossie")
+    usa_legado = any(isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", "")) == "limites_legado"
+                     for n in ast.walk(fn))
+    dicts = [{k.value for k in n.keys if isinstance(k, ast.Constant)} for n in ast.walk(fn) if isinstance(n, ast.Dict)]
+    lim = None if usa_legado else next(d for d in dicts if "perda_restante_dia_brl" in d)
+    pos = next(d for d in dicts if "lado" in d and "preco_medio" in d)
+    return lim, pos
+
+
+def test_dossie_v1_do_backtest_tem_as_mesmas_chaves_do_ao_vivo(monkeypatch):
+    from robowin.backtest import motor as mod
+    from robowin.core.tipos import ConfigRisco, EnvelopeDecisao
+    from robowin.decisao.dossie_conta import limites_legado
+    vistos: list[dict] = []
+    original = mod.montar_dossie
+
+    def espiao(**kw):
+        vistos.append(kw)
+        return original(**kw)
+    monkeypatch.setattr(mod, "montar_dossie", espiao)
+    ticks = serie(lambda t: 130000.0, de=(9, 55), ate=(10, 3))
+    rodar(ticks, [(ns(10, 0), Acao.COMPRAR, {**COMPRA, "tempo_max_s": 120})])
+    assert vistos
+    lim_vivo, pos_vivo = _chaves_do_ao_vivo()
+
+    class Est:
+        pnl_dia_total, operacoes_dia = 0.0, 0
+    env = EnvelopeDecisao(unidades_max=1, stop_max_pontos_por_q=(250.0,), stop_min_pontos=10.0,
+                          dist_min_ajuste_pontos=10.0, tempo_max_s=300, entradas_possiveis=True)
+    chaves_legado = set(limites_legado(env, Est(), ConfigRisco()))
+    for kw in vistos:
+        assert set(kw["limites"]) == chaves_legado
+        if lim_vivo is not None:
+            assert set(kw["limites"]) == lim_vivo
+    com_pos = [kw["posicao"] for kw in vistos if kw["posicao"] is not None]
+    assert com_pos, "o roteiro precisa abrir posicao para comparar a secao posicao"
+    assert all(set(p) == pos_vivo for p in com_pos)
+    assert all(p["stop_pontos"] is not None for p in com_pos)  # stop ATUAL da posicao (simulador)
+    # stop maximo e o EFETIVO do envelope do motor (q=1), nunca acima do campo bruto do ConfigRisco (C2)
+    assert all(0 < kw["limites"]["stop_max_pontos"] <= ConfigRisco().stop_max_pontos for kw in vistos)
+    # minutos desde a abertura contam do `de` efetivo da janela (C18), nunca negativos
+    assert all(kw["minutos_desde_abertura"] >= 0 and kw["minutos_para_zeragem"] >= 0 for kw in vistos)
