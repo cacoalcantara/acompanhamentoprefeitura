@@ -648,8 +648,10 @@ def construir_orquestrador(
         desconhecidos = pedidos - {b.id for b in bracos}
         if desconhecidos:
             raise ErroConfig(f"braco(s) inexistente(s): {sorted(desconhecidos)}; disponiveis: {[b.id for b in bracos]}")
-        bracos = [b for b in bracos if b.id in pedidos or b.familia == "controle" or isinstance(b, BracoNaoOperar)
-                  or getattr(b, "referencia", None) in pedidos]
+        # sombras e controle do plano so acompanham o braco de referencia; os demais controles ficam sempre
+        bracos = [b for b in bracos if b.id in pedidos or (
+            getattr(b, "referencia", None) in pedidos if hasattr(b, "referencia")
+            else b.familia == "controle" or isinstance(b, BracoNaoOperar))]
     alvo_espelho = (espelhar if espelhar is not None else str((cfg.get("geral") or {}).get("espelhar", "") or "")).strip()
     if alvo_espelho:
         from .espelho import validar_braco_espelhavel
