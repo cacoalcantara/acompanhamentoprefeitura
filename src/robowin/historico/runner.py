@@ -357,24 +357,35 @@ def _ler_tabela(banco: Any, tabela: str) -> list[dict[str, Any]]:
 
 def _geometrias_e_tentativas(banco: Any) -> tuple[dict[str, list[tuple[float, float]]], dict[str, int]]:
     """(stop, alvo) das entradas EXECUTADAS por braco (base do aviso de acerto por braco, C1) e tentativas de entrada
-    (toda decisao COMPRAR/VENDER registrada, inclusive vetada/bloqueada; C19)."""
+    (toda ENTRADA proposta, inclusive vetada/bloqueada, contada uma vez por intencao; C19)."""
     geo: dict[str, list[tuple[float, float]]] = {}
-    tent: Counter[str] = Counter()
-    for r in banco.consultar("SELECT braco, acao, resultado, intencao_json FROM decisoes ORDER BY t_ns, id"):
+    vistas: dict[str, set[str]] = {}
+    for r in banco.consultar("SELECT id, braco, acao, resultado, intencao_json FROM decisoes ORDER BY t_ns, id"):
         if r["acao"] not in ENTRADAS:
             continue
         b = str(r["braco"])
-        tent[b] += 1
-        if r["resultado"] != "executada" or not r["intencao_json"]:
-            continue
-        try:
-            it = json.loads(r["intencao_json"])
-        except (TypeError, ValueError):
+        it: dict[str, Any] = {}
+        if r["intencao_json"]:
+            try:
+                it = json.loads(r["intencao_json"]) or {}
+            except (TypeError, ValueError):
+                it = {}
+        # UMA tentativa por intencao: num braco condicional o plano armado e o disparo (``<base>:disp``) sao
+        # duas linhas da MESMA entrada; contar as duas dobraria as tentativas contra o imediato (C19)
+        vistas.setdefault(b, set()).add(_intencao_base(str(it.get("id") or "")) or f"dec:{r['id']}")
+        if r["resultado"] != "executada" or not it:
             continue
         s, a = it.get("stop_pontos"), it.get("alvo_pontos")
         if isinstance(s, (int, float)) and isinstance(a, (int, float)) and s > 0 and a > 0:
             geo.setdefault(b, []).append((float(s), float(a)))
-    return geo, dict(tent)
+    return geo, {b: len(ids) for b, ids in vistas.items()}
+
+
+SUFIXO_DISPARO = ":disp"  # id da intencao de disparo de um plano condicional (orquestrador._disparar_plano)
+
+
+def _intencao_base(iid: str) -> str:
+    return iid[: -len(SUFIXO_DISPARO)] if iid.endswith(SUFIXO_DISPARO) else iid
 
 
 def resumo_posicoes(episodios: list[dict[str, Any]], eventos: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

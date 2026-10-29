@@ -307,3 +307,18 @@ def test_consolidar_passa_o_n_pregoes_alvo_do_preregistro(tmp_path, monkeypatch)
     res = _resultado_vazio(ParamsHistorico(armazem=tmp_path, saida=tmp_path / "s"))
     hrel.consolidar(res, PERFIL, preregistro=pr)
     assert visto["n_alvo"] == 33
+
+
+def test_tentativas_do_braco_condicional_contam_uma_vez_por_intencao():
+    """C19: plano armado + disparo (``<base>:disp``) sao a MESMA entrada: uma tentativa, como no imediato."""
+    from robowin.historico.runner import _geometrias_e_tentativas
+    it = lambda i, s=30, a=40: json.dumps({"id": i, "stop_pontos": s, "alvo_pontos": a})  # noqa: E731
+    linhas = []
+    for k in range(5):
+        linhas.append((f"p{k}a", 10 * k, "planejador", "COMPRAR", "plano_armado", it(f"int-{k}")))
+        linhas.append((f"p{k}b", 10 * k + 1, "planejador", "COMPRAR", "executada" if k % 2 else "vetada",
+                       it(f"int-{k}:disp")))
+        linhas.append((f"b{k}", 10 * k, "claude", "COMPRAR", "executada", it(f"b-{k}")))
+    geo, tent = _geometrias_e_tentativas(_BancoFalso(linhas))
+    assert tent == {"planejador": 5, "claude": 5}
+    assert len(geo["planejador"]) == 2 and len(geo["claude"]) == 5
