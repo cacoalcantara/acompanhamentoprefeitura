@@ -177,3 +177,90 @@ def registrar(sub):
     p.set_defaults(func=_avaliar)
     from .cli_maquina import registrar_comando
     registrar_comando(sub)
+    _registrar_experimento(sub)
+
+
+# ===================================================================== robowin experimento registrar|verificar
+COMPARACOES_PADRAO = ("planejador-claude_gpt_cond", "planejador-controle_aleatorio_plano",
+                      "planejador-sombra_sem_gestao")  # H1, H2, H3 (docs/16 secao 4.2)
+REGRAS_PARADA_PADRAO = ("sprt_media_normal:dano", "sprt_media_normal:futilidade")
+N_PREGOES_PADRAO = 60  # substituir pelo n do piloto (n_expectativa) antes de registrar de verdade
+
+
+def _pares(itens: list[str] | None, opcao: str, conv=str) -> dict:
+    out = {}
+    for s in itens or []:
+        if "=" not in s:
+            raise ValueError(f"{opcao} espera nome=valor, recebi {s!r}")
+        k, v = s.split("=", 1)
+        out[k.strip()] = conv(v.strip())
+    return out
+
+
+def _experimento_registrar(a) -> int:
+    import datetime as dt
+    import time
+
+    from robowin.core.tipos import PreRegistro
+    from robowin.risco.tempo import dia_sp
+
+    from . import preregistro as prr
+    try:
+        comp = prr.hashes_componentes(Path(a.raiz_config))
+        variantes = {} if a.sem_padrao else prr.variantes_padrao(comp)
+        variantes.update(_pares(a.variante, "--variante"))
+        margens = _pares(a.margem, "--margem", float)
+        t = time.time_ns()
+        inicio = a.inicio_avaliacao or (dia_sp(t) + dt.timedelta(days=1)).isoformat()
+        pr = PreRegistro(id_experimento=a.id, t_registro_ns=t, inicio_avaliacao=inicio, variantes=variantes,
+                         comparacoes_primarias=tuple(a.comparacao or COMPARACOES_PADRAO),
+                         margens_nao_inferioridade=margens, alfa=a.alfa, n_pregoes_alvo=a.n_pregoes,
+                         regras_parada=tuple(a.regra_parada or REGRAS_PARADA_PADRAO))
+        final = prr.registrar(pr, Path(a.dir))
+    except (ValueError, OSError) as e:
+        print(f"ERRO: {e}")
+        return 1
+    print(f"experimento {final.id_experimento} registrado em {Path(a.dir)} (hash {final.hash_registro[:16]}..., "
+          f"anterior {final.hash_anterior[:16]}...)")
+    for k, v in sorted(comp.items()):
+        print(f"  componente {k}: {v[:16]}")
+    for k, v in sorted(final.variantes.items()):
+        print(f"  variante {k}: {v[:16]}")
+    print(f"  tentativas registradas na cadeia: {prr.n_tentativas(Path(a.dir))}")
+    return 0
+
+
+def _experimento_verificar(a) -> int:
+    from . import preregistro as prr
+    try:
+        regs = prr.verificar(Path(a.dir))
+    except prr.ErroPreRegistro as e:
+        print(f"ERRO: cadeia de pre-registro QUEBRADA: {e}")
+        return 1
+    for r in regs:
+        print(f"{r.id_experimento}: inicio {r.inicio_avaliacao}, {len(r.variantes)} variante(s), "
+              f"hash {r.hash_registro[:16]}")
+    print(f"{len(regs)} registro(s) integro(s); tentativas = {prr.n_tentativas(Path(a.dir))}")
+    return 0
+
+
+def _registrar_experimento(sub) -> None:
+    p = sub.add_parser("experimento", help="pre-registro do experimento (cadeia de hash em config/experimentos)")
+    s = p.add_subparsers(dest="acao_experimento")
+    r = s.add_parser("registrar", help="registra o experimento ANTES da coleta (so acrescenta na cadeia)")
+    r.add_argument("--id", required=True, help="id do experimento (ex.: exp-planejador-AAAAMMDD)")
+    r.add_argument("--dir", default="config/experimentos")
+    r.add_argument("--raiz-config", default="config", help="diretorio de prompts e robowin.toml (hashes)")
+    r.add_argument("--inicio-avaliacao", default=None, help="AAAA-MM-DD (padrao: o dia seguinte ao registro)")
+    r.add_argument("--variante", action="append", help="nome=hash (repetivel); soma-se as variantes padrao")
+    r.add_argument("--sem-padrao", action="store_true", help="nao inclui as variantes padrao do planejador")
+    r.add_argument("--comparacao", action="append", help="comparacao primaria (repetivel; padrao H1..H3)")
+    r.add_argument("--margem", action="append", help="metrica=margem de nao inferioridade (repetivel)")
+    r.add_argument("--alfa", type=float, default=0.05)
+    r.add_argument("--n-pregoes", type=int, default=N_PREGOES_PADRAO, help="n de pregoes alvo (do piloto)")
+    r.add_argument("--regra-parada", action="append", help="regra de parada (repetivel)")
+    r.set_defaults(func=_experimento_registrar)
+    v = s.add_parser("verificar", help="recalcula a cadeia; codigo != 0 se adulterada")
+    v.add_argument("--dir", default="config/experimentos")
+    v.set_defaults(func=_experimento_verificar)
+    p.set_defaults(func=lambda a: (p.print_help(), 2)[1])

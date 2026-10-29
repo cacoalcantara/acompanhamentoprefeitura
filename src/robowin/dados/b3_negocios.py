@@ -23,6 +23,10 @@ Formato (um ZIP por contrato e pregao, com um ``DD-MM-AAAA_NEGOCIOSAVISTA_<TICKE
   preco (um agressor costuma bater em varias ordens de uma vez); a contagem original fica nos metadados.
 * Leitura em blocos (``pandas.read_csv(chunksize=...)``) direto do ZIP: os ~470 MB de texto nunca ficam inteiros
   na memoria; so os vetores numericos compactos (dezenas de bytes por negocio).
+* Proveniencia (docs/16 C24): ``baixar_pregao`` grava ao lado do ZIP ``<zip>.proveniencia.json`` com a URL e o
+  sha256 do que baixou. Na importacao, a origem so e ``real_b3_negocios`` se esse registro existir, a URL for de um
+  host da B3 (https) e o sha256 bater com o arquivo; sem isso a origem e ``desconhecida`` (um ZIP montado a mao, ou
+  sintetico, no formato certo nao vira "dado real da B3"). ``registrar_proveniencia`` registra um download manual.
 """
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ import datetime as dt
 import hashlib
 import http.client
 import io
+import json
 import re
 import time
 import urllib.error
@@ -40,6 +45,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
+from urllib.parse import urlsplit
 
 import numpy as np
 import pandas as pd
@@ -50,6 +56,9 @@ from robowin.core.instrumentos import PerfilInstrumento
 from .ticks import COLS_TICK, ArmazenamentoTicks
 
 ORIGEM = "real_b3_negocios"
+ORIGEM_DESCONHECIDA = "desconhecida"  # sem URL B3 + sha256 registrados (C24)
+SUFIXO_PROVENIENCIA = ".proveniencia.json"
+DOMINIO_B3 = "b3.com.br"
 ROTULO_REAL_B3 = ("DADOS REAIS B3 (negocios publicos) - lado agressor INFERIDO pela regra do tick, cotacao "
                   "inferida (spread de 1 tick), SEM livro de ofertas")
 FLAG_LAST, FLAG_VOLUME, FLAG_BUY, FLAG_SELL = 8, 16, 32, 64  # mesmas constantes do MT5
@@ -198,6 +207,7 @@ def baixar_pregao(perfil: PerfilInstrumento, d: dt.date, cfg: ConfigB3, cache: P
             erro = validar_zip(tmp)
             if erro is None:
                 tmp.replace(destino)
+                registrar_proveniencia(destino, url)
                 return ResultadoDownload(d, ticker, "ok", str(destino), k, tam)
             if tam < ZIP_PEQUENO_BYTES:
                 _apagar(tmp)
@@ -211,6 +221,64 @@ def baixar_pregao(perfil: PerfilInstrumento, d: dt.date, cfg: ConfigB3, cache: P
         return ResultadoDownload(d, ticker, "sem_dados", "", k, 0, f"HTTP {status}")
     _apagar(tmp)
     return ResultadoDownload(d, ticker, "falha", "", cfg.tentativas, 0, motivo)
+
+
+# ========================================================================================== proveniencia
+def caminho_proveniencia(arquivo: Path) -> Path:
+    arquivo = Path(arquivo)
+    return arquivo.with_name(arquivo.name + SUFIXO_PROVENIENCIA)
+
+
+def url_da_b3(url: str) -> bool:
+    """https e host ``b3.com.br`` ou subdominio (ex. ``arquivos.b3.com.br``)."""
+    try:
+        u = urlsplit(str(url))
+    except ValueError:
+        return False
+    host = (u.hostname or "").lower()
+    return u.scheme == "https" and (host == DOMINIO_B3 or host.endswith("." + DOMINIO_B3))
+
+
+def registrar_proveniencia(arquivo: Path, url: str) -> dict[str, Any]:
+    """Grava ``<arquivo>.proveniencia.json`` com a URL de origem e o sha256 do arquivo (troca atomica)."""
+    arquivo = Path(arquivo)
+    reg = {"url": str(url), "sha256": _sha256(arquivo), "bytes": arquivo.stat().st_size,
+           "registrado_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds")}
+    destino = caminho_proveniencia(arquivo)
+    tmp = destino.with_name(destino.name + ".parcial")
+    tmp.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(destino)
+    return reg
+
+
+def verificar_proveniencia(arquivo: Path, sha256: str | None = None) -> dict[str, Any]:
+    """``{"verificada", "origem", "url", "sha256", "motivo"}``. Verificada so com registro legivel, URL da B3 e
+    sha256 registrado igual ao do arquivo (``sha256`` ja calculado pode ser passado para nao reler o arquivo)."""
+    arquivo = Path(arquivo)
+    sha = sha256 or _sha256(arquivo)
+    out: dict[str, Any] = {"verificada": False, "origem": ORIGEM_DESCONHECIDA, "url": None, "sha256": sha}
+    reg_arq = caminho_proveniencia(arquivo)
+    if not reg_arq.is_file():
+        return {**out, "motivo": "sem registro de proveniencia (URL B3 + sha256)"}
+    try:
+        reg = json.loads(reg_arq.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {**out, "motivo": f"registro de proveniencia ilegivel: {type(e).__name__}"}
+    if not isinstance(reg, dict):
+        return {**out, "motivo": "registro de proveniencia invalido"}
+    url = str(reg.get("url") or "")
+    out["url"] = url or None
+    if not url_da_b3(url):
+        return {**out, "motivo": "URL registrada nao e da B3 (https://*.b3.com.br)"}
+    if str(reg.get("sha256") or "").lower() != sha:
+        return {**out, "motivo": "sha256 registrado nao confere com o arquivo"}
+    return {**out, "verificada": True, "origem": ORIGEM, "motivo": ""}
+
+
+def origem_do_armazem(armazem: ArmazenamentoTicks) -> str:
+    """``real_b3_negocios`` so se TODAS as importacoes do armazem tiveram a proveniencia verificada."""
+    origens = armazem.origens_reais()
+    return ORIGEM if origens == [ORIGEM] else ORIGEM_DESCONHECIDA
 
 
 def _apagar(p: Path) -> None:
@@ -553,6 +621,8 @@ class ResultadoImportacao:
     invalidas: int
     outros_instrumentos: int
     sha256: str
+    origem: str = ORIGEM
+    proveniencia: dict[str, Any] = field(default_factory=dict)
 
     def como_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -568,24 +638,32 @@ def _sha256(p: Path) -> str:
 
 def importar_arquivo(caminho: Path, armazem: ArmazenamentoTicks, perfil: PerfilInstrumento, cfg: ConfigB3, *,
                      ticker: str | None = None) -> ResultadoImportacao:
-    """Le, converte e grava (substituindo os dias presentes) um arquivo de negocios no armazem REAL."""
+    """Le, converte e grava (substituindo os dias presentes) um arquivo de negocios no armazem de dados de mercado
+    (nunca sintetico). A origem so e ``real_b3_negocios`` com a proveniencia verificada; senao ``desconhecida``
+    (gravada nos metadados de cada dia e no marcador do armazem)."""
     caminho = Path(caminho)
-    armazem.marcar_real(ORIGEM)  # recusa armazem sintetico (MisturaDeDados)
+    sha = _sha256(caminho)
+    prov = verificar_proveniencia(caminho, sha)
+    origem = str(prov["origem"])
+    armazem.marcar_real(origem)  # recusa armazem sintetico (MisturaDeDados)
     leit = ler_arquivo(caminho, ticker=ticker, tamanho_bloco=cfg.tamanho_bloco)
     if not perfil.codigo_pertence(leit.ticker):
         raise ErroFormatoB3(f"{caminho.name}: contrato {leit.ticker} nao pertence ao ativo {perfil.simbolo_base} "
                             "(use --ativo do perfil certo)")
-    sha = _sha256(caminho)
     dias: list[dict[str, Any]] = []
     for dd in sorted(np.unique(leit.data).tolist()):
         dia = converter_dia(leit, int(dd), perfil, cfg)
         dia.qualidade.update(sha256_arquivo=sha, linhas_invalidas_arquivo=leit.invalidas,
-                             outros_instrumentos_arquivo=leit.outros_instrumentos)
+                             outros_instrumentos_arquivo=leit.outros_instrumentos, origem=origem,
+                             proveniencia=prov)
+        if not prov["verificada"]:
+            dia.qualidade["rotulo"] = f"ORIGEM DESCONHECIDA ({prov['motivo']}) - formato de negocios B3"
+            dia.qualidade["achados"].append(f"AVISO: origem desconhecida: {prov['motivo']}")
         armazem.gravar_tabela(leit.ticker, dia.tabela)
         armazem.gravar_meta(leit.ticker, f"b3_negocios_{dia.data.isoformat()}", dia.qualidade)
         dias.append(dia.qualidade)
     return ResultadoImportacao(str(caminho), leit.ticker, dias, leit.linhas, leit.invalidas,
-                               leit.outros_instrumentos, sha)
+                               leit.outros_instrumentos, sha, origem, prov)
 
 
 def arquivos_de(entradas: list[str]) -> list[Path]:

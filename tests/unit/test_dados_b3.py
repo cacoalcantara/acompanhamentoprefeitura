@@ -19,11 +19,16 @@ from robowin.dados.b3_negocios import (
     ErroFormatoB3,
     baixar_b3,
     baixar_pregao,
+    caminho_proveniencia,
     config_b3,
     importar_arquivo,
     lado_regra_do_tick,
     ler_arquivo,
+    origem_do_armazem,
+    registrar_proveniencia,
+    url_da_b3,
     validar_zip,
+    verificar_proveniencia,
 )
 from robowin.dados.sintetico import ConfigSintetico, gerar
 from robowin.dados.ticks import ArmazenamentoTicks, MisturaDeDados
@@ -65,7 +70,10 @@ def test_parser_formato_exato_cancelamento_fuso_lado_agregacao(tmp_path):
     assert q["primeiro"] == "09:00:59.146" and q["ultimo"] == "17:59:59.999"
     assert q["lado"] == {"compra": 4, "venda": 2, "desconhecido": 2}
     assert any("INCOMPLETO" in a for a in q["achados"])
-    assert arm.eh_real and not arm.eh_sintetico and arm.origens_reais() == ["real_b3_negocios"]
+    # fixo sem registro de proveniencia (URL B3 + sha256): dado de mercado, mas origem DESCONHECIDA (C24)
+    assert arm.eh_real and not arm.eh_sintetico and arm.origens_reais() == ["desconhecida"]
+    assert r.origem == q["origem"] == "desconhecida" and not q["proveniencia"]["verificada"]
+    assert origem_do_armazem(arm) == "desconhecida"
     tab = arm.ler_tabela("WINZ26", D)
     assert len(tab) == 6
     # 1o grupo: mesmo ms e preco agregados (250 + 5), lado desconhecido (sem variacao anterior), sem cotacao
@@ -261,3 +269,43 @@ def test_quebra_de_linha_crlf_e_bom(tmp_path):
     b = importar_arquivo(FIXO, ArmazenamentoTicks(tmp_path / "b"), WIN, CFG).dias[0]
     for k in ("negocios_validos", "negocios_cancelados", "ticks_gravados", "volume_total", "lado"):
         assert a[k] == b[k]
+
+
+def test_proveniencia_real_so_com_url_b3_e_sha256(tmp_path):
+    z = escrever_zip(tmp_path / "z", "WINZ26", D, n=500, seed=3)
+    # sem registro: desconhecida
+    assert importar_arquivo(z, ArmazenamentoTicks(tmp_path / "a0"), WIN, CFG).origem == "desconhecida"
+    # URL fora da B3: desconhecida
+    registrar_proveniencia(z, "https://exemplo.invalido/WINZ26/2026-10-23")
+    assert verificar_proveniencia(z)["origem"] == "desconhecida"
+    # URL da B3 + sha256 conferido: real
+    registrar_proveniencia(z, "https://arquivos.b3.com.br/rapinegocios/tickercsv/WINZ26/2026-10-23")
+    arm = ArmazenamentoTicks(tmp_path / "a1")
+    r = importar_arquivo(z, arm, WIN, CFG)
+    assert r.origem == "real_b3_negocios" and r.dias[0]["proveniencia"]["verificada"]
+    assert arm.origens_reais() == ["real_b3_negocios"] and origem_do_armazem(arm) == "real_b3_negocios"
+    # arquivo trocado depois do registro: sha256 nao confere => desconhecida (e o armazem deixa de ser so B3)
+    outro = escrever_zip(tmp_path / "z2", "WINZ26", D, n=600, seed=4)
+    caminho_proveniencia(outro).write_bytes(caminho_proveniencia(z).read_bytes())
+    p = verificar_proveniencia(outro)
+    assert p["origem"] == "desconhecida" and "sha256" in p["motivo"]
+    importar_arquivo(outro, arm, WIN, CFG)
+    assert origem_do_armazem(arm) == "desconhecida"
+
+
+def test_url_da_b3():
+    assert url_da_b3("https://arquivos.b3.com.br/x") and url_da_b3("https://b3.com.br/")
+    assert not url_da_b3("http://arquivos.b3.com.br/x")  # sem TLS
+    assert not url_da_b3("https://b3.com.br.invalido/x") and not url_da_b3("https://fakeb3.com.br/x")
+    assert not url_da_b3("")
+
+
+def test_download_registra_proveniencia(tmp_path):
+    conteudo = _zip_bytes(tmp_path)
+    cfg = ConfigB3(url_negocios="https://arquivos.b3.com.br/rapinegocios/tickercsv/{ticker}/{data}",
+                   espera_inicial_s=0.0)
+    r = baixar_pregao(WIN, D, cfg, tmp_path / "cache", transporte=_Transporte(["ok"], conteudo),
+                      dormir=lambda s: None)
+    p = verificar_proveniencia(Path(r.caminho))
+    assert p["verificada"] and p["url"].endswith("/WINZ26/2026-10-23")
+    assert importar_arquivo(Path(r.caminho), ArmazenamentoTicks(tmp_path / "a"), WIN, CFG).origem == "real_b3_negocios"

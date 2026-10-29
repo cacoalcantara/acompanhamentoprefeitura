@@ -69,6 +69,38 @@ def test_custos_reduzem_resultado_e_coerencia():
     assert e == pytest.approx(0.0, abs=1e-9)
 
 
+def test_modelo_execucao_simulador_exige_atravessar_o_alvo():
+    assert CFG.modelo_execucao == "toque"  # v1 continua o padrao
+    sim = rot.ConfigBarreiras(alvo_pontos=30, stop_pontos=30, tempo_s=60, atraso_ns=0,
+                              ponto_valor_brl=WIN.ponto_valor_brl, modelo_execucao="simulador")
+    toca = serie([100, 110, 135, 135, 135, 135, 135])  # bid 135 == 105+30: toca, nao atravessa
+    assert rot.rotular_um(toca, 0, +1, CFG, CUSTO).classe == rot.ALVO
+    assert rot.rotular_um(toca, 0, +1, sim, CUSTO).classe == rot.TEMPO
+    passa = serie([100, 110, 140, 140, 140, 140, 140])
+    r = rot.rotular_um(passa, 0, +1, sim, CUSTO)
+    assert r.classe == rot.ALVO and r.pnl_pontos == 30
+    venda = serie([100, 90, 65, 65, 65, 65, 65])  # ask 70 == 100-30: toca, nao atravessa
+    assert rot.rotular_um(venda, 0, -1, CFG, CUSTO).classe == rot.ALVO
+    assert rot.rotular_um(venda, 0, -1, sim, CUSTO).classe == rot.TEMPO
+    with pytest.raises(ValueError):
+        rot.ConfigBarreiras(alvo_pontos=1, stop_pontos=1, ponto_valor_brl=1, modelo_execucao="outro")  # type: ignore[arg-type]
+
+
+def test_slippage_medio_do_simulador_e_o_do_modelo_pareto():
+    from robowin.execucao.preenchimento import ParamsSlippage, slippage_pontos
+    p = ParamsSlippage()
+    teorico = rot.slippage_medio_pontos(p, WIN.tick_pontos)
+    rng = np.random.default_rng(0)
+    amostra = np.mean([slippage_pontos(rng, p, WIN.tick_pontos) for _ in range(200_000)])
+    assert teorico == pytest.approx(amostra, rel=0.01)
+    assert teorico > WIN.tick_pontos  # mais pessimista que o 1 tick do v1
+    v1 = rot.Custos.do_perfil(WIN)
+    v2 = rot.Custos.do_perfil(WIN, modelo_execucao="simulador")
+    assert v1.slippage_stop_pontos == WIN.tick_pontos and v2.slippage_stop_pontos == pytest.approx(teorico)
+    assert v1.tarifas_corretagem_brl == v2.tarifas_corretagem_brl
+    assert rot.slippage_medio_pontos(ParamsSlippage(escala=0.0), WIN.tick_pontos) == WIN.tick_pontos
+
+
 def test_stop_tem_prioridade_no_mesmo_tick():
     q = serie([100, 100, 200, 100, 100, 100, 100])
     q = rot.Cotacoes(q.t_ns, q.bid, q.ask)
