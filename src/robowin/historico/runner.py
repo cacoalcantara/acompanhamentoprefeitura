@@ -86,6 +86,9 @@ class ParamsHistorico:
     dir_usuarios: Path | None = None
     # gancho opcional: contrafactuais do planejador (avaliacao.contrafactual; so diagnostico, nunca limites)
     contrafactuais: bool = False
+    # cotacao registrada USD -> moeda da conta para descontar o custo de API do pregao (metrica primaria, docs/16
+    # secao 4.2). None com conta fora de USD e custo > 0: o relatorio avisa que o custo NAO foi descontado
+    cotacao_usd_conta: float | None = None
 
 
 def params_de_config(cfg: Mapping[str, Any] | None, **kw: Any) -> ParamsHistorico:

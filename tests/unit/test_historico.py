@@ -271,3 +271,17 @@ def test_historico_recusa_armazem_sintetico_ou_sem_marcador(tmp_path):
     assert main(["historico", "--armazem", str(sint.raiz), "--saida", str(tmp_path / "s1"), "--provedor", "falso"]) == 2
     vazio = ArmazenamentoTicks(tmp_path / "vazio")
     assert main(["historico", "--armazem", str(vazio.raiz), "--saida", str(tmp_path / "s2"), "--provedor", "falso"]) == 2
+
+
+def test_custo_api_por_pregao_na_moeda_da_conta_pela_cotacao_registrada():
+    import datetime as _dt
+    from types import SimpleNamespace as NS_
+
+    from robowin.historico.relatorio import custo_api_por_pregao
+    dias = [NS_(data=_dt.date(2026, 11, 3), resumo={"planejador": {"custo_ia_usd": 0.5}, "quant": {"custo_ia_usd": 0}}),
+            NS_(data=_dt.date(2026, 11, 4), resumo={"planejador": {"custo_ia_usd": 0.25}})]
+    res = NS_(dias=dias, params=NS_(cotacao_usd_conta=5.0))
+    assert custo_api_por_pregao(res, "BRL") == ({"planejador": {"2026-11-03": 2.5, "2026-11-04": 1.25}}, False)
+    assert custo_api_por_pregao(res, "USD")[0]["planejador"]["2026-11-03"] == 0.5
+    sem = NS_(dias=dias, params=NS_(cotacao_usd_conta=None))
+    assert custo_api_por_pregao(sem, "BRL") == ({}, True)  # sem cotacao: nada descontado, e o relatorio avisa

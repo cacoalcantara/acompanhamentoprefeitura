@@ -112,6 +112,23 @@ def dias_perdas_seguidas(res: ResultadoHistorico) -> dict[str, list[str]]:
     return out
 
 
+def custo_api_por_pregao(res: ResultadoHistorico, moeda_conta: str) -> tuple[dict[str, dict[str, float]], bool]:
+    """Custo de API de cada braco em cada pregao NA MOEDA DA CONTA ({braco: {dia: valor}}) e se faltou a cotacao
+    registrada (conta fora de USD sem ``cotacao_usd_conta`` com custo > 0: nada e descontado, e o relatorio avisa)."""
+    usd: dict[str, dict[str, float]] = {}
+    for r in res.dias:
+        for b, x in r.resumo.items():
+            c = float(x.get("custo_ia_usd") or 0.0)
+            if c:
+                usd.setdefault(b, {})[r.data.isoformat()] = c
+    if not usd:
+        return {}, False
+    fator = 1.0 if moeda_conta.upper() == "USD" else getattr(res.params, "cotacao_usd_conta", None)
+    if fator is None or not fator > 0:
+        return {}, True
+    return {b: {d: v * float(fator) for d, v in ds.items()} for b, ds in usd.items()}, False
+
+
 def consolidar(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: ConfigRisco | None = None, *,
                preregistro: PreRegistro | None = None, dir_preregistro: Path | None = None,
                hashes_variantes: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -131,6 +148,7 @@ def consolidar(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: Config
     tentativas: Counter[str] = Counter()
     for r in res.dias:
         tentativas.update(r.tentativas_entrada)
+    custos_api, sem_cotacao = custo_api_por_pregao(res, perfil.moeda)
     rel = aval.gerar_relatorio(trades, controle=CONTROLE if CONTROLE in trades else None, sintetico=False,
                                contaminado=contaminado, tentativas=max(1, len(bracos)), n_boot=res.params.n_boot,
                                seed=res.params.seed, perfil=perfil, risco=risco,
@@ -142,7 +160,8 @@ def consolidar(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: Config
                                tentativas_entrada=dict(tentativas),
                                episodios=[e for r in res.dias for e in r.episodios],
                                eventos_gestao=[e for r in res.dias for e in r.eventos_gestao],
-                               dias_perdas_seguidas=dias_perdas_seguidas(res))
+                               dias_perdas_seguidas=dias_perdas_seguidas(res),
+                               custo_api_por_pregao=custos_api, custo_api_sem_cotacao=sem_cotacao)
     falsos = set(rel["injetados"]["falsos"])
     tot: dict[str, Counter[str]] = {}
     for b in list(soma):  # falhas INJETADAS pelo FALSO saem dos bloqueios (ficam so na secao "injetado (FALSO)")

@@ -181,8 +181,7 @@ def registrar(sub):
 
 
 # ===================================================================== robowin experimento registrar|verificar
-COMPARACOES_PADRAO = ("planejador-claude_gpt_cond", "planejador-controle_aleatorio_plano",
-                      "planejador-sombra_sem_gestao")  # H1, H2, H3 (docs/16 secao 4.2)
+COMPARACOES_PADRAO = relatorio.COMPARACOES_PRIMARIAS_PADRAO  # H1, H2, H3 (docs/16 secao 4.2)
 REGRAS_PARADA_PADRAO = ("sprt_media_normal:dano", "sprt_media_normal:futilidade")
 N_PREGOES_PADRAO = 60  # substituir pelo n do piloto (n_expectativa) antes de registrar de verdade
 

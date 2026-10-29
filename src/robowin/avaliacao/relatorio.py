@@ -330,6 +330,150 @@ def secao_sombras(episodios: Sequence[Mapping[str, Any]], *, n_boot: int = 2000,
     return out
 
 
+# ---------------------------------------------------------------- hipoteses primarias (docs/16 secao 4.2)
+COMPARACOES_PRIMARIAS_PADRAO = ("planejador-claude_gpt_cond", "planejador-controle_aleatorio_plano",
+                                "planejador-sombra_sem_gestao")  # H1, H2, H3
+METRICAS_RISCO = ("pior_dia", "dias_perda_diaria", "drawdown", "perda_media")
+
+
+def _par_comparacao(c: str, bracos: Iterable[str]) -> tuple[str, str] | None:
+    """``"A-B"`` -> (A, B). Nomes de braco podem ter ``-``: escolhe o corte em que os dois lados existem."""
+    nomes = set(bracos)
+    for i, ch in enumerate(c):
+        if ch == "-" and c[:i] in nomes and c[i + 1:] in nomes:
+            return c[:i], c[i + 1:]
+    a, _, b = c.partition("-")
+    return (a, b) if a and b else None
+
+
+def liquido_por_pregao(trades: Sequence[Trade], datas: Sequence[str],
+                       custo_api: Mapping[str, float] | None = None) -> dict[str, float]:
+    """METRICA PRIMARIA: liquido por pregao (moeda da conta) DESCONTADO o custo de API do pregao. Pregao sem
+    operacao vale 0 (menos o custo de API, se houve chamada): a frequencia escolhida pela IA conta."""
+    pnl = metricas.pnl_por_dia(trades)
+    custo = custo_api or {}
+    return {d: float(pnl.get(d, 0.0)) - float(custo.get(d, 0.0)) for d in datas}
+
+
+def _dd_do_dia(ts: Sequence[Trade]) -> float:
+    eq = pico = dd = 0.0
+    for t in metricas.ordenar(ts):
+        eq += t.liquido_brl
+        pico = max(pico, eq)
+        dd = max(dd, pico - eq)
+    return dd
+
+
+def _risco_por_dia(trades: Sequence[Trade], datas: Sequence[str],
+                   perda_max_dia: float | None) -> dict[str, dict[str, float]]:
+    por = metricas.agrupar_por_dia(list(trades))
+    out: dict[str, dict[str, float]] = {}
+    for d in datas:
+        ts = por.get(d, [])
+        pnl = float(sum(t.liquido_brl for t in ts))
+        perdas = [t.liquido_brl for t in ts if t.liquido_brl < 0]
+        x = {"pior_dia": min(pnl, 0.0), "drawdown": _dd_do_dia(ts),
+             "perda_media": float(np.mean(perdas)) if perdas else math.nan}
+        if perda_max_dia is not None and perda_max_dia > 0:
+            x["dias_perda_diaria"] = float(pnl <= -perda_max_dia)
+        out[d] = x
+    return out
+
+
+def _nao_inferioridade_risco(trat: Sequence[Trade], ref: Sequence[Trade], datas: Sequence[str],
+                             margens: Mapping[str, float], *, alfa: float, perda_max_dia: float | None,
+                             n_alvo: int | None) -> dict[str, Any]:
+    """P contra C nas metricas de risco, pareado por pregao, com as margens do pre-registro. As diferencas sao
+    orientadas para "maior = melhor" (``comparacao.nao_inferioridade``): perda do dia e perda media como
+    ``trat - ref`` (sao negativas); drawdown e dia que atingiu a perda diaria como ``ref - trat``."""
+    rt, rr = _risco_por_dia(trat, datas, perda_max_dia), _risco_por_dia(ref, datas, perda_max_dia)
+    out: dict[str, Any] = {}
+    for m, margem in sorted(margens.items()):
+        if m not in METRICAS_RISCO:
+            out[m] = {"status": "metrica_desconhecida", "nao_inferior": False,
+                      "aviso": f"margem para metrica desconhecida (conhecidas: {', '.join(METRICAS_RISCO)})"}
+            continue
+        if m == "dias_perda_diaria" and (perda_max_dia is None or perda_max_dia <= 0):
+            out[m] = {"status": "sem_limite_diario", "nao_inferior": False,
+                      "aviso": "perda maxima diaria nao informada: metrica nao calculada"}
+            continue
+        sinal = 1.0 if m in ("pior_dia", "perda_media") else -1.0
+        dif = {d: sinal * (rt[d][m] - rr[d][m]) for d in datas
+               if m in rt[d] and math.isfinite(rt[d][m]) and math.isfinite(rr[d][m])}
+        res = comp.nao_inferioridade(dif, float(margem), alfa=alfa, n_preregistrado=n_alvo)
+        vt = [rt[d][m] for d in datas if m in rt[d] and math.isfinite(rt[d][m])]
+        vr = [rr[d][m] for d in datas if m in rr[d] and math.isfinite(rr[d][m])]
+        res["valores"] = {
+            "tratamento": (min(vt) if m == "pior_dia" else max(vt) if m == "drawdown" else float(np.mean(vt)))
+            if vt else math.nan,
+            "referencia": (min(vr) if m == "pior_dia" else max(vr) if m == "drawdown" else float(np.mean(vr)))
+            if vr else math.nan}
+        out[m] = res
+    return out
+
+
+def secao_hipoteses(trades_por_braco: Mapping[str, Sequence[Trade]], *, datas_pregoes: Sequence[str],
+                    preregistro: PreRegistro | None = None,
+                    custo_api_por_pregao: Mapping[str, Mapping[str, float]] | None = None,
+                    custo_api_sem_cotacao: bool = False, perda_max_dia: float | None = None,
+                    n_boot: int = 2000, seed: int = 0) -> dict[str, Any] | None:
+    """H1-H3 (docs/16 secao 4.2): diferencas PAREADAS POR PREGAO do liquido por pregao descontado o custo de API,
+    unilaterais, Holm com m = numero de comparacoes primarias (3), mais a nao inferioridade de risco P contra C
+    (primeira comparacao) com as margens do pre-registro. Sem pre-registro, so calcula se os bracos padrao
+    (P, C, controle do plano, sombra) rodaram, e marca como exploratorio. A taxa de acerto NUNCA entra aqui."""
+    comps = tuple(preregistro.comparacoes_primarias) if preregistro is not None else COMPARACOES_PRIMARIAS_PADRAO
+    pares = [(c, _par_comparacao(c, trades_por_braco)) for c in comps]
+    if preregistro is None and not all(pp is not None and pp[0] in trades_por_braco and pp[1] in trades_por_braco
+                                       for _, pp in pares):
+        return None
+    alfa = float(preregistro.alfa) if preregistro is not None else 0.05
+    n_alvo = int(preregistro.n_pregoes_alvo) if preregistro is not None else None
+    datas = sorted(set(datas_pregoes))
+    custos = custo_api_por_pregao or {}
+    hip: dict[str, Any] = {}
+    ps: dict[str, float] = {}
+    for i, (c, pp) in enumerate(pares):
+        rot = f"H{i + 1}"
+        if pp is None or pp[0] not in trades_por_braco or pp[1] not in trades_por_braco:
+            hip[rot] = {"comparacao": c, "status": "braco_ausente", "rejeita_h0": False}
+            continue
+        a, b = pp
+        la = liquido_por_pregao(trades_por_braco[a], datas, custos.get(a))
+        lb = liquido_por_pregao(trades_por_braco[b], datas, custos.get(b))
+        r = comp.diferencas_pareadas(la, lb, n_boot=n_boot, seed=seed, n_preregistrado=n_alvo)
+        r.update(comparacao=c, tratamento=a, referencia=b,
+                 custo_api_tratamento=float(sum((custos.get(a) or {}).values())),
+                 custo_api_referencia=float(sum((custos.get(b) or {}).values())))
+        hip[rot] = r
+        if "p_valor_unilateral" in r:
+            ps[rot] = float(r["p_valor_unilateral"])
+    m = len(pares)
+    for rot, h in comp.holm({**ps, **{f"_vazio{k}": 1.0 for k in range(m - len(ps))}}, alfa=alfa).items():
+        if rot in hip:  # comparacao sem p (amostra/braco ausente) conta em m como nao rejeitada
+            hip[rot]["holm"] = h
+            hip[rot]["rejeita_h0"] = bool(h["rejeita_h0"]) and hip[rot].get("status") == "ok"
+    for h in hip.values():
+        h.setdefault("rejeita_h0", False)
+    risco: dict[str, Any] = {}
+    p1 = pares[0][1] if pares else None
+    margens = dict(preregistro.margens_nao_inferioridade) if preregistro is not None else {}
+    if p1 is not None and p1[0] in trades_por_braco and p1[1] in trades_por_braco and margens:
+        risco = {"tratamento": p1[0], "referencia": p1[1],
+                 "metricas": _nao_inferioridade_risco(trades_por_braco[p1[0]], trades_por_braco[p1[1]], datas,
+                                                      margens, alfa=alfa, perda_max_dia=perda_max_dia, n_alvo=n_alvo)}
+        risco["nao_inferior"] = all(bool(x.get("nao_inferior")) for x in risco["metricas"].values())
+    avisos: list[str] = []
+    if preregistro is None:
+        avisos.append("sem pre-registro: hipoteses calculadas so como exploratorias (sem afirmacao de resultado)")
+    if custo_api_sem_cotacao:
+        avisos.append("custo de API em USD sem cotacao registrada para a moeda da conta: NAO descontado")
+    if n_alvo is not None and len(datas) < n_alvo:
+        avisos.append(f"amostra insuficiente: {len(datas)} pregao(oes) < n pre-registrado={n_alvo}")
+    return {"metrica": "liquido_por_pregao_menos_custo_api", "unidade": "pregao", "m_holm": m, "alfa": alfa,
+            "n_pregoes": len(datas), "n_pregoes_alvo": n_alvo, "hipoteses": hip, "nao_inferioridade_risco": risco,
+            "exploratorio": preregistro is None, "avisos": avisos}
+
+
 def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativas: int,
                     controle: str | None = None, sintetico: bool | None = None, contaminado: bool | None = None,
                     n_alvo: int | None = None, var_sr_tentativas: float | None = None,
@@ -348,11 +492,17 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
                     tentativas_entrada: Mapping[str, int] | None = None,
                     episodios: Sequence[Mapping[str, Any]] | None = None,
                     eventos_gestao: Sequence[Mapping[str, Any]] | None = None,
-                    dias_perdas_seguidas: Mapping[str, Sequence[str]] | None = None) -> dict[str, Any]:
+                    dias_perdas_seguidas: Mapping[str, Sequence[str]] | None = None,
+                    custo_api_por_pregao: Mapping[str, Mapping[str, float]] | None = None,
+                    custo_api_sem_cotacao: bool = False) -> dict[str, Any]:
     """Relatorio por braco (dict). Os argumentos depois de ``n_preregistrado_comparacoes`` sao opcionais e so
     ACRESCENTAM secoes (docs/16, WP8): aviso de acerto por braco com a geometria realizada (``geometrias``), selo
     conferido contra o pre-registro, "injetado (FALSO)", tentativas contra episodios, gestao por posicao, diferencas
-    pareadas com as sombras e dias encerrados por perdas seguidas. Sem eles o relatorio e o de antes."""
+    pareadas com as sombras e dias encerrados por perdas seguidas. Sem eles o relatorio e o de antes.
+
+    ``hipoteses`` (H1-H3, metrica primaria = liquido por pregao menos ``custo_api_por_pregao`` [braco][dia], na
+    moeda da conta; Holm m=3 e nao inferioridade de risco) sai com ``preregistro`` ou quando os bracos padrao
+    rodaram. ``comparacoes_com_controle`` (taxa de acerto contra o controle) e EXPLORATORIA."""
     bolsa = perfil.bolsa_perfil() if perfil is not None else None
     calcula_tributo = bolsa.calcula_tributo if bolsa is not None else True  # sem perfil: regime brasileiro (legado)
     todos = [t for ts in trades_por_braco.values() for t in ts]
@@ -383,8 +533,9 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
                 b["acerto"]["acertos"], b["acerto"]["n"], c["acertos"], c["n"],
                 n_preregistrado=n_preregistrado_comparacoes if n_preregistrado_comparacoes is not None else n_alvo)
         ps = {n: v["p_valor_braco_maior"] for n, v in comparacoes.items() if "p_valor_braco_maior" in v}
-        for n, h in comp.holm(ps).items():
+        for n, h in comp.holm(ps).items():  # exploratorio: as hipoteses primarias ficam em ``hipoteses``
             comparacoes[n]["holm"] = h
+            comparacoes[n]["papel"] = "exploratoria"
     vetos = {}
     for nome, ids in (ids_vetados or {}).items():
         if nome in trades_por_braco:
@@ -401,6 +552,13 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
     if episodios is not None:
         extras["gestao"] = secao_gestao(episodios, eventos_gestao or (), trades_por_braco)
         extras["sombras"] = secao_sombras(episodios, n_boot=n_boot, seed=seed)
+    hip = secao_hipoteses(trades_por_braco, datas_pregoes=tuple(datas_pregoes) if datas_pregoes is not None else dias,
+                          preregistro=preregistro, custo_api_por_pregao=custo_api_por_pregao,
+                          custo_api_sem_cotacao=custo_api_sem_cotacao,
+                          perda_max_dia=risco.perda_max_dia_brl if risco is not None else None,
+                          n_boot=n_boot, seed=seed)
+    if hip is not None:
+        extras["hipoteses"] = hip
     if dias_perdas_seguidas is not None:
         extras["dias_perdas_seguidas"] = {b: sorted(set(ds)) for b, ds in sorted(dias_perdas_seguidas.items())}
     return {
@@ -437,8 +595,36 @@ def _ic(par: Sequence[float], casas: int = 2) -> str:
     return f"[{_f(float(par[0]), casas)}; {_f(float(par[1]), casas)}]"
 
 
+def _markdown_hipoteses(h: Mapping[str, Any]) -> list[str]:
+    L = ["## Hipoteses primarias (H1-H3): liquido por pregao menos o custo de API", "",
+         f"Pareadas por pregao ({h['n_pregoes']} pregao(oes)"
+         + (f" de {h['n_pregoes_alvo']} pre-registrados" if h.get("n_pregoes_alvo") else "")
+         + f"), unilaterais, Holm com m={h['m_holm']}, alfa={h['alfa']}."
+         + (" **Exploratorio (sem pre-registro).**" if h.get("exploratorio") else ""), ""]
+    L += [f"> {a}" for a in h.get("avisos", [])]
+    L += ["", "| hipotese | comparacao | pregoes | media da diferenca | IC 95% | p | p Holm | rejeita H0 |",
+          "|---|---|---|---|---|---|---|---|"]
+    for rot, x in h["hipoteses"].items():
+        ic = _ic(x["ic_bootstrap"]) if "ic_bootstrap" in x else "-"
+        L.append(f"| {rot} | {x['comparacao']} | {x.get('n_pares', 0)} | R$ {_f(x.get('media_dif'))} | {ic} | "
+                 f"{_f(x.get('p_valor_unilateral'), 4)} | {_f((x.get('holm') or {}).get('p_ajustado'), 4)} | "
+                 f"{'sim' if x.get('rejeita_h0') else 'nao'} ({x.get('status')}) |")
+    nr = h.get("nao_inferioridade_risco") or {}
+    if nr:
+        L += ["", f"Nao inferioridade de risco ({nr['tratamento']} contra {nr['referencia']}): "
+                  f"**{'sim' if nr.get('nao_inferior') else 'nao'}**", "",
+              "| metrica | margem | limite inferior | nao inferior |", "|---|---|---|---|"]
+        for m, x in nr["metricas"].items():
+            L.append(f"| {m} | {_f(x.get('margem'))} | {_f(x.get('limite_inferior'))} | "
+                     f"{'sim' if x.get('nao_inferior') else 'nao'} ({x.get('status')}) |")
+    L.append("")
+    return L
+
+
 def _markdown_secoes_novas(rel: Mapping[str, Any]) -> list[str]:
     L: list[str] = []
+    if rel.get("hipoteses"):
+        L += _markdown_hipoteses(rel["hipoteses"])
     te = rel.get("tentativas_episodios")
     if te:
         L += ["## Tentativas de entrada contra episodios", "",

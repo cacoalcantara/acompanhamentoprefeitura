@@ -393,3 +393,59 @@ def test_segredos_do_mt5_e_do_painel_sao_redigidos(monkeypatch):
     monkeypatch.setenv("ROBOWIN_TOKEN", "token-painel-456")
     out = redigir("erro: senha-mt5-123 e token-painel-456")
     assert "senha-mt5-123" not in out and "token-painel-456" not in out
+
+
+# ================================================================== H1-H3 (docs/16 secao 4.2)
+def _por_dia(braco: str, liquidos: list[float]) -> list[Trade]:
+    dias = [f"2026-11-{d:02d}" for d in (3, 4, 5, 6, 9, 10, 11, 12)]
+    return [mk(i, v, dia=dias[i], braco=braco) for i, v in enumerate(liquidos)]
+
+
+def _bracos_h():
+    p = _por_dia("planejador", [50, 60, 40, 55, 45, 65, 50, 60])
+    out = {"planejador": p, "claude_gpt_cond": _por_dia("claude_gpt_cond", [10, -5, 0, 5, -10, 0, 5, 0]),
+           "controle_aleatorio_plano": _por_dia("controle_aleatorio_plano", [0, 5, -5, 0, 10, -10, 0, 5]),
+           "sombra_sem_gestao": _por_dia("sombra_sem_gestao", [45, 55, 42, 50, 40, 60, 48, 52])}
+    for extra in ("claude", "quant", "controle_aleatorio", "nao_operar", "claude_gpt", "sombra_trailing_fixo"):
+        out[extra] = _por_dia(extra, [1, -1, 1, -1, 1, -1, 1, -1])
+    return out
+
+
+def test_hipoteses_h1_h3_pareadas_por_pregao_com_holm_m3_e_custo_de_api():
+    pr = _registro_h()
+    datas = sorted({relatorio.dia_pregao(t) for ts in _bracos_h().values() for t in ts})
+    rel = relatorio.gerar_relatorio(_bracos_h(), tentativas=1, controle="controle_aleatorio", n_boot=200,
+                                    preregistro=pr, datas_pregoes=datas)
+    h = rel["hipoteses"]
+    assert h["m_holm"] == 3 and h["metrica"] == "liquido_por_pregao_menos_custo_api" and not h["exploratorio"]
+    assert [x["comparacao"] for x in h["hipoteses"].values()] == list(pr.comparacoes_primarias)
+    assert h["hipoteses"]["H1"]["n_pares"] == 8 and h["hipoteses"]["H1"]["rejeita_h0"]
+    assert h["hipoteses"]["H1"]["holm"]["p_ajustado"] <= 3 * h["hipoteses"]["H1"]["p_valor_unilateral"] + 1e-12
+    # o Holm de acerto contra o controle e so exploratorio
+    assert all(c.get("papel") == "exploratoria" for c in rel["comparacoes_com_controle"].values() if "holm" in c)
+    # custo de API do pregao descontado: com 60/pregao no planejador, H1 deixa de ser positiva
+    custo = {"planejador": {d: 60.0 for d in datas}}
+    rel2 = relatorio.gerar_relatorio(_bracos_h(), tentativas=1, n_boot=200, preregistro=pr, datas_pregoes=datas,
+                                     custo_api_por_pregao=custo)
+    assert rel2["hipoteses"]["hipoteses"]["H1"]["media_dif"] == pytest.approx(h["hipoteses"]["H1"]["media_dif"] - 60.0)
+    assert not rel2["hipoteses"]["hipoteses"]["H1"]["rejeita_h0"]
+    # nao inferioridade de risco P contra C com as margens do registro
+    nr = h["nao_inferioridade_risco"]
+    assert nr["tratamento"] == "planejador" and nr["referencia"] == "claude_gpt_cond"
+    assert set(nr["metricas"]) == {"pior_dia", "drawdown"} and nr["nao_inferior"]
+    md = relatorio.renderizar_markdown(rel)
+    assert "Hipoteses primarias (H1-H3)" in md and "Holm com m=3" in md
+
+
+def test_hipoteses_sem_preregistro_so_com_os_bracos_padrao_e_marcadas_exploratorias():
+    rel = relatorio.gerar_relatorio(_bracos_h(), tentativas=1, n_boot=100)
+    assert rel["hipoteses"]["exploratorio"] and rel["hipoteses"]["m_holm"] == 3
+    so_b = relatorio.gerar_relatorio({"B": _por_dia("B", [1, 2])}, tentativas=1, n_boot=100)
+    assert "hipoteses" not in so_b
+
+
+def _registro_h():
+    from robowin.core.tipos import PreRegistro
+    return PreRegistro(id_experimento="exp-h", t_registro_ns=0, inicio_avaliacao="2026-11-01", variantes={},
+                       comparacoes_primarias=relatorio.COMPARACOES_PRIMARIAS_PADRAO,
+                       margens_nao_inferioridade={"pior_dia": 20.0, "drawdown": 20.0}, n_pregoes_alvo=8)

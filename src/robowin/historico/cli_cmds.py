@@ -62,7 +62,8 @@ def _cmd(a: argparse.Namespace) -> int:
             com_condicional=not a.sem_condicional, config=Path(a.config), catalogo=Path(a.catalogo),
             risco=Path(a.risco), aprovacao=aprov, usuario=sel.usuario,
             conta_negociacao=sel.chave.texto if sel.chave is not None else None,
-            dir_usuarios=Path(a.usuarios) if a.usuarios else None, contrafactuais=a.contrafactuais or None)
+            dir_usuarios=Path(a.usuarios) if a.usuarios else None, contrafactuais=a.contrafactuais or None,
+            cotacao_usd_conta=a.cotacao_usd_conta)
         print(f"*** {SELO} ***")
         print(f"Limites de risco: {sel.descricao()}.")
         res = executar_historico(p, ao_progresso=print)
@@ -96,6 +97,8 @@ def registrar(sub: Any) -> None:
     p.add_argument("--orcamento-usd", type=float, default=None, help="sobrepoe [ia].orcamento_mensal_usd")
     p.add_argument("--n-boot", type=int, default=1000)
     p.add_argument("--sem-condicional", action="store_true", help="so as variantes de modo imediato")
+    p.add_argument("--cotacao-usd-conta", type=float, default=None, metavar="FATOR",
+                   help="cotacao registrada USD -> moeda da conta para descontar o custo de API por pregao (H1-H3)")
     p.add_argument("--contrafactuais", action="store_true",
                    help="calcula os contrafactuais do planejador por pregao (so diagnostico; nunca altera limites)")
     p.add_argument("--preregistro", default=None, metavar="PASTA",
