@@ -8,9 +8,11 @@ nunca altera limites de risco (nada aqui le ``ConfigRisco``).
   simulador conforme os ticks chegam (apertos de stop, parciais, encerramentos por regra, prazo estendido).
 * ``contrafactuais_da_sessao``: para cada previsao do planejador (``previsoes_ia``):
 
-  - ``plano_sem_gestao`` (sempre): o plano original sem gestao, a partir da entrega da decisao; o seu desfecho e o
-    ``y_alvo`` gravado em ``previsoes_ia`` (``fonte_y = replay_sem_gestao``);
-  - entradas EXECUTADAS: ``sem_gestao`` e ``trailing_fixo`` (regra deterministica pre-registrada, ``TRAILING_FIXO``);
+  - ``plano_sem_gestao`` (sempre): o plano original sem gestao, a partir da ENTREGA da decisao
+    (``previsoes_ia.t_entrega_ns`` = t0 do dossie + latencia da IA; nunca t0, que e anterior a decisao existir); o
+    seu desfecho e o ``y_alvo`` gravado em ``previsoes_ia`` (``fonte_y = replay_sem_gestao``);
+  - entradas EXECUTADAS: ``sem_gestao`` e ``trailing_fixo`` (regra deterministica pre-registrada, ``TRAILING_FIXO``),
+    a partir do disparo real (``t_execucao_ns``), como o trade e as sombras;
   - entradas NAO executadas (faixa/ancoragem, revisor, veto do motor, plano expirado): ``plano_ia`` (o plano da IA,
     com a gestao declarada, a partir da entrega).
 
@@ -228,6 +230,7 @@ class _Plano:
     t_entrega_ns: int
     ancora: float | None
     executada: bool
+    t_execucao_ns: int | None = None
     gestao: PlanoGestaoCompilado | None = None
     q: int = 1
     extras: dict[str, Any] = field(default_factory=dict)
@@ -269,11 +272,18 @@ def _planos(banco: Any) -> list[_Plano]:
         it = _intencao(dec.get("intencao_json"))
         out.append(_Plano(decisao_id=did, braco=str(r.get("braco") or ""), lado=lado, stop=float(stop),
                           alvo=float(r["alvo_pts"]) if r.get("alvo_pts") else None, tempo_s=int(tempo),
-                          t_entrega_ns=int(dec.get("t_ns") or r.get("t0_ns") or 0),
+                          t_entrega_ns=_t_entrega(r, dec),
+                          t_execucao_ns=int(r["t_execucao_ns"]) if r.get("t_execucao_ns") else None,
                           ancora=float(r["ancora"]) if r.get("ancora") is not None else None,
                           executada=bool(r.get("executada")), gestao=it.gestao if it else None,
                           q=max(1, int(it.quantidade)) if it else 1, extras={"previsao_id": r["id"]}))
     return out
+
+
+def _t_entrega(prev: dict[str, Any], dec: dict[str, Any]) -> int:
+    """Instante da ENTREGA da decisao (t0 + latencia da IA), gravado em ``previsoes_ia.t_entrega_ns``. Banco antigo
+    sem a coluna: t0 (``decisoes.t_ns``), o melhor que existe; nunca algo antes de t0."""
+    return max(int(prev.get("t_entrega_ns") or 0), int(prev.get("t0_ns") or 0), int(dec.get("t_ns") or 0))
 
 
 def _perfil_do_banco(banco: Any) -> PerfilInstrumento:
@@ -309,10 +319,13 @@ def contrafactuais_da_sessao(banco: Any, ticks: Sequence[Tick], *, perfil: Perfi
                                   latencia_ns=latencia_ns, slippage=slippage)
         base = replay_operacao(ticks, livros, perfil, gestao=None, **kw)
         politicas: list[tuple[str, ResultadoReplay]] = [("plano_sem_gestao", base)]
-        if pl.executada:
-            politicas.append(("sem_gestao", base))
+        if pl.executada:  # alinhadas com o trade real e as sombras: entram no DISPARO (>= entrega)
+            t_exec = max(pl.t_execucao_ns or pl.t_entrega_ns, pl.t_entrega_ns)
+            kw_e = {**kw, "t_entrada_ns": t_exec}
+            sem = base if t_exec == pl.t_entrega_ns else replay_operacao(ticks, livros, perfil, gestao=None, **kw_e)
+            politicas.append(("sem_gestao", sem))
             politicas.append(("trailing_fixo", replay_operacao(ticks, livros, perfil,
-                                                               gestao=trailing_fixo(pl.stop, tick_pts), **kw)))
+                                                               gestao=trailing_fixo(pl.stop, tick_pts), **kw_e)))
         else:
             com = base if pl.gestao is None else replay_operacao(ticks, livros, perfil, gestao=pl.gestao, **kw)
             politicas.append(("plano_ia", com))

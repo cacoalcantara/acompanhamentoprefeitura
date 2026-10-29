@@ -405,6 +405,10 @@ async def test_planejador_ancora_em_t0_sombras_replicam_no_mesmo_tick_e_previsao
     assert not _db(banco, "SELECT * FROM decisoes WHERE braco LIKE 'sombra%' AND gatilho NOT IN ('sombra')")
     prv = _db(banco, "SELECT * FROM previsoes_ia WHERE braco='planejador'")
     assert len(prv) == 1 and prv[0]["executada"] == 1 and prv[0]["p_alvo"] == pytest.approx(0.4)
+    # causalidade dos contrafactuais: entrega = t0 + latencia da IA; execucao = disparo real (mesmo t da sombra)
+    res0 = p.contextos[0]
+    assert prv[0]["t_entrega_ns"] >= prv[0]["t0_ns"] == res0.t0_ns
+    assert prv[0]["t_execucao_ns"] == por["planejador"]["t_ns"] >= prv[0]["t_entrega_ns"]
     ep = _db(banco, "SELECT * FROM posicoes_episodio WHERE braco='sombra_sem_gestao'")
     assert ep and ep[0]["sombra_de"] == "planejador"
 

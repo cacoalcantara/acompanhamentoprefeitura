@@ -996,7 +996,7 @@ class Orquestrador:
                                    proposta={"origem": "plano_condicional", **extra})
         prv = conta.previsoes.get(base.id)
         if prv and r.resultado == "executada":
-            self.registro.previsao_ia(id=prv, executada=True)
+            self.registro.previsao_ia(id=prv, executada=True, t_execucao_ns=t)
 
     # ===================================================================================== sombras ======
     def _replicar_sombras(self, conta_ref: ContaBraco, it: Intencao, t: int, hash_dossie: str) -> None:
@@ -1114,7 +1114,7 @@ class Orquestrador:
             stop_pts=_num(base.stop_pontos) if base is not None else _num(prop.get("stop_pontos")),
             alvo_pts=_num(base.alvo_pontos) if base is not None else _num(prop.get("alvo_pontos")),
             tempo_s=(base.tempo_max_s if base is not None else prop.get("tempo_max_s")),
-            ancora=res.preco_ref or None, executada=False)
+            ancora=res.preco_ref or None, executada=False, t_entrega_ns=res.t0_ns + max(0, int(res.latencia_ns)))
         if prv:
             conta.previsoes[chave] = prv
             while len(conta.previsoes) > 256:

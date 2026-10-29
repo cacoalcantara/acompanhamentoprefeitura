@@ -24,8 +24,9 @@ GESTAO = "gestao_eventos"
 PREVISOES = "previsoes_ia"
 CONTRAFACTUAIS = "contrafactuais"
 
-# coluna -> tipo SQLite; a ordem e a do DDL (a primeira coluna e a chave primaria)
-COLUNAS: dict[str, dict[str, str]] = {
+# coluna -> tipo SQLite; a ordem e a do DDL (a primeira coluna e a chave primaria). CONGELADO: o CREATE TABLE
+# de cada tabela entra no hash da migracao; coluna nova vai em ``COLUNAS_ACRESCIDAS`` (ALTER TABLE no fim de DDL).
+_COLUNAS_V1: dict[str, dict[str, str]] = {
     EPISODIOS: {
         "id": "TEXT PRIMARY KEY", "braco": "TEXT", "ticket": "INTEGER", "decisao_id": "TEXT",
         "intencao_id": "TEXT", "lado": "TEXT", "q_inicial": "INTEGER", "ancora_t0": "REAL",
@@ -45,6 +46,15 @@ COLUNAS: dict[str, dict[str, str]] = {
         "id": "TEXT PRIMARY KEY", "decisao_id": "TEXT", "braco_ref": "TEXT", "politica": "TEXT", "liquido": "REAL",
         "motivo": "TEXT", "t_fim_ns": "INTEGER", "y_alvo": "INTEGER", "seed": "INTEGER"},
 }
+# Colunas acrescentadas depois (ALTER TABLE ... ADD COLUMN, so no fim de ``DDL``):
+# * previsoes_ia.t_entrega_ns: instante em que a decisao foi ENTREGUE (t0 do dossie + latencia da IA). Os
+#   contrafactuais partem dai, nunca de t0 (causalidade: o preco andou durante a latencia).
+# * previsoes_ia.t_execucao_ns: instante do disparo/execucao real da entrada (alinha sem_gestao/trailing_fixo com o
+#   trade real e as sombras).
+COLUNAS_ACRESCIDAS: dict[str, dict[str, str]] = {
+    PREVISOES: {"t_entrega_ns": "INTEGER", "t_execucao_ns": "INTEGER"},
+}
+COLUNAS: dict[str, dict[str, str]] = {t: {**cols, **COLUNAS_ACRESCIDAS.get(t, {})} for t, cols in _COLUNAS_V1.items()}
 TABELAS = tuple(COLUNAS)
 
 _INDICES = {EPISODIOS: ("braco", "t_aberta_ns"), GESTAO: ("braco", "ticket", "t_ns"), PREVISOES: ("braco", "t0_ns"),
@@ -53,8 +63,9 @@ _INDICES = {EPISODIOS: ("braco", "t_aberta_ns"), GESTAO: ("braco", "ticket", "t_
 # A ordem desta lista e o contrato da migracao (indice + hash): so ACRESCENTAR DDLs novos no fim.
 DDL: list[str] = (
     [f"CREATE TABLE IF NOT EXISTS {t}({', '.join(f'{c} {tp}' for c, tp in cols.items())})"
-     for t, cols in COLUNAS.items()]
+     for t, cols in _COLUNAS_V1.items()]
     + [f"CREATE INDEX IF NOT EXISTS idx_{t}_{'_'.join(cs)} ON {t}({', '.join(cs)})" for t, cs in _INDICES.items()]
+    + [f"ALTER TABLE {t} ADD COLUMN {c} {tp}" for t, cols in COLUNAS_ACRESCIDAS.items() for c, tp in cols.items()]
 )
 
 

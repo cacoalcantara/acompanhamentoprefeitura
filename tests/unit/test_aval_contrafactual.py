@@ -169,3 +169,40 @@ def test_contrafactuais_da_sessao_executada_tem_sombras(tmp_path):
 
 def test_banco_sem_tabelas_devolve_vazio(tmp_path):
     assert cf.contrafactuais_da_sessao(BancoSQLite(tmp_path / "v.db"), [], perfil=WIN) == []
+
+
+def _banco_latencia(tmp_path, *, executada: bool, t_exec: int | None = None):
+    """Dossie em T0, decisao ENTREGUE em T0+10 s (latencia da IA); o preco sobe 40 ticks durante a latencia."""
+    b = BancoSQLite(tmp_path / "lat.db")
+    decisao_ia.garantir_tabelas(b)
+    it = Intencao(id="int-9", braco="planejador", acao=Acao.COMPRAR, stop_pontos=40 * TK, alvo_pontos=40 * TK,
+                  tempo_max_s=60, validade_ns=T0 + 60 * NS, preco_referencia=100_000 * TK)
+    b.inserir("decisoes", {"id": "dec-9", "t_ns": T0, "braco": "planejador", "acao": "COMPRAR",
+                           "intencao_json": it.model_dump_json(), "resultado": "plano_armado"})
+    b.inserir(decisao_ia.PREVISOES, decisao_ia.linha(decisao_ia.PREVISOES, {
+        "id": "prev-9", "decisao_id": "dec-9", "t0_ns": T0, "t_entrega_ns": T0 + 10 * NS, "braco": "planejador",
+        "lado": "compra", "p_alvo": 0.6, "stop_pts": 40 * TK, "alvo_pts": 40 * TK, "tempo_s": 60,
+        "executada": executada, "t_execucao_ns": t_exec}))
+    return b
+
+
+def test_contrafactual_parte_da_entrega_e_nao_de_t0(tmp_path):
+    """Causalidade: o movimento ocorrido durante a latencia da IA nao entra no y_alvo nem no plano_ia."""
+    b = _banco_latencia(tmp_path, executada=False)
+    ticks = _caminho([0] + [4] * 10 + [0] * 200, 100_000 * TK)  # +40 ticks entre T0 e a entrega, depois parado
+    linhas = {ln["politica"]: ln for ln in cf.contrafactuais_da_sessao(b, ticks, perfil=WIN)}
+    assert linhas["plano_sem_gestao"]["motivo"] == "tempo" and linhas["plano_sem_gestao"]["y_alvo"] == 0
+    assert linhas["plano_ia"]["motivo"] == "tempo"
+    prev = decisao_ia.ler(tmp_path / "lat.db", decisao_ia.PREVISOES)[0]
+    assert prev["y_alvo"] == 0 and prev["t_entrega_ns"] == T0 + 10 * NS
+
+
+def test_contrafactual_executada_entra_no_disparo(tmp_path):
+    pytest.importorskip("robowin.decisao.gestao")
+    # entrega em T0+10 s, disparo real em T0+20 s; entre os dois o preco sobe 40 ticks
+    b = _banco_latencia(tmp_path, executada=True, t_exec=T0 + 20 * NS)
+    ticks = _caminho([0] * 11 + [4] * 10 + [0] * 200, 100_000 * TK)
+    linhas = {ln["politica"]: ln for ln in cf.contrafactuais_da_sessao(b, ticks, perfil=WIN, gravar=False)}
+    assert linhas["plano_sem_gestao"]["motivo"] == "alvo"  # da entrega: pegou a alta
+    assert linhas["sem_gestao"]["motivo"] == "tempo" and linhas["trailing_fixo"]["motivo"] == "tempo"
+    assert linhas["sem_gestao"]["t_fim_ns"] >= T0 + 80 * NS

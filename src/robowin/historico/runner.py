@@ -298,7 +298,8 @@ def simular_dia(p: ParamsHistorico, dados: DadosDia, *, perfil: PerfilInstrument
         if p.contrafactuais:
             try:  # so diagnostico: um erro aqui nunca derruba o pregao
                 from robowin.avaliacao.contrafactual import contrafactuais_da_sessao
-                contrafs = contrafactuais_da_sessao(banco, dados.ticks, perfil=perfil)
+                contrafs = contrafactuais_da_sessao(banco, dados.ticks, perfil=perfil,
+                                                    latencia_ns=orq.cfg.latencia_exec_ns)
             except Exception as exc:  # noqa: BLE001
                 registro.incidente(t_ns=rel.agora_ns(), origem="historico.contrafactual", severidade="aviso",
                                    detalhe=f"{type(exc).__name__}: {exc}"[:300])
