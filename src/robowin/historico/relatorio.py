@@ -221,6 +221,7 @@ def escrever(res: ResultadoHistorico, perfil: PerfilInstrumento, risco: ConfigRi
     """Grava saida/dias/<D>/relatorio.{md,json} (+ ``previsoes_ia.json`` e ``contrafactuais.json`` quando houver) e
     saida/consolidado.{md,json}. Devolve os caminhos principais."""
     saida = Path(res.params.saida)
+    saida.mkdir(parents=True, exist_ok=True)
     for r in res.dias:
         d = saida / "dias" / r.data.isoformat()
         d.mkdir(parents=True, exist_ok=True)

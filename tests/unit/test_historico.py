@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -158,6 +159,18 @@ def test_historico_ponta_a_ponta(tmp_path, arm_mod, capsys):
     assert c["totais_por_braco"]["claude_gpt"]["chamadas_ia"] > 0
     assert sum(t["decisoes"] for t in c["totais_por_braco"].values()) > 0
     assert "controle_aleatorio" in c["relatorio"]["bracos"]
+    # docs/16 (WP8): FALSO separado, aviso por braco, selo recusado para o FALSO, tentativas x episodios
+    from robowin.avaliacao.relatorio import ROTULO_TETO, eh_motivo_injetado
+    rel = c["relatorio"]
+    assert "claude_gpt" in c["injetados"]["falsos"] and "quant" not in c["injetados"]["falsos"]
+    assert not any(eh_motivo_injetado(k) for k in c["bloqueios"].get("claude_gpt", {}))
+    assert set(rel["avisos_acerto_por_braco"]) >= {"quant", "claude_gpt"}
+    assert ROTULO_TETO in rel["avisos_acerto_por_braco"]["nao_operar"]  # nunca opera: sem geometria realizada
+    assert rel["bracos"]["claude_gpt"]["selo"]["selo"] == "recusado"
+    assert any("FALSO" in m for m in rel["bracos"]["claude_gpt"]["selo"]["motivos"])
+    assert not any("FALSO" in m for m in rel["bracos"]["quant"]["selo"]["motivos"])
+    assert rel["tentativas_episodios"]["claude_gpt"]["tentativas"] >= 0
+    assert "Tentativas de entrada contra episodios" in md and "Limites de risco:" in out
     for d in DIAS:
         j = json.loads((saida / "dias" / d.isoformat() / "relatorio.json").read_text(encoding="utf-8"))
         assert all(x < d.isoformat() for x in j["treino"]["dias_treino"])
@@ -166,6 +179,90 @@ def test_historico_ponta_a_ponta(tmp_path, arm_mod, capsys):
     # nao sobrescreve resultados
     assert main(["historico", "--ativo", "WIN", "--armazem", str(arm_mod.raiz), "--saida", str(saida),
                  "--provedor", "falso", "--dias", "1"]) == 2
+
+
+def _resultado_vazio(p):
+    from robowin.historico.runner import ResultadoHistorico
+    return ResultadoHistorico(p, "WIN", "falso", "teste", "2026-06", [], {}, {"total": 0.0})
+
+
+def test_cli_historico_usa_risco_para_e_aprovacao_resolvida(tmp_path, monkeypatch, capsys):
+    """C25: o CLI resolve o registro de aprovacao (versao valida mais recente) e aplica os limites por risco_para
+    (usuario+conta ou arquivo unico), nunca risco_do_ativo direto com o registro v1 fixo."""
+    import shutil
+
+    from robowin.core.config import sha256_arquivo
+    from robowin.historico import cli_cmds, runner
+    from robowin.risco import usuarios
+    raiz = tmp_path / "cfg"
+    (raiz / "aprovacoes").mkdir(parents=True)
+    risco = raiz / "risco.toml"
+    shutil.copy("config/risco.toml", risco)
+    (raiz / "aprovacoes" / "risco-v1.toml").write_text('sha256 = "' + "0" * 64 + '"\n', encoding="utf-8")
+    (raiz / "aprovacoes" / "risco-v2.toml").write_text(f'sha256 = "{sha256_arquivo(risco)}"\n', encoding="utf-8")
+    assert cli_cmds.aprovacao_efetiva(None, risco) == raiz / "aprovacoes" / "risco-v2.toml"
+    assert cli_cmds.aprovacao_efetiva(raiz / "outra.toml", risco) == raiz / "outra.toml"  # explicito, sem -vN
+    vistos: dict = {}
+
+    def falso_executar(p, ao_progresso=None):
+        vistos["params"] = p
+        return _resultado_vazio(p)
+    real = usuarios.risco_para
+
+    def espiao(sel, perfil, risco_legado, aprovacao, *, ao_vivo):
+        vistos["risco_para"] = (sel.ativa, Path(risco_legado), Path(aprovacao), ao_vivo)
+        return real(sel, perfil, risco_legado, aprovacao, ao_vivo=ao_vivo)
+    monkeypatch.setattr(runner, "executar_historico", falso_executar)
+    monkeypatch.setattr(usuarios, "risco_para", espiao)
+    monkeypatch.delenv("ROBOWIN_USUARIOS", raising=False)
+    cfg_sem_usuario = Path("config/robowin.toml")  # [geral].usuario/conta vazios = modo arquivo unico
+    cod = main(["historico", "--ativo", "WIN", "--armazem", str(tmp_path), "--saida", str(tmp_path / "s"),
+                "--provedor", "falso", "--risco", str(risco), "--config", str(cfg_sem_usuario),
+                "--usuarios", str(tmp_path / "usuarios")])
+    out = capsys.readouterr().out
+    assert cod == 0, out
+    assert vistos["params"].aprovacao == raiz / "aprovacoes" / "risco-v2.toml"
+    assert vistos["params"].usuario is None and vistos["params"].conta_negociacao is None
+    assert vistos["risco_para"] == (False, risco, raiz / "aprovacoes" / "risco-v2.toml", False)
+    assert "Limites de risco: modo arquivo unico" in out
+    # usuario sem conta: erro de configuracao (codigo 2), nunca cai para outro limite
+    assert main(["historico", "--ativo", "WIN", "--armazem", str(tmp_path), "--saida", str(tmp_path / "s2"),
+                 "--provedor", "falso", "--risco", str(risco), "--config", str(cfg_sem_usuario),
+                 "--usuario", "fulano"]) == 2
+
+
+class _BancoFalso:
+    def __init__(self, decisoes):
+        import sqlite3
+        self.con = sqlite3.connect(":memory:")
+        self.con.row_factory = sqlite3.Row
+        self.con.execute("CREATE TABLE decisoes(id TEXT, t_ns INTEGER, braco TEXT, acao TEXT, resultado TEXT, "
+                         "intencao_json TEXT)")
+        self.con.executemany("INSERT INTO decisoes VALUES (?,?,?,?,?,?)", decisoes)
+
+    def consultar(self, sql, params=()):
+        return [dict(r) for r in self.con.execute(sql, params)]
+
+
+def test_geometria_realizada_tentativas_e_resumo_por_posicao():
+    from robowin.historico.runner import _geometrias_e_tentativas, _ler_tabela, resumo_posicoes
+    it = lambda s, a: json.dumps({"stop_pontos": s, "alvo_pontos": a})  # noqa: E731
+    b = _BancoFalso([("d1", 1, "P", "COMPRAR", "executada", it(30, 40)),
+                     ("d2", 2, "P", "VENDER", "vetada", it(300, 40)),
+                     ("d3", 3, "P", "MANTER", "executada", it(10, 10)),
+                     ("d4", 4, "Q", "COMPRAR", "bloqueada", None),
+                     ("d5", 5, "P", "VENDER", "executada", it(20, 30))])
+    geo, tent = _geometrias_e_tentativas(b)
+    assert geo == {"P": [(30.0, 40.0), (20.0, 30.0)]}  # so entradas EXECUTADAS
+    assert tent == {"P": 3, "Q": 1}  # tentativas: toda decisao de entrada, vetada ou bloqueada inclusive
+    assert _ler_tabela(b, "posicoes_episodio") == []  # banco sem a migracao: vazio, nunca quebra
+    eps = [{"braco": "P", "n_parciais": 1, "n_ajustes_ia": 2, "n_ajustes_auto": 0, "liquido_total": 5.0,
+            "motivo_final": "alvo"},
+           {"braco": "P", "n_parciais": 0, "n_ajustes_ia": 0, "n_ajustes_auto": 3, "liquido_total": -2.0,
+            "motivo_final": None}]
+    r = resumo_posicoes(eps, [{"braco": "P", "aplicado": 0}, {"braco": "P", "aplicado": 1}])
+    assert r == {"P": {"episodios": 2, "parciais": 1, "ajustes_ia": 2, "ajustes_auto": 3, "liquido_total": 3.0,
+                       "motivos_final": {"alvo": 1, "aberta": 1}, "gestao_nao_aplicada": 1}}
 
 
 def test_historico_recusa_armazem_sintetico_ou_sem_marcador(tmp_path):
