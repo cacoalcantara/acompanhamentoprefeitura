@@ -449,3 +449,144 @@ def test_espelho_e_kill_zera_pelo_gateway_in_process(tmp_path):
     # reconciliacao em cima do gateway local: sem divergencia
     assert e.reconciliar(g.rel.agora_ns()) is not None
     sqlite3.connect(":memory:").close()
+
+
+# ============================================================================================ protecao / parcial ==
+class CanalLocal:
+    """Canal do espelho ligado ao gateway local (sem processo): cada envio bombeia o laco do gateway."""
+
+    def __init__(self, g):
+        self.g = g
+
+    def enviar(self, msg, timeout_s=2.0):
+        return self.g.cli.enviar(msg, timeout_s=min(timeout_s, 1.0), bombear=self.g.gw.passo)
+
+    def enviar_sem_resposta(self, msg):
+        self.g.cli.enviar_sem_resposta(msg)
+
+
+def _espelho_com_entrada(tmp_path):
+    from robowin.core.tipos import Acao, Intencao
+    g = montar_gw(tmp_path)
+    orq, banco, _ = montar_orq_demo(rel=g.rel)
+    e = EspelhoDemo(orq, ConfigEspelho(braco="a"), CanalLocal(g))
+    g.cli.enviar_sem_resposta({"tipo": "heartbeat"})
+    e.iniciar()
+    passos(g, 3)
+    e.ao_estado_gateway(g.gw.estado())
+    it = Intencao(id="i1", braco="a", acao=Acao.COMPRAR, stop_pontos=60.0, validade_ns=g.rel.agora_ns() + 10**11)
+    ask = float(g.d.symbol_info_tick(SIMB).ask)
+    r = e.espelhar_entrada(g.rel.agora_ns(), Posicao(simbolo=SIMB, lado=Lado.COMPRA, quantidade=1, preco_medio=ask), it,
+                           60.0, 80.0, 600)
+    assert r.enviado and e.crenca.ticket is not None
+    return g, e, banco, ask
+
+
+def test_espelhar_protecao_aperto_chega_a_demo_e_afrouxar_e_recusado_sem_mexer_no_sl(tmp_path):
+    g, e, banco, ask = _espelho_com_entrada(tmp_path)
+    sl0 = float(g.d.positions_get()[0].sl)
+    assert sl0 == ask - 60.0
+    r = e.espelhar_protecao(ask - 30.0, None, g.rel.agora_ns())
+    assert r.enviado and r.acao == "protecao" and r.estado == "EXECUTADA"
+    assert float(g.d.positions_get()[0].sl) == ask - 30.0 and e.crenca.stop == ask - 30.0
+    assert float(g.d.positions_get()[0].tp) == ask + 80.0  # alvo mantido
+    assert [m for m in g.d.envios if m["action"] == C.ACAO_SLTP]
+    # afrouxar: recusado pelo guardiao do gateway; a demo fica com o SL anterior e o incidente fica registrado
+    r = e.espelhar_protecao(ask - 50.0, None, g.rel.agora_ns())
+    assert not r.enviado and r.motivo.startswith("recusada:") and "afrouxaria" in r.motivo
+    assert float(g.d.positions_get()[0].sl) == ask - 30.0 and e.crenca.stop == ask - 30.0
+    assert banco.consultar("SELECT 1 FROM incidentes WHERE origem='espelho' AND detalhe LIKE 'protecao recusada%'")
+    assert any(ev[0] == "espelho_protecao_recusada" for ev in e.eventos)
+    # nada a modificar / sem posicao
+    assert e.espelhar_protecao(None, None, g.rel.agora_ns()).motivo == "nada_a_modificar"
+    assert e.resumo()["ajustes_protecao"] == 1
+
+
+def test_espelhar_protecao_recusada_pela_corretora_mantem_o_sl_anterior(tmp_path):
+    g, e, banco, ask = _espelho_com_entrada(tmp_path)
+    g.d.injetar_falhas(C.RET_STOPS_INVALIDOS)  # stops_level/freeze_level da corretora
+    r = e.espelhar_protecao(ask - 20.0, None, g.rel.agora_ns())
+    assert not r.enviado and r.ack is not None and r.ack.retcode == C.RET_STOPS_INVALIDOS
+    assert float(g.d.positions_get()[0].sl) == ask - 60.0 and e.crenca.stop != ask - 20.0
+    assert banco.consultar("SELECT 1 FROM incidentes WHERE origem='espelho' AND detalhe LIKE 'protecao recusada%'")
+    # o guardiao continua: o proximo aperto passa normalmente
+    assert e.espelhar_protecao(ask - 20.0, None, g.rel.agora_ns()).enviado
+    assert float(g.d.positions_get()[0].sl) == ask - 20.0
+
+
+def test_espelhar_protecao_sem_resposta_nao_levanta_e_registra():
+    orq, banco, rel = montar_orq_demo()
+    e = EspelhoDemo(orq, ConfigEspelho(braco="a"), CanalFalso(estado=estado_gw(), snapshot=SNAP_VAZIO,
+                                                               modificar_sltp=None))
+    e.iniciar()
+    assert e.espelhar_protecao(1.0, None, rel.agora_ns()).motivo == "sem_posicao_na_demo"
+    e.crenca = Posicao(simbolo="WINZ26", lado=Lado.COMPRA, quantidade=1, preco_medio=130005.0, ticket=77)
+    r = e.espelhar_protecao(129990.0, None, rel.agora_ns())
+    assert not r.enviado and r.motivo == "sem_resposta"
+    msg = [m for m in e.canal.enviados if m["tipo"] == "modificar_sltp"][0]
+    assert msg == {"tipo": "modificar_sltp", "ticket": 77, "sl": 129990.0, "tp": None, "dono": "nucleo"}
+    assert banco.consultar("SELECT 1 FROM incidentes WHERE detalhe LIKE 'modificar_sltp sem resposta%'")
+    e.ativo = False
+    assert e.espelhar_protecao(129995.0, None, rel.agora_ns()).motivo == "espelho_desligado"
+
+
+def _pos_snap(ticket, volume, sl=129900.0):
+    return {"ticket": ticket, "symbol": "WINZ26", "type": C.POS_COMPRA, "magic": 2001, "volume": float(volume),
+            "price_open": 130005.0, "sl": sl, "tp": 0.0, "profit": 0.0, "time_msc": 1}
+
+
+def test_saida_parcial_usa_ordem_de_saida_por_ticket_e_redescobre_o_ticket_novo():
+    orq, _, rel = montar_orq_demo()
+    snaps = [SNAP_VAZIO]
+    canal = CanalFalso(estado=estado_gw(), snapshot=lambda m: snaps[-1],
+                       ordem={"tipo": "ack", "ack": {"retcode": 10009, "order": 9, "preco": 130000.0}})
+    e = EspelhoDemo(orq, ConfigEspelho(braco="a"), canal)
+    e.iniciar()
+    assert e.saida_parcial(1, "regra", rel.agora_ns()).motivo == "sem_posicao_na_demo"
+    snaps.append({**SNAP_VAZIO, "positions": [_pos_snap(10, 3)]})
+    e.crenca = Posicao(simbolo="WINZ26", lado=Lado.COMPRA, quantidade=3, preco_medio=130005.0, ticket=10, aberta_ns=5)
+    assert not e.saida_parcial(3, "regra", rel.agora_ns()).enviado  # parcial e 1..q-1 (total e `saida`)
+    assert not e.saida_parcial(0, "regra", rel.agora_ns()).enviado
+
+    def ordem(msg):  # hedging (MT4): o restante abre com ticket NOVO
+        snaps.append({**SNAP_VAZIO, "positions": [_pos_snap(11, 3 - msg["cmd"]["quantidade"])]})
+        return {"tipo": "ack", "ack": {"retcode": 10009, "order": 9, "preco": 130000.0}}
+    canal.respostas["ordem"] = ordem
+    r = e.saida_parcial(2, "parcial", rel.agora_ns())
+    assert r.enviado and r.acao == "parcial" and r.estado == "EXECUTADA"
+    c = [m for m in canal.enviados if m["tipo"] == "ordem"][-1]["cmd"]
+    assert c["tipo"] == "saida" and c["quantidade"] == 2 and c["position_ticket"] == 10 and c["lado"] == "venda"
+    assert e.crenca.quantidade == 1 and e.crenca.ticket == 11 and e.crenca.aberta_ns == 5
+    assert e.resumo()["parciais"] == 1
+
+
+def test_espelhar_entrada_limita_pela_unidade_maxima_do_motor():
+    orq, _, rel = montar_orq_demo()
+    canal = CanalFalso(estado=estado_gw(), snapshot=SNAP_VAZIO,
+                       ordem={"tipo": "ack", "ack": {"retcode": 10009, "order": 5, "preco": 130005.0}})
+    e = EspelhoDemo(orq, ConfigEspelho(braco="a"), canal)
+    e.iniciar()
+    e.ao_estado_gateway(estado_gw())
+    from robowin.core.tipos import Acao, Intencao
+    e.motor.unidades_max = 2  # ex.: forex com volume_max_lotes (contratos_max do ConfigRisco nao vale ali)
+    assert orq.cfg.risco.contratos_max == 1
+    it = Intencao(id="i1", braco="a", acao=Acao.COMPRAR, stop_pontos=60.0, validade_ns=rel.agora_ns() + 10**11)
+    sim = Posicao(simbolo="WINZ26", lado=Lado.COMPRA, quantidade=3, preco_medio=130005.0)
+    r = e.espelhar_entrada(rel.agora_ns(), sim, it, 60.0, None, 600)
+    assert r.enviado and [m for m in canal.enviados if m["tipo"] == "ordem"][0]["cmd"]["quantidade"] == 2
+    assert e.crenca.quantidade == 2
+
+
+def test_validar_braco_espelhavel_recusa_sombra_controle_e_passivo():
+    from robowin.core.config import ErroConfig
+    from robowin.decisao.espelho import validar_braco_espelhavel
+    for b in (SimpleNamespace(id="s", familia="sombra"), SimpleNamespace(id="c", familia="controle"),
+              SimpleNamespace(id="p", familia="planejador", passivo=True), "sombra_sem_gestao", "controle_aleatorio_plano"):
+        with pytest.raises(ErroConfig, match="espelhavel"):
+            validar_braco_espelhavel(b)
+    validar_braco_espelhavel(SimpleNamespace(id="planejador", familia="planejador", passivo=False))
+    validar_braco_espelhavel("llm_imediato")
+    orq, _, _ = montar_orq_demo()
+    orq.contas["a"].braco.familia = "controle"
+    with pytest.raises(EspelhoRecusado, match="nao e espelhavel"):
+        EspelhoDemo(orq, ConfigEspelho(braco="a"), CanalFalso())

@@ -2,8 +2,9 @@
 
 - Publica ticks, livro, estado e heartbeat (1 s) pelo barramento (`PublicadorZMQ` em producao,
   `BarramentoLocal` em testes). O PUB leva numero de sequencia; o assinante detecta lacunas.
-- Atende comandos (ROUTER/DEALER ou canal local): ordem -> AckOrdem, heartbeat do nucleo, emergencia com
-  confirmacao ponta a ponta (so confirma depois de reler positions/orders e ver tudo zerado), rearme, estado.
+- Atende comandos (ROUTER/DEALER ou canal local): ordem -> AckOrdem, modificar_sltp (aperto de stop/alvo, vetado
+  pelo guardiao) -> AckOrdem, heartbeat do nucleo, emergencia com confirmacao ponta a ponta (so confirma depois de
+  reler positions/orders e ver tudo zerado), rearme, estado.
 - Hospeda o guardiao (limites rigidos) e o executor demo (unico `order_send`).
 - Guarda o log bruto da coleta em disco (sobrevive a quedas do nucleo).
 - Troca de conta / violacao da guarda interrompe o gateway.
@@ -152,6 +153,7 @@ class Gateway:
         self.executor = ExecucaoDemo(
             self.t, ConfigDemo(login=self.cfg.login, servidor=self.cfg.servidor, simbolo=simbolo,
                                modo_config=self.cfg.modo_config, msgs_por_min=self.cfg.msgs_por_min,
+                               contratos_max=self.cfg.guardiao.contratos_max,
                                espera_incerta_s=self.cfg.espera_incerta_s, lote=perfil.volume_unidade,
                                conta=self.caps.conta, modo_mm=self.cfg.modo_mm),
             self.relogio, alerta=self._alerta, registrar=registrar, relogio_srv=self.rs)
@@ -226,6 +228,24 @@ class Gateway:
         return {"tipo": "ack", "id": msg.get("id"), "ack": ack.model_dump(mode="json"),
                 "estado": estado_do_retcode(ack.retcode).value}
 
+    def _modificar_sltp(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Aperto de stop / novo alvo da posicao pelo ticket: guardiao (nunca remove nem afrouxa) -> executor.
+
+        Nenhum ``order_send`` novo: ``ExecucaoDemo.modificar_sltp`` (TRADE_ACTION_SLTP) e o caminho que ja existe.
+        Em emergencia o aperto e prioritario (so reduz o risco)."""
+        ticket = int(msg["ticket"])
+        sl = None if msg.get("sl") is None else float(msg["sl"])
+        tp = None if msg.get("tp") is None else float(msg["tp"])
+        ok, motivo = self.guardiao.avaliar_sltp(ticket, sl, tp)
+        if not ok:
+            self._alerta("sltp_recusado", {"ticket": ticket, "sl": sl, "tp": tp, "motivo": motivo})
+            ack = AckOrdem(retcode=C.RET_LOCAL_RECUSADO, comentario=f"bloqueado pelo guardiao: {motivo}")
+        else:
+            ack = self.executor.modificar_sltp(ticket, sl, tp, dono=str(msg.get("dono", "nucleo")),
+                                               prioritaria=self.guardiao.travado_emergencia)
+        return {"tipo": "ack", "id": msg.get("id"), "ack": ack.model_dump(mode="json"),
+                "estado": estado_do_retcode(ack.retcode).value, "ticket": ticket}
+
     def _emergencia(self, msg: dict[str, Any]) -> dict[str, Any]:
         origem = f"comando ({msg.get('origem', 'desconhecida')})"
         self.guardiao.acionar_emergencia(origem)
@@ -248,6 +268,8 @@ class Gateway:
             return None
         if tipo == "ordem":
             return self._ordem(msg)
+        if tipo == "modificar_sltp":
+            return self._modificar_sltp(msg)
         if tipo == "emergencia":
             return self._emergencia(msg)
         if tipo == "snapshot":  # consulta SOMENTE LEITURA (positions/orders/deals) para a reconciliacao do nucleo

@@ -245,3 +245,43 @@ def test_executor_travado_ou_incerta_bloqueia_entrada():
     assert not a.g.avaliar_entrada(cmd(Lado.COMPRA))[0]
     a.ex.travado = None
     assert a.g.avaliar_entrada(cmd(Lado.COMPRA, qtd=2)) == (False, "quantidade 2 acima de 1")
+
+
+# --- modificar SL/TP (aperto de stop vindo do espelho) ------------------------------------------------
+def test_avaliar_sltp_permite_apertar_e_recusa_afrouxar_remover_ticket_e_lado_errados():
+    a = montar(cfg_g=ConfigGuardiao(exigir_sl=True))
+    tk = abrir(a, sl=99900.0)  # compra; bid 100000
+    assert a.g.avaliar_sltp(tk, 99950.0, None) == (True, "")  # aperto (sobe)
+    assert a.g.avaliar_sltp(tk, 99900.0, None) == (True, "")  # igual ao atual: nao afrouxa
+    assert a.g.avaliar_sltp(tk, None, 100080.0) == (True, "")  # so o alvo, mantendo o SL
+    ok, m = a.g.avaliar_sltp(tk, 99850.0, None)
+    assert not ok and "afrouxaria" in m
+    for remover in (0.0, -1.0, float("nan")):
+        ok, m = a.g.avaliar_sltp(tk, remover, None)
+        assert not ok and "remover o stop" in m
+    ok, m = a.g.avaliar_sltp(tk + 999, 99950.0, None)
+    assert not ok and "inexistente" in m
+    ok, m = a.g.avaliar_sltp(tk, 100000.0, None)  # no preco de saida (bid): do lado errado
+    assert not ok and "lado errado" in m
+    ok, m = a.g.avaliar_sltp(tk, None, 99990.0)
+    assert not ok and "tp" in m and "lado errado" in m
+
+
+def test_avaliar_sltp_venda_so_desce_e_vale_mesmo_em_emergencia():
+    a = montar(cfg_g=ConfigGuardiao(exigir_sl=True))
+    tk = abrir(a, Lado.VENDA, sl=100100.0)  # venda; ask 100005
+    a.g.bloquear_ate_resolver("emergencia", "teste")  # travado (sem zerar, para testar so o veto)
+    assert a.g.travado_emergencia and not a.g.avaliar_entrada(cmd(Lado.COMPRA, sl=99900.0))[0]
+    assert a.g.avaliar_sltp(tk, 100050.0, None) == (True, "")  # aperto permitido em emergencia
+    ok, m = a.g.avaliar_sltp(tk, 100150.0, None)
+    assert not ok and "afrouxaria" in m
+    ok, m = a.g.avaliar_sltp(tk, 100000.0, None)  # abaixo do ask: lado errado
+    assert not ok and "lado errado" in m
+
+
+def test_avaliar_sltp_sem_stop_atual_exige_sl_ao_modificar():
+    a = montar(cfg_g=ConfigGuardiao(exigir_sl=True))
+    tk = abrir(a)  # aberta direto no executor, sem SL
+    ok, m = a.g.avaliar_sltp(tk, None, 100080.0)
+    assert not ok and "sem stop" in m
+    assert a.g.avaliar_sltp(tk, 99950.0, None) == (True, "")

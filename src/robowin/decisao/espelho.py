@@ -10,6 +10,13 @@ as operacoes dele para a conta demo, SEMPRE pelo gateway (unico dono de ``order_
 * saida: UM dono por posicao. Saidas por tempo/ENCERRAR/zeragem/kill (``Orquestrador._sair``) e o fechamento da
   posicao simulada (stop/alvo) acionam a MESMA saida do espelho, com ``position=<ticket>``; a reivindicacao e por
   ticket (a segunda tentativa e recusada). O SL do servidor protege a demo mesmo se o nucleo cair;
+* protecao: aperto de stop / novo alvo do simulador (gestao automatica ou ajuste da IA) chega a demo por
+  ``espelhar_protecao`` (comando ``modificar_sltp``, vetado pelo guardiao: nunca remove nem afrouxa o SL). Se a
+  corretora recusar (stops_level/freeze_level), fica registrado e a demo segue com o SL anterior;
+* saida parcial: ``saida_parcial`` usa a MESMA ordem de saida por ``position=<ticket>`` com quantidade menor; no
+  MT4 (hedging) o restante ganha ticket novo, redescoberto logo em seguida;
+* so bracos que DECIDEM sao espelhaveis (``validar_braco_espelhavel``): sombras, controles e bracos passivos nunca
+  dobram a exposicao na demo;
 * reconciliacao periodica: um snapshot atomico (positions/orders/deals do gateway) alimenta o ``Reconciliador``
   (deals classificados por ``reason``: SL/TP/SO = esperado; EXPERT = robo; CLIENT/MOBILE/WEB = intervencao
   manual). Divergencia => bloqueio de entradas (e kill switch do braco, como no resto do projeto); intervencao
@@ -28,7 +35,7 @@ from typing import Any
 
 from robowin.core import calendario_b3
 from robowin.core.config import ErroConfig
-from robowin.core.tipos import Acao, AckOrdem, EstadoOrdem, Intencao, Lado, Posicao
+from robowin.core.tipos import Acao, AckOrdem, ComandoOrdem, EstadoOrdem, Intencao, Lado, Posicao
 from robowin.execucao.oms import OMS, TERMINAIS
 from robowin.execucao.ponte_gateway import (
     CanalComandos,
@@ -36,6 +43,7 @@ from robowin.execucao.ponte_gateway import (
     EspelhamentoNaoExclusivo,
     TerminalViaGateway,
     TravaEspelho,
+    ack_de_resposta,
 )
 from robowin.execucao.reconciliacao import Reconciliador, ResultadoReconciliacao
 from robowin.execucao.roteador import Roteador
@@ -49,6 +57,25 @@ ORIGEM = "espelho"
 
 class EspelhoRecusado(ErroConfig):
     """O espelhamento nao pode ser ligado (conta nao demo, gateway mudo, conta nao zerada, outro espelho ativo...)."""
+
+
+FAMILIAS_NAO_ESPELHAVEIS = frozenset({"sombra", "controle"})
+PREFIXOS_NAO_ESPELHAVEIS = ("sombra_", "controle_")
+
+
+def validar_braco_espelhavel(braco: Any) -> None:
+    """Recusa (``ErroConfig``) espelhar sombra, controle ou braco passivo: eles replicam/sorteiam decisoes de OUTRO
+    braco e, na demo, dobrariam a exposicao. ``braco`` e o objeto do braco (``familia``/``passivo``/``id``) ou o id."""
+    if isinstance(braco, str):
+        bid, familia, passivo = braco, "", False
+    else:
+        bid = str(getattr(braco, "id", ""))
+        familia, passivo = str(getattr(braco, "familia", "")), bool(getattr(braco, "passivo", False))
+    if familia in FAMILIAS_NAO_ESPELHAVEIS or bid.startswith(PREFIXOS_NAO_ESPELHAVEIS):
+        raise EspelhoRecusado(f"braco '{bid}' (familia '{familia or bid.split('_', 1)[0]}') nao e espelhavel: "
+                              "sombras e controles nunca vao para a conta demo")
+    if passivo:
+        raise EspelhoRecusado(f"braco '{bid}' e passivo (so replica outro braco): nao e espelhavel")
 
 
 def validar_config_espelhamento(cfg: dict[str, Any], espelhar: str, *, canal_ok: bool) -> None:
@@ -81,7 +108,7 @@ class ConfigEspelho:
 
 @dataclass
 class ResultadoEspelho:
-    acao: str  # entrada | saida
+    acao: str  # entrada | saida | protecao | parcial
     enviado: bool
     motivo: str = ""
     estado: str = ""
@@ -182,6 +209,7 @@ class EspelhoDemo:
         conta = orq.contas.get(cfg.braco)
         if conta is None:
             raise EspelhoRecusado(f"[geral].espelhar = '{cfg.braco}': braco inexistente (ha: {sorted(orq.contas)})")
+        validar_braco_espelhavel(getattr(conta, "braco", cfg.braco))
         self.orq, self.cfg, self.canal, self.trava = orq, cfg, canal, trava
         self.registro = orq.registro
         self.rel = orq.rel
@@ -217,6 +245,7 @@ class EspelhoDemo:
         self.ultimo_reconc: ResultadoReconciliacao | None = None
         self.deals_vistos = {"robo": 0, "servidor": 0, "manual": 0}  # deals classificados por `reason` (acumulado)
         self.entradas = self.saidas_enviadas = 0
+        self.ajustes_protecao = self.parciais_enviadas = 0
         orq.espelho = self
 
     def _crenca_de(self, braco: str) -> Posicao:
@@ -334,7 +363,7 @@ class EspelhoDemo:
             return self._recusar("entrada", "conta_demo_nao_zerada", t_ns)
         it = Intencao(
             id=f"esp-{intencao.id}", braco=self.braco_demo, acao=Acao.COMPRAR if pos_sim.lado == Lado.COMPRA else Acao.VENDER,
-            quantidade=min(pos_sim.quantidade, self.orq.cfg.risco.contratos_max), stop_pontos=stop_pontos,
+            quantidade=min(pos_sim.quantidade, self.motor.unidades_max), stop_pontos=stop_pontos,
             alvo_pontos=alvo_pontos, tempo_max_s=tempo_max_s, validade_ns=t_ns + int(self.cfg.validade_entrada_s * NS),
             modo=intencao.modo, preco_referencia=pos_sim.preco_medio, t0_ns=t_ns)
         r = self.roteador.executar_intencao(it, Posicao(simbolo=self.simbolo_gw), t_ns, {})
@@ -344,7 +373,89 @@ class EspelhoDemo:
         if env is None or not env.enviado:
             return self._recusar("entrada", r.motivo or "nao_enviada", t_ns)
         self.entradas += 1
-        return self._apos_envio("entrada", env.ordem.estado, env.ack, pos_sim.lado, pos_sim.quantidade, t_ns)
+        return self._apos_envio("entrada", env.ordem.estado, env.ack, pos_sim.lado, it.quantidade, t_ns)
+
+    # ================================================================================== protecao ===========
+    def espelhar_protecao(self, sl: float | None, tp: float | None, t_ns: int) -> ResultadoEspelho:
+        """Leva o SL/TP novo do simulador a posicao da demo (``modificar_sltp`` pelo ticket). Nunca levanta.
+
+        ``None`` = manter o nivel atual. O guardiao do gateway recusa remover/afrouxar o stop; a corretora pode
+        recusar por stops_level/freeze_level: em qualquer recusa a demo fica com o SL ANTERIOR (que continua
+        protegendo) e um incidente e registrado."""
+        if not self.ativo:
+            return ResultadoEspelho("protecao", False, "espelho_desligado")
+        if sl is None and tp is None:
+            return ResultadoEspelho("protecao", False, "nada_a_modificar")
+        if self.crenca.quantidade <= 0:
+            return ResultadoEspelho("protecao", False, "sem_posicao_na_demo")
+        self._descobrir_ticket()
+        tk = self.crenca.ticket
+        if tk is None:
+            return self._recusar("protecao", "ticket_desconhecido", t_ns)
+        resp = self.canal.enviar({"tipo": "modificar_sltp", "ticket": tk, "sl": sl, "tp": tp, "dono": "nucleo"},
+                                 timeout_s=self.cfg.timeout_s)
+        ack = ack_de_resposta(resp)
+        if ack is None:
+            self._evento("espelho_protecao_sem_resposta", f"ticket={tk} sl={sl} tp={tp}", critico=True, t_ns=t_ns)
+            self.registro.incidente(t_ns=t_ns, origem=ORIGEM, severidade="alerta",
+                                    detalhe=f"modificar_sltp sem resposta do gateway (ticket {tk}): a demo pode ter "
+                                            "ficado com o SL anterior; a reconciliacao confere")
+            return ResultadoEspelho("protecao", False, "sem_resposta")
+        if ack.retcode != C.RET_EXECUTADA:
+            com = f"retcode={ack.retcode}: {ack.comentario}"
+            self._evento("espelho_protecao_recusada", f"ticket={tk} sl={sl} tp={tp} {com}", t_ns=t_ns)
+            self.registro.incidente(t_ns=t_ns, origem=ORIGEM, severidade="alerta",
+                                    detalhe=f"protecao recusada na demo (ticket {tk}; a demo segue com o SL anterior): "
+                                            f"{com}"[:300])
+            return ResultadoEspelho("protecao", False, f"recusada:{ack.comentario}", ack=ack)
+        upd: dict[str, Any] = {}
+        if sl is not None:
+            upd["stop"] = float(sl)
+        if tp is not None:
+            upd["alvo"] = float(tp) or None
+        self.crenca = self.crenca.model_copy(update=upd)
+        self.ajustes_protecao += 1
+        self._evento("espelho_protecao_aplicada", f"ticket={tk} sl={sl} tp={tp}", t_ns=t_ns)
+        return ResultadoEspelho("protecao", True, estado=EstadoOrdem.EXECUTADA.value, ack=ack)
+
+    def saida_parcial(self, quantidade: int, motivo: str, t_ns: int) -> ResultadoEspelho:
+        """Realiza ``quantidade`` (1..q-1) da posicao da demo: ordem ``saida`` com ``position=<ticket>``. Nunca levanta.
+
+        A saida total continua sendo ``saida`` (UM dono por ticket). No MT4 (hedging) o restante abre com ticket NOVO:
+        a crenca esquece o ticket antigo e o redescobre pelo magic."""
+        if not self.ativo:
+            return ResultadoEspelho("parcial", False, "espelho_desligado")
+        pos = self._posicao_gateway()
+        if pos.quantidade <= 0 or pos.ticket is None or pos.lado is None:
+            return ResultadoEspelho("parcial", False, "sem_posicao_na_demo")
+        if not 1 <= int(quantidade) < pos.quantidade:
+            return self._recusar("parcial", f"parcial_invalida:{quantidade}_de_{pos.quantidade}", t_ns)
+        ant = self._saidas.get(pos.ticket)
+        if ant is not None and ant[2] != EstadoOrdem.REJEITADA.value:
+            return self._recusar("parcial", f"saida_ja_reivindicada:{ant[0]}", t_ns)
+        cmd = ComandoOrdem(intencao_id=f"parcial-{motivo}-{self.braco_demo}-{t_ns}", magic=self.oms.magic(self.braco_demo),
+                           lado=Lado.VENDA if pos.lado == Lado.COMPRA else Lado.COMPRA, tipo="saida",
+                           quantidade=int(quantidade), position_ticket=pos.ticket)
+        env = self.oms.enviar(cmd, self.roteador)
+        if not env.enviado:
+            return self._recusar("parcial", env.motivo or "nao_enviada", t_ns)
+        estado = env.ordem.estado
+        com = env.ack.comentario if env.ack is not None else "sem ack"
+        if estado == EstadoOrdem.INCERTA:
+            self._evento("espelho_parcial_incerta", f"{com} (nunca reenvia; a reconciliacao resolve)", critico=True,
+                         t_ns=t_ns)
+            self.registro.incidente(t_ns=t_ns, origem=ORIGEM, severidade="alerta",
+                                    detalhe="saida parcial INCERTA no gateway; entradas bloqueadas ate reconciliar")
+        elif estado in (EstadoOrdem.EXECUTADA, EstadoOrdem.PARCIAL):
+            self.parciais_enviadas += 1
+            self._evento("espelho_parcial_executada", f"ticket={pos.ticket} q={quantidade} motivo={motivo}", t_ns=t_ns)
+            base = self.crenca if self.crenca.quantidade > 0 else pos
+            self.crenca = base.model_copy(update={"quantidade": max(pos.quantidade - int(quantidade), 0), "ticket": None})
+            self._descobrir_ticket()  # MT4/hedging: o restante tem ticket novo; netting: o mesmo ticket
+        else:
+            self._evento("espelho_parcial_recusada", f"{estado.value}: {com}", t_ns=t_ns)
+        return ResultadoEspelho("parcial", estado not in TERMINAIS or estado == EstadoOrdem.EXECUTADA,
+                                estado=estado.value, ack=env.ack)
 
     def _recusar(self, acao: str, motivo: str, t_ns: int) -> ResultadoEspelho:
         self._evento(f"espelho_{acao}_recusada", motivo, t_ns=t_ns)
@@ -505,6 +616,7 @@ class EspelhoDemo:
     # ================================================================================== resumo =============
     def resumo(self) -> dict[str, Any]:
         return {"braco": self.cfg.braco, "ativo": self.ativo, "desligado_por": self.desligado_por,
-                "entradas": self.entradas, "saidas": self.saidas_enviadas, "ordens_sem_ack": self.emissor.sem_resposta,
+                "entradas": self.entradas, "saidas": self.saidas_enviadas, "parciais": self.parciais_enviadas,
+                "ajustes_protecao": self.ajustes_protecao, "ordens_sem_ack": self.emissor.sem_resposta,
                 "crenca": self.crenca.quantidade, "bloqueio": self._bloqueio()}
 

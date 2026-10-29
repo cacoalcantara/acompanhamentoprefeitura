@@ -269,3 +269,31 @@ def test_modo_mm_nao_vale_em_hedging_limitada_nao_reduz_e_gateway_recusa(tmp_pat
     assert "ja ha posicao" in ack.comentario and len(a.d.posicoes) == 1 and a.d.pendentes == {}  # sem 'reduz': nada de 2a perna
     with pytest.raises(GuardaDemoViolada, match="modo_mm"):
         montar_gw4(tmp_path, modo_mm=True)
+
+
+def test_espelho_saida_parcial_no_duble_mt4_redescobre_o_ticket_e_aperta_o_stop_do_restante(tmp_path):
+    """MT4 (hedging): fechar parte de um ticket encerra o ticket e abre o restante com ticket NOVO ("from #...")."""
+    from test_espelho_demo import CanalLocal, montar_orq_demo
+    from test_mt4_gateway_capacidades import montar_gw4, ordem
+
+    from robowin.decisao.espelho import ConfigEspelho, EspelhoDemo
+    g = montar_gw4(tmp_path, guardiao=ConfigGuardiao(contratos_max=2))
+    orq, _, _ = montar_orq_demo(rel=g.rel)
+    e = EspelhoDemo(orq, ConfigEspelho(braco="a"), CanalLocal(g))
+    g.cli.enviar_sem_resposta({"tipo": "heartbeat"})
+    e.iniciar()
+    assert ordem(g, Lado.COMPRA, qtd=2, magic=e.cfg.magic)["estado"] == "EXECUTADA"  # posicao de 2 do espelho
+    assert e.terminal.atualizar()
+    e._adotar_posicao_do_terminal()
+    tk_antigo = e.crenca.ticket
+    assert e.crenca.quantidade == 2 and tk_antigo is not None
+    r = e.saida_parcial(1, "parcial", g.rel.agora_ns())
+    assert r.enviado and r.estado == "EXECUTADA"
+    abertos = g.d.tickets_abertos(SIMB)
+    assert len(abertos) == 1 and abertos[0] != tk_antigo  # o restante ganhou ticket novo
+    assert e.crenca.quantidade == 1 and e.crenca.ticket == abertos[0]
+    assert g.con.positions_get(symbol=SIMB)[0].volume == 1.0
+    # o aperto seguinte vai para o ticket NOVO (o antigo nao existe mais)
+    bid = float(g.con.symbol_info_tick(SIMB).bid)
+    p = e.espelhar_protecao(bid - 40.0, None, g.rel.agora_ns())
+    assert p.enviado and float(g.con.positions_get(symbol=SIMB)[0].sl) == bid - 40.0
