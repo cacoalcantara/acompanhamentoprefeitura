@@ -45,7 +45,9 @@ from robowin.decisao.saidas import GestorSaidas
 from robowin.decisao.validade import (
     PRAZOS_CONDICIONAL,
     PRAZOS_IMEDIATO,
+    PRAZOS_PLANEJADOR,
     BloqueioDados,
+    ajustar_entrada_ancorada,
     classificar_chamada,
     prazos_de_config,
     validar_frescor_entrada,
@@ -338,3 +340,86 @@ def test_teto_fixo_de_chamadas_por_dia():
     assert g.avaliar(EstadoGatilho(t_ns=T0 + 99 * NS, segundos_restantes=1.0)) == ()
     amanha = T0 + 24 * 3600 * NS
     assert g.avaliar(EstadoGatilho(t_ns=amanha, segundos_restantes=1.0))  # novo dia, novo teto
+
+
+# ----------------------------------------------------------------------- planejador (docs/16 WP5) -----
+def test_prazos_do_planejador_e_nomes_neutros():
+    assert (PRAZOS_PLANEJADOR.proponente_s, PRAZOS_PLANEJADOR.revisor_s) == (60.0, 20.0)
+    assert PRAZOS_PLANEJADOR.validade_s == 600.0 and math.isinf(PRAZOS_PLANEJADOR.desvio_max_ticks)
+    assert PRAZOS_IMEDIATO.proponente_s == PRAZOS_IMEDIATO.claude_s and PRAZOS_IMEDIATO.revisor_s == 12.0
+    pz = prazos_de_config({"prazos": {"imediato": {"proponente_s": 30, "revisor_s": 9},
+                                      "planejador": {"proponente_s": 45, "revisor_s": 15, "expira_min_max": 5}}})
+    assert (pz["imediato"].claude_s, pz["imediato"].gpt_s) == (30.0, 9.0)
+    assert (pz["planejador"].proponente_s, pz["planejador"].revisor_s, pz["planejador"].validade_s) == (45.0, 15.0, 300.0)
+    assert prazos_de_config(None)["planejador"] == PRAZOS_PLANEJADOR
+    # o nome neutro tem precedencia sobre o apelido antigo
+    assert prazos_de_config({"prazos": {"condicional": {"claude_s": 1, "proponente_s": 2}}})["condicional"].claude_s == 2.0
+
+
+def test_prazos_do_toml_real():
+    import tomllib
+    raiz = Path(__file__).resolve().parents[2]
+    cfg = tomllib.loads((raiz / "config" / "robowin.toml").read_text(encoding="utf-8"))
+    pz = prazos_de_config(cfg)
+    assert pz["planejador"] == PRAZOS_PLANEJADOR
+    assert pz["imediato"] == PRAZOS_IMEDIATO  # B/C nao mudam
+
+
+def _it_ancorada(acao=Acao.COMPRAR, stop=10 * TICK, alvo=12 * TICK, ancora=REF):
+    return Intencao(id="i", braco="p", acao=acao, stop_pontos=stop, alvo_pontos=alvo, validade_ns=T0 + 60 * NS,
+                    modo="condicional", preco_referencia=REF, ancora_t0=ancora)
+
+
+def test_ancoragem_mantem_os_niveis_absolutos_de_t0():
+    it, mot = ajustar_entrada_ancorada(_it_ancorada(), preco_exec=REF + TICK, compra=True, stop_min=2 * TICK,
+                                       alvo_min=2 * TICK, favor_max=TICK)
+    assert mot == () and it is not None
+    assert it.stop_pontos == 11 * TICK and it.alvo_pontos == 11 * TICK and it.preco_referencia == REF + TICK
+    assert (REF + TICK) - it.stop_pontos == REF - 10 * TICK  # nivel do stop identico ao visto em t0
+    it, _ = ajustar_entrada_ancorada(_it_ancorada(), preco_exec=REF - 2 * TICK, compra=True, stop_min=2 * TICK,
+                                     alvo_min=2 * TICK, favor_max=TICK)
+    assert it.stop_pontos == 8 * TICK and it.alvo_pontos == 14 * TICK
+    iv, _ = ajustar_entrada_ancorada(_it_ancorada(Acao.VENDER), preco_exec=REF - TICK, compra=False,
+                                     stop_min=2 * TICK, alvo_min=2 * TICK, favor_max=TICK)
+    assert iv.stop_pontos == 11 * TICK and iv.alvo_pontos == 11 * TICK
+
+
+@pytest.mark.parametrize("preco,kw,motivo", [
+    (REF - 9 * TICK, {}, "stop_restante_insuficiente"),
+    (REF + TICK, {"alvo": 2 * TICK}, "alvo_restante_insuficiente"),
+    (REF + 2 * TICK, {}, "perseguicao_acima_do_aceito"),
+])
+def test_ancoragem_tres_motivos(preco, kw, motivo):
+    it, mot = ajustar_entrada_ancorada(_it_ancorada(**kw), preco_exec=preco, compra=True, stop_min=2 * TICK,
+                                       alvo_min=2 * TICK, favor_max=TICK)
+    assert it is None and motivo in mot
+
+
+def test_ancoragem_sem_ancora_so_troca_a_referencia():
+    base = _it_ancorada(ancora=None)
+    it, mot = ajustar_entrada_ancorada(base, preco_exec=REF + 3 * TICK, compra=True, stop_min=0, alvo_min=0,
+                                       favor_max=0)
+    assert mot == () and it.stop_pontos == base.stop_pontos and it.preco_referencia == REF + 3 * TICK
+
+
+def test_ancoragem_recusa_preco_nao_finito():
+    it, mot = ajustar_entrada_ancorada(_it_ancorada(), preco_exec=math.nan, compra=True, stop_min=0, alvo_min=0,
+                                       favor_max=0)
+    assert it is None and mot == ("preco_invalido",)
+
+
+def test_plano_invalidado_ao_armar_nao_arma():
+    g = GerenciadorPlano("a")
+    plano = converter_plano(plano_rel(-10.0, 120, 50.0), T0)  # invalida se o preco passar de ref+50
+    evs = g.armar(base_intencao(), plano, ref=REF, t0_ns=T0, t_ns=T0, assinatura=AssinaturaPosicao(),
+                  estado_atual=est(REF + 60.0))
+    assert [e.tipo for e in evs] == ["invalidado_ao_armar"] and g.armado is None
+    assert g.historico[-1].tipo == "invalidado_ao_armar"
+    # dentro da faixa: arma normalmente
+    evs = g.armar(base_intencao(), plano, ref=REF, t0_ns=T0, t_ns=T0, assinatura=AssinaturaPosicao(),
+                  estado_atual=est(REF + 10.0))
+    assert [e.tipo for e in evs] == ["armado"]
+    # um plano novo ja invalidado nao derruba o vigente
+    evs = g.armar(base_intencao(), plano, ref=REF, t0_ns=T0, t_ns=T0 + NS, assinatura=AssinaturaPosicao(),
+                  estado_atual=est(REF + 60.0))
+    assert [e.tipo for e in evs] == ["invalidado_ao_armar"] and g.armado is not None
