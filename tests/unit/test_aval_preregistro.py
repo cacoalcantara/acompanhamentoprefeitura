@@ -53,7 +53,8 @@ def test_registro_duplicado_ou_invalido_recusado(tmp_path):
         prr.registrar(_pr("exp-c", variantes={}).model_copy(update={"variantes": {}}), tmp_path)
 
 
-@pytest.mark.parametrize("adulterar", ["campo", "remover", "toml", "reordenar"])
+@pytest.mark.parametrize("adulterar", ["campo", "remover", "toml", "reordenar", "envelope_id", "envelope_t",
+                                       "envelope_hash_anterior", "chave_extra"])
 def test_cadeia_quebrada_detectada(tmp_path, adulterar):
     prr.registrar(_pr("exp-a"), tmp_path)
     prr.registrar(_pr("exp-b", T_REG + NS), tmp_path)
@@ -62,6 +63,17 @@ def test_cadeia_quebrada_detectada(tmp_path, adulterar):
     if adulterar == "campo":
         reg = json.loads(linhas[0])
         reg["registro"]["alfa"] = 0.2
+        linhas[0] = json.dumps(reg)
+    elif adulterar.startswith("envelope_") or adulterar == "chave_extra":
+        reg = json.loads(linhas[0])  # o hash cobre so ``registro``: o envelope precisa ser conferido a parte
+        if adulterar == "envelope_id":
+            reg["id_experimento"] = "exp-x"
+        elif adulterar == "envelope_t":
+            reg["t_registro_ns"] += 1
+        elif adulterar == "envelope_hash_anterior":
+            reg["hash_anterior"] = "f" * 64
+        else:
+            reg["nota"] = "acrescentada a mao"
         linhas[0] = json.dumps(reg)
     elif adulterar == "remover":
         linhas = linhas[1:]

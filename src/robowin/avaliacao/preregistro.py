@@ -3,7 +3,8 @@
 Cada registro grava ``<id>.toml`` (o ``PreRegistro`` legivel) e acrescenta uma linha em ``registro.jsonl`` com
 ``hash_registro = sha256(hash_anterior + json canonico do registro)``, no estilo de ``auditoria/cadeia.py``. A
 primeira linha encadeia em ``GENESIS``. ``verificar`` recalcula a cadeia inteira e confere cada ``<id>.toml``
-contra a linha do JSONL: qualquer adulteracao (linha editada, removida, reordenada ou TOML divergente) levanta
+contra a linha do JSONL: qualquer adulteracao (linha editada, inclusive o envelope, removida, reordenada ou TOML
+divergente) levanta
 ``ErroPreRegistro``.
 
 ``elegivel`` diz se um pregao pode entrar na avaliacao confirmatoria do experimento (o selo do relatorio usa isto):
@@ -28,6 +29,9 @@ GENESIS = "0" * 64
 ARQUIVO_CADEIA = "registro.jsonl"
 DIR_PADRAO = Path("config/experimentos")
 RE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+# chaves de cada linha do JSONL: o envelope repete campos do registro para leitura; o hash so cobre ``registro``,
+# entao ``verificar`` exige que o envelope tenha exatamente estas chaves e espelhe o registro encadeado
+CHAVES_LINHA = frozenset({"n", "id_experimento", "t_registro_ns", "registro", "hash_anterior", "hash_registro"})
 
 
 class ErroPreRegistro(ValueError):
@@ -113,6 +117,15 @@ def verificar(dir: Path = DIR_PADRAO) -> list[PreRegistro]:
         h = calcular_hash(pr)
         if h != pr.hash_registro or reg.get("hash_registro") != h:
             raise ErroPreRegistro(f"linha {i} ({pr.id_experimento}): hash invalido (registro adulterado)")
+        if set(reg) != CHAVES_LINHA:
+            raise ErroPreRegistro(f"linha {i} ({pr.id_experimento}): chaves da linha adulteradas "
+                                  f"({sorted(set(reg) ^ CHAVES_LINHA)})")
+        envelope = {"id_experimento": pr.id_experimento, "t_registro_ns": pr.t_registro_ns,
+                    "hash_anterior": pr.hash_anterior}
+        divergentes = sorted(k for k, v in envelope.items() if reg.get(k) != v)
+        if divergentes:
+            raise ErroPreRegistro(f"linha {i} ({pr.id_experimento}): envelope diverge do registro encadeado "
+                                  f"({', '.join(divergentes)})")
         if pr.id_experimento in ids:
             raise ErroPreRegistro(f"linha {i}: id repetido {pr.id_experimento}")
         if pr.t_registro_ns < t_ant:
