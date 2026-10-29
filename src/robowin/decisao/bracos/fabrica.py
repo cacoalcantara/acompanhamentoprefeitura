@@ -80,6 +80,18 @@ ID_PLANEJADOR_REVISOR = "planejador_revisor"
 ID_SOMBRA_SEM_GESTAO = "sombra_sem_gestao"
 ID_SOMBRA_TRAILING = "sombra_trailing_fixo"
 ID_CONTROLE_PLANO = "controle_aleatorio_plano"
+IDS_DERIVADOS_PLANEJADOR = (ID_SOMBRA_SEM_GESTAO, ID_SOMBRA_TRAILING, ID_CONTROLE_PLANO)
+
+
+def referencia_derivado(nome: str, referencia_padrao: str = "planejador") -> str | None:
+    """Braco de referencia de um derivado do planejador (sombras e controle do plano copiam as entradas/planos
+    dele): ``sombra_sem_gestao`` -> ``planejador``; ``sombra_sem_gestao_<extra>`` -> ``<extra>``. Outro nome: None."""
+    for base in IDS_DERIVADOS_PLANEJADOR:
+        if nome == base:
+            return referencia_padrao
+        if nome.startswith(base + "_") and len(nome) > len(base) + 1:
+            return nome[len(base) + 1:]
+    return None
 PAPEL_PLANEJADOR = "planejador"
 PAPEL_REVISOR_PLANO = "revisor_plano"
 

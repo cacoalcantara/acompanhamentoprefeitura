@@ -240,11 +240,19 @@ def eh_motivo_injetado(motivo: str) -> bool:
 def bracos_falsos(bracos: Iterable[str], modelos_servidos: Mapping[str, Iterable[str]] | None = None, *,
                   provedor_falso: bool = False) -> set[str]:
     """Bracos servidos pelo provedor FALSO: algum modelo servido termina em ``-FALSO``; com ``provedor_falso``, todo
-    braco que chamou IA (ou todos, sem ``modelos_servidos``). Braco sem IA (quant, controles) nao e FALSO."""
+    braco que chamou IA (ou todos, sem ``modelos_servidos``). Braco sem IA (quant, controles) nao e FALSO, exceto os
+    DERIVADOS de um braco FALSO (sombras e ``controle_aleatorio_plano``, que copiam as entradas dele)."""
+    from robowin.decisao.bracos.fabrica import referencia_derivado
+    nomes = list(bracos)
     servidos = {b: [str(m) for m in ms] for b, ms in (modelos_servidos or {}).items()}
     out = {b for b, ms in servidos.items() if any(m.endswith(SUFIXO_FALSO) for m in ms)}
     if provedor_falso:
-        out |= set(servidos) if modelos_servidos is not None else set(bracos)
+        out |= set(servidos) if modelos_servidos is not None else set(nomes)
+    # sombras e controle do plano nao chamam IA, mas COPIAM as entradas/planos do planejador: herdam o FALSO
+    for b in sorted(set(nomes) | set(servidos)):
+        ref = referencia_derivado(b)
+        if ref is not None and ref in out:
+            out.add(b)
     return out
 
 
@@ -416,7 +424,7 @@ def secao_hipoteses(trades_por_braco: Mapping[str, Sequence[Trade]], *, datas_pr
                     preregistro: PreRegistro | None = None,
                     custo_api_por_pregao: Mapping[str, Mapping[str, float]] | None = None,
                     custo_api_sem_cotacao: bool = False, perda_max_dia: float | None = None,
-                    n_boot: int = 2000, seed: int = 0) -> dict[str, Any] | None:
+                    falsos: Iterable[str] = (), n_boot: int = 2000, seed: int = 0) -> dict[str, Any] | None:
     """H1-H3 (docs/16 secao 4.2): diferencas PAREADAS POR PREGAO do liquido por pregao descontado o custo de API,
     unilaterais, Holm com m = numero de comparacoes primarias (3), mais a nao inferioridade de risco P contra C
     (primeira comparacao) com as margens do pre-registro. Sem pre-registro, so calcula se os bracos padrao
@@ -430,6 +438,7 @@ def secao_hipoteses(trades_por_braco: Mapping[str, Sequence[Trade]], *, datas_pr
     n_alvo = int(preregistro.n_pregoes_alvo) if preregistro is not None else None
     datas = sorted(set(datas_pregoes))
     custos = custo_api_por_pregao or {}
+    fal = set(falsos)
     hip: dict[str, Any] = {}
     ps: dict[str, float] = {}
     for i, (c, pp) in enumerate(pares):
@@ -441,6 +450,9 @@ def secao_hipoteses(trades_por_braco: Mapping[str, Sequence[Trade]], *, datas_pr
         la = liquido_por_pregao(trades_por_braco[a], datas, custos.get(a))
         lb = liquido_por_pregao(trades_por_braco[b], datas, custos.get(b))
         r = comp.diferencas_pareadas(la, lb, n_boot=n_boot, seed=seed, n_preregistrado=n_alvo)
+        if a in fal or b in fal:  # um lado (ou a copia dele) veio do provedor FALSO: nunca vale como hipotese
+            r["injetado_falso"] = True
+            r["status"] = "injetado_falso"
         r.update(comparacao=c, tratamento=a, referencia=b,
                  custo_api_tratamento=float(sum((custos.get(a) or {}).values())),
                  custo_api_referencia=float(sum((custos.get(b) or {}).values())))
@@ -465,6 +477,8 @@ def secao_hipoteses(trades_por_braco: Mapping[str, Sequence[Trade]], *, datas_pr
     avisos: list[str] = []
     if preregistro is None:
         avisos.append("sem pre-registro: hipoteses calculadas so como exploratorias (sem afirmacao de resultado)")
+    if any(h.get("injetado_falso") for h in hip.values()):
+        avisos.append("comparacao com braco do provedor FALSO (ou derivado dele): injetada, sem afirmacao de resultado")
     if custo_api_sem_cotacao:
         avisos.append("custo de API em USD sem cotacao registrada para a moeda da conta: NAO descontado")
     if n_alvo is not None and len(datas) < n_alvo:
@@ -556,7 +570,7 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
                           preregistro=preregistro, custo_api_por_pregao=custo_api_por_pregao,
                           custo_api_sem_cotacao=custo_api_sem_cotacao,
                           perda_max_dia=risco.perda_max_dia_brl if risco is not None else None,
-                          n_boot=n_boot, seed=seed)
+                          falsos=falsos, n_boot=n_boot, seed=seed)
     if hip is not None:
         extras["hipoteses"] = hip
     if dias_perdas_seguidas is not None:

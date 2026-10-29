@@ -449,3 +449,21 @@ def _registro_h():
     return PreRegistro(id_experimento="exp-h", t_registro_ns=0, inicio_avaliacao="2026-11-01", variantes={},
                        comparacoes_primarias=relatorio.COMPARACOES_PRIMARIAS_PADRAO,
                        margens_nao_inferioridade={"pior_dia": 20.0, "drawdown": 20.0}, n_pregoes_alvo=8)
+
+
+def test_falso_do_planejador_contamina_as_sombras_e_o_controle_do_plano():
+    """As sombras e o controle do plano copiam as entradas do planejador FALSO: o selo deles e recusado e H2/H3
+    ficam marcadas como injetadas (antes: so os bracos com chamadas_llm eram FALSO)."""
+    servidos = {"planejador": ["claude-x-FALSO"], "claude_gpt_cond": ["claude-x-FALSO"]}
+    assert relatorio.bracos_falsos(_bracos_h(), servidos) >= {
+        "planejador", "sombra_sem_gestao", "sombra_trailing_fixo", "controle_aleatorio_plano"}
+    assert "quant" not in relatorio.bracos_falsos(_bracos_h(), servidos)
+    extras = relatorio.bracos_falsos(["meu", "sombra_sem_gestao_meu", "sombra_sem_gestao"], {"meu": ["m-FALSO"]})
+    assert extras == {"meu", "sombra_sem_gestao_meu"}
+    rel = relatorio.gerar_relatorio(_bracos_h(), tentativas=1, sintetico=False, contaminado=False, n_alvo=1,
+                                    n_boot=100, modelos_servidos=servidos)
+    for b in ("sombra_sem_gestao", "sombra_trailing_fixo", "controle_aleatorio_plano"):
+        s = rel["bracos"][b]["selo"]
+        assert s["selo"] == "recusado" and any("FALSO" in m for m in s["motivos"])
+    h = rel["hipoteses"]["hipoteses"]
+    assert all(x.get("injetado_falso") and not x["rejeita_h0"] for x in h.values())
