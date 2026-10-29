@@ -28,11 +28,13 @@ from typing import Any, Literal
 from robowin.core.tipos import ChamadaLLM
 from robowin.ia.dossie import canonico, verificar_anonimizacao
 from robowin.ia.esquemas import ReflexaoIA
-from robowin.ia.validadores import validar_textos_livres
+from robowin.ia.validadores import (  # _RE_PERIGOSO: fonte unica (texto_seguro)
+    _RE_PERIGOSO,
+    validar_textos_livres,
+)
 
 NS = 1_000_000_000
 MAX_CHARS_LICAO = 240
-_RE_PERIGOSO = re.compile(r"[{}\[\]`<>\\]|ignore|desconsidere|system|instruc", re.IGNORECASE)
 
 _RE_NUMERO_GRANDE = re.compile(r"\d{4,}|\d{1,3}(?:[.,]\d{3})+")  # nivel absoluto, ano ou codigo: so numeros pequenos
 

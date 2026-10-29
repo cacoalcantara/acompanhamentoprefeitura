@@ -65,7 +65,7 @@ def test_nenhum_nivel_absoluto_nem_data_no_dossie():
                  "stop_pontos": 100.0, "alvo_pontos": 150.0},
         memoria=[{"acao": "COMPRAR", "resultado_pontos": 35.0, "duracao_s": 240, "motivo_saida": "alvo"}],
         modelos={"lgbm": {"status": "nao_treinado", "saida": {"p_alta": 0.55}}},
-        statarb={"z_win_wdo": 1.2}, features={"desbalanco_book": 0.3})
+        statarb={"z_win_wdo": 1.2}, features={"livro_imb_1": 0.3})  # padrao = registro (C28)
     assert verificar_anonimizacao(d, niveis) == []
     for x in _numeros(d):
         assert abs(x) < 50_000

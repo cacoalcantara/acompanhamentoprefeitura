@@ -11,19 +11,39 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
 
+from robowin.features.registro import REGISTRO_PERMITIDO, nomes_permitidos
+
 JANELAS_S = (10, 30, 60, 300, 900)
 STATUS_VALIDOS = ("nao_treinado", "em_validacao", "validado_oos", "reprovado")
 
-FEATURES_PERMITIDAS_PADRAO = frozenset({
-    "desbalanco_book", "spread_ticks", "agressao_liquida", "intensidade_fluxo", "taxa_ticks",
-    "profundidade_rel", "vol_norm", "ret_pts_10s", "ret_pts_60s", "ret_pts_300s",
-    "dist_extremo_300s_pts", "z_statarb", "volume_rel",
+# padrao = o registro de features (C28: a lista antiga tinha nomes que nao existem no registro)
+FEATURES_PERMITIDAS_PADRAO = frozenset(nomes_permitidos())
+
+# ---- dossie v2 (braco planejador; docs/16 WP4) -----------------------------------------------------------------
+# Secoes que o chamador entrega prontas em ``extras`` (decisao/dossie_conta.secoes_planejador).
+SECOES_V2 = ("instrumento", "custos", "envelope", "sessao", "mercado", "posicao", "plano_vigente", "retorno",
+             "latencia_ia")
+# `_perto` (valor coincide com nivel absoluto) so vale nas secoes que carregam distancias de preco, e nunca em chaves
+# de dinheiro, conta, segundos, minutos ou contagens (C29: falso positivo com ativo barato e valor de 100 a 50.000).
+SECOES_PERTO = ("movimento", "posicao", "statarb", "features", "gestao", "plano_vigente")
+SUFIXOS_ISENTOS_PERTO = ("_brl", "_conta", "_s", "_min", "_restantes")
+# v2: nenhum nome de limite do usuario/conta (nomes de ConfigRisco), nenhum valor em dinheiro, nenhum dado de
+# arquivo/usuario/conta. O envelope derivado (pontos/unidades/segundos) e a unica visao dos limites.
+CHAVES_LIMITE_V2 = frozenset({
+    "limites", "contratos_max", "perda_max_operacao_brl", "perda_max_dia_brl", "perda_max_semana_brl",
+    "dd_alerta_brl", "dd_max_brl", "operacoes_dia_max", "perdas_seguidas_max", "pausa_apos_perda_s",
+    "stop_max_pontos", "slippage_folga_pontos", "entradas_de", "entradas_ate", "zeragem", "bloqueio_evento_min",
+    "ordens_min_max", "tempo_min_livro_s", "volume_max_lotes", "nocional_max_conta", "tempo_max_posicao_s",
+    "usuario", "conta", "login", "arquivo", "hash", "aprovacao", "perda_restante_dia_brl", "drawdown_brl",
 })
+# unidades que NAO entram no v2 (C30): retorno logaritmico ou valor relativo ao preco reconstroem o nivel absoluto
+# junto com as distancias em pontos.
+UNIDADES_PROIBIDAS_V2 = ("log", "relativa")
 
 CODIGOS_CATEGORIA = {
     "juros": "C01", "cambio": "C02", "inflacao": "C03", "emprego": "C04", "politica_monetaria": "C05",
@@ -121,6 +141,30 @@ def caminhos_validos(d: dict[str, Any]) -> set[str]:
     return out
 
 
+def valor_no_caminho(d: dict[str, Any], caminho: str) -> Any:
+    """Valor da folha (ou secao) no caminho pontuado de ``caminhos_validos``; ``None`` se nao existir."""
+    x: Any = d
+    for parte in caminho.split("."):
+        if isinstance(x, dict):
+            if parte not in x:
+                return None
+            x = x[parte]
+        elif isinstance(x, (list, tuple)) and parte.isdigit() and int(parte) < len(x):
+            x = x[int(parte)]
+        else:
+            return None
+    return x
+
+
+def _isento_perto(caminho: str) -> bool:
+    """C29: so secoes de distancia de preco; chaves de dinheiro/conta/segundos/minutos/contagens ficam isentas."""
+    secao = re.split(r"[.\[]", caminho, maxsplit=1)[0]
+    if secao not in SECOES_PERTO:
+        return True
+    folha = re.sub(r"\[\d+\]$", "", caminho).rsplit(".", 1)[-1]
+    return folha.endswith(SUFIXOS_ISENTOS_PERTO)
+
+
 def _perto(ordenados: list[float], v: float) -> bool:
     """Existe nivel a menos de 0,5 de v? (busca binaria; lista ordenada)"""
     import bisect
@@ -128,8 +172,11 @@ def _perto(ordenados: list[float], v: float) -> bool:
     return i < len(ordenados) and ordenados[i] < v + 0.5
 
 
-def verificar_anonimizacao(d: dict[str, Any], niveis_absolutos: Iterable[float] = ()) -> list[str]:
-    """Lista de violacoes (vazia = anonimizado)."""
+def verificar_anonimizacao(d: dict[str, Any], niveis_absolutos: Iterable[float] = (), *,
+                           perto_restrito: bool = False) -> list[str]:
+    """Lista de violacoes (vazia = anonimizado). ``perto_restrito`` (dossie v2, C29): a coincidencia com nivel
+    absoluto so e checada nas ``SECOES_PERTO`` e fora das chaves isentas. O padrao (v1) fica identico ao de antes,
+    equivalente ao verificador rapido do backtest."""
     erros: list[str] = []
     for k in _chaves(d):
         if k.lower() in _CHAVES_PROIBIDAS:
@@ -144,9 +191,67 @@ def verificar_anonimizacao(d: dict[str, Any], niveis_absolutos: Iterable[float] 
                 erros.append(f"valor parece timestamp em {caminho}")
             elif abs(v) >= _LIMITE_NIVEL_ABS:
                 erros.append(f"valor parece nivel absoluto em {caminho}")
-            elif _perto(niveis, v):
+            elif _perto(niveis, v) and not (perto_restrito and _isento_perto(caminho)):
                 erros.append(f"valor coincide com nivel absoluto em {caminho}")
     return erros
+
+
+# referencia fixa: o v2 nunca passa pelo verificador rapido do backtest (que troca `verificar_anonimizacao`)
+_verificar_anonimizacao_completa = verificar_anonimizacao
+
+
+def unidade_feature(nome: str) -> str:
+    """Unidade da feature no registro: ``pontos``, ``log``, ``relativa`` ou ``adimensional`` (``desconhecida``
+    fora do registro). Usa o campo ``unidade`` da definicao quando existir; senao, a descricao do registro."""
+    d = REGISTRO_PERMITIDO.get(nome)
+    if d is None:
+        return "desconhecida"
+    u = getattr(d, "unidade", None)
+    if isinstance(u, str) and u:
+        return u
+    desc = d.descricao.lower()
+    if "logaritm" in desc or nome.startswith("har_rv"):
+        return "log"
+    if "relativ" in desc or "percent" in desc or nome.endswith("_rel"):
+        return "relativa"
+    if nome.endswith("_pts") or "em pontos" in desc:
+        return "pontos"
+    return "adimensional"
+
+
+def _limpar(x: Any) -> Any:
+    """Copia JSON das secoes extras: float nao finito vira ``None`` (dado indisponivel); floats com 6 casas."""
+    if isinstance(x, dict):
+        return {str(k): _limpar(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_limpar(v) for v in x]
+    if isinstance(x, (bool, np.bool_)):
+        return bool(x)
+    if x is None or isinstance(x, str):
+        return x
+    if isinstance(x, (int, np.integer)):
+        return int(x)
+    if isinstance(x, (float, np.floating)):
+        return _r(float(x), 6)
+    raise ErroDossie(f"valor nao serializavel no dossie: {type(x).__name__}")
+
+
+def _tem_numero(x: Any) -> bool:
+    if isinstance(x, dict):
+        return any(_tem_numero(v) for v in x.values())
+    if isinstance(x, (list, tuple)):
+        return any(_tem_numero(v) for v in x)
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def chaves_proibidas_v2(d: dict[str, Any]) -> list[str]:
+    """Chaves que nunca entram no dossie do planejador: nomes de limite do usuario/conta e qualquer ``*_brl``."""
+    return sorted({k for k in _chaves(d) if k.lower() in CHAVES_LIMITE_V2 or k.lower().endswith("_brl")})
+
+
+def _janela_pts(ticks: Sequence[tuple[int, float]], t0_ns: int, j: int) -> float | None:
+    p = np.array([x for t, x in ticks if t0_ns - j * 1_000_000_000 <= t <= t0_ns], dtype=float)
+    return _r(_vol(p), 4) if _vol(p) is not None else None
 
 
 def _preco_em(ticks: Sequence[tuple[int, float]], t_ns: int) -> float | None:
@@ -198,14 +303,23 @@ def montar_dossie(
     posicao: dict[str, Any] | None = None, limites: dict[str, float] | None = None,
     memoria: Sequence[dict[str, Any]] = (), minutos_desde_abertura: int | None = None,
     minutos_para_zeragem: int | None = None, tick_pontos: float,
-    niveis_extras_absolutos: Iterable[float] = (),
+    niveis_extras_absolutos: Iterable[float] = (), versao: int = 1, extras: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Monta o dossie anonimizado.
 
     ``ticks``: (t_ns, preco absoluto), ate ``t0_ns``. ``posicao`` (se aberta): {lado, quantidade,
     preco_medio, aberta_ns, stop_pontos, alvo_pontos}. ``noticias``: [{categoria, direcao, relevancia,
     intensidade, horizonte_min, t_disponivel_ns}] - o texto NUNCA entra.
+
+    ``versao=1`` (padrao): identico ao de sempre. ``versao=2`` (braco planejador): sem ``limites`` (nenhum valor
+    em dinheiro nem nome de limite), ``movimento.vol_pts_60s``/``vol_pts_300s`` em pontos, features sem unidade
+    logaritmica ou relativa (C30), as secoes de ``extras`` (``SECOES_V2``; ``sessao`` e mesclada, ``posicao``
+    substitui a basica) e `_perto` restrito por caminho (C29).
     """
+    if versao not in (1, 2):
+        raise ErroDossie(f"versao de dossie desconhecida: {versao}")
+    if versao == 1 and extras:
+        raise ErroDossie("extras so existem no dossie v2")
     permitidas = frozenset(features_permitidas) if features_permitidas is not None else FEATURES_PERMITIDAS_PADRAO
     feats: dict[str, float] = {}
     for nome, val in (features or {}).items():
@@ -213,6 +327,8 @@ def montar_dossie(
             raise ErroDossie(f"feature fora da lista permitida: {nome}")
         if any(t in nome.lower() for t in _TERMOS_INDICADOR):
             raise ErroDossie(f"feature parece indicador tecnico tradicional: {nome}")
+        if versao == 2 and unidade_feature(nome) in UNIDADES_PROIBIDAS_V2 + ("desconhecida",):
+            raise ErroDossie(f"feature com unidade {unidade_feature(nome)} fora do dossie v2: {nome}")
         feats[nome] = _r(val, 4)  # type: ignore[assignment]
 
     ultimo = [p for t, p in ticks if t <= t0_ns][-1] if any(t <= t0_ns for t, _ in ticks) else None
@@ -264,7 +380,39 @@ def montar_dossie(
     niveis = [p for _, p in ticks] + list(niveis_extras_absolutos)
     if posicao and posicao.get("preco_medio"):
         niveis.append(float(posicao["preco_medio"]))
+    if versao == 2:
+        return _completar_v2(d, ticks=ticks, t0_ns=t0_ns, limites=limites, extras=extras or {}, niveis=niveis)
     erros = verificar_anonimizacao(d, niveis)
+    if erros:
+        raise ErroDossie("dossie nao anonimizado: " + "; ".join(erros))
+    return d
+
+
+def _completar_v2(d: dict[str, Any], *, ticks: Sequence[tuple[int, float]], t0_ns: int,
+                  limites: Mapping[str, float] | None, extras: Mapping[str, Any], niveis: list[float]) -> dict[str, Any]:
+    if limites:
+        raise ErroDossie("dossie v2 nao leva limites: so o envelope derivado (pontos, unidades, segundos)")
+    fora = sorted(set(extras) - set(SECOES_V2))
+    if fora:
+        raise ErroDossie(f"secao extra desconhecida no dossie v2: {fora}")
+    del d["limites"]
+    d["meta"]["versao_dossie"] = 2
+    d["movimento"]["vol_pts_60s"] = _janela_pts(ticks, t0_ns, 60)
+    d["movimento"]["vol_pts_300s"] = _janela_pts(ticks, t0_ns, 300)
+    for nome in SECOES_V2:
+        if nome not in extras:
+            continue
+        sec = _limpar(extras[nome])
+        if nome == "sessao" and isinstance(sec, dict):
+            d["sessao"] = {**d["sessao"], **sec}
+        else:
+            d[nome] = sec
+    if _tem_numero(d.get("retorno")):
+        raise ErroDossie("secao retorno do dossie v2 leva so codigos, sem numeros")
+    proib = chaves_proibidas_v2(d)
+    if proib:
+        raise ErroDossie(f"chave de limite/dinheiro no dossie v2: {proib}")
+    erros = _verificar_anonimizacao_completa(d, niveis, perto_restrito=True)
     if erros:
         raise ErroDossie("dossie nao anonimizado: " + "; ".join(erros))
     return d
