@@ -1,6 +1,7 @@
 """Politica de risco: carregamento travado por hash e coerencia interna."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from ..core.config import ErroConfig, aprovacao_pendente, carregar_risco, carregar_toml, sha256_arquivo
@@ -12,6 +13,11 @@ TETO_CONTRATOS_V1 = 1  # teto duro da v1 (simulacao): nem a politica aprovada po
 # teto duro da v1 para `volume_max_lotes` (lote fracionario em forex/CFD): 1,0 lote do terminal. Nos perfis B3 a
 # unidade ja e >= 1 lote, entao o padrao (0 = desligado) mantem 1 contrato no WIN.
 TETO_VOLUME_LOTES_V1 = 1.0
+# protecoes do motor em TICKS do instrumento (inteiros: nenhum valor de ativo no codigo). O stop de entrada nunca e
+# menor que STOP_MIN_TICKS ticks; qualquer stop/alvo ajustado fica a pelo menos DIST_MIN_STOP_TICKS ticks (+ spread)
+# do preco executavel de saida.
+STOP_MIN_TICKS = 2
+DIST_MIN_STOP_TICKS = 1
 
 
 def unidades_maximas(cfg: ConfigRisco, volume_por_unidade: float) -> int:
@@ -49,6 +55,9 @@ def validar_coerencia(cfg: ConfigRisco) -> ConfigRisco:
         erros.append("limites de operacoes/perdas/pausa invalidos")
     if cfg.bloqueio_evento_min < 0 or cfg.ordens_min_max < 1:
         erros.append("bloqueio_evento_min/ordens_min_max invalidos")
+    janela_total_s = hhmm_para_s(cfg.zeragem) - hhmm_para_s(cfg.entradas_de)
+    if not 1 <= cfg.tempo_max_posicao_s <= janela_total_s:
+        erros.append(f"tempo_max_posicao_s deve estar entre 1 e {janela_total_s} s (de entradas_de ate zeragem)")
     if erros:
         raise ErroConfig("politica de risco incoerente: " + "; ".join(erros))
     return cfg
@@ -74,10 +83,35 @@ def perda_pior_caso_brl(cfg: ConfigRisco, stop_pontos: float, quantidade: int, p
     return (stop_pontos + cfg.slippage_folga_pontos) * quantidade * ponto_valor_brl
 
 
-def stop_maximo_efetivo_pontos(cfg: ConfigRisco, ponto_valor_brl: float) -> float:
-    """Menor entre stop_max_pontos e o stop que, somado a folga, cabe em perda_max_operacao_brl."""
-    por_perda = cfg.perda_max_operacao_brl / (cfg.contratos_max * ponto_valor_brl) - cfg.slippage_folga_pontos
+def stop_maximo_efetivo_pontos(cfg: ConfigRisco, ponto_valor_brl: float, quantidade: int | None = None) -> float:
+    """Menor entre stop_max_pontos e o stop que, somado a folga, cabe em perda_max_operacao_brl com `quantidade`
+    unidades (None = `contratos_max`, o comportamento de antes)."""
+    q = cfg.contratos_max if quantidade is None else quantidade
+    por_perda = cfg.perda_max_operacao_brl / (q * ponto_valor_brl) - cfg.slippage_folga_pontos
     return min(cfg.stop_max_pontos, por_perda)
+
+
+def stop_max_por_quantidade(cfg: ConfigRisco, pv_conta: float, umax: int, restante_dia: float,
+                            restante_semana: float, *, tick: float = 0.0) -> tuple[float, ...]:
+    """Stop maximo (pontos) por quantidade q = 1..umax (indice q-1), ja descontados perda por operacao, orcamento
+    restante do dia e da semana (moeda da conta), folga de slippage e fator de conversao (em `pv_conta`):
+
+        q -> min(stop_max_pontos, min(perda_max_op, restante_dia, restante_semana) / (q * pv_conta) - folga)
+
+    Com `tick` > 0 o valor e levado para BAIXO na grade do tick (o stop anunciado sempre passa no veto). Nunca
+    negativo; `pv_conta` invalido => zeros (nenhum stop cabe)."""
+    if umax <= 0:
+        return ()
+    if not (math.isfinite(pv_conta) and pv_conta > 0):
+        return tuple(0.0 for _ in range(umax))
+    orcamento = min(cfg.perda_max_operacao_brl, restante_dia, restante_semana)
+    saida: list[float] = []
+    for q in range(1, umax + 1):
+        v = min(cfg.stop_max_pontos, orcamento / (q * pv_conta) - cfg.slippage_folga_pontos)
+        if tick > 0:
+            v = math.floor(v / tick + 1e-9) * tick
+        saida.append(max(0.0, round(v, 10)))
+    return tuple(saida)
 
 
 ROTULO_RISCO_NAO_APROVADO = "risco_nao_aprovado"

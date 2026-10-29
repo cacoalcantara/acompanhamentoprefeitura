@@ -23,6 +23,11 @@ class EstadoBraco:
     ultima_perda_ns: int | None = None
     ultimo_tamanho: int = 0
     ultima_foi_perda: bool = False
+    # episodio em andamento (parciais ja realizadas da posicao atual): fechado por `registrar_trade`.
+    # `q_max_episodio` = unidades ja realizadas em parciais; somadas as do fechamento dao o q maximo do episodio
+    # (a posicao nunca aumenta, entao q inicial = soma das unidades realizadas).
+    liquido_episodio: float = 0.0
+    q_max_episodio: int = 0
 
     @property
     def equity(self) -> float:
@@ -63,15 +68,33 @@ class ContabilidadeSessao:
     def registrar_abertura(self, braco: str, t_ns: int) -> None:
         self.estado(braco, t_ns).operacoes_dia += 1
 
-    def registrar_trade(self, braco: str, liquido_brl: float, quantidade: int, t_ns: int) -> EstadoBraco:
-        e = self.estado(braco, t_ns)
+    def _realizar(self, e: EstadoBraco, liquido_brl: float) -> None:
         e.pnl_dia += liquido_brl
         e.pnl_semana += liquido_brl
         e.equity_realizado += liquido_brl
+
+    def registrar_parcial(self, braco: str, liquido_brl: float, quantidade: int, t_ns: int) -> EstadoBraco:
+        """Parcial de uma posicao que continua aberta: soma o P&L realizado do dia/semana (limites e drawdown), sem
+        mexer em perdas seguidas, pausa nem tamanho (o episodio so fecha em `registrar_trade`)."""
+        e = self.estado(braco, t_ns)
+        self._realizar(e, liquido_brl)
+        e.pico = max(e.pico, e.equity)
+        e.liquido_episodio += liquido_brl
+        e.q_max_episodio += max(quantidade, 0)
+        return e
+
+    def registrar_trade(self, braco: str, liquido_brl: float, quantidade: int, t_ns: int) -> EstadoBraco:
+        """Fecha o episodio: perdas seguidas, pausa e martingale usam o liquido TOTAL do episodio (parciais + este
+        trade) e o q maximo do episodio (parciais + este fechamento). Sem parciais, identico a contar so este trade."""
+        e = self.estado(braco, t_ns)
+        self._realizar(e, liquido_brl)
         e.pnl_aberto = 0.0
         e.pico = max(e.pico, e.equity)
-        e.ultimo_tamanho = quantidade
-        if liquido_brl < 0:
+        total = e.liquido_episodio + liquido_brl
+        e.ultimo_tamanho = e.q_max_episodio + quantidade if e.q_max_episodio > 0 else quantidade
+        e.liquido_episodio = 0.0
+        e.q_max_episodio = 0
+        if total < 0:
             e.perdas_seguidas += 1
             e.ultima_perda_ns = t_ns
             e.ultima_foi_perda = True

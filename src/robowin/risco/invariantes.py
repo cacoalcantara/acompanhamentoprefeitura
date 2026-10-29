@@ -57,3 +57,24 @@ def inv_sem_aumento(qtd_antes: int, qtd_depois: int) -> bool:
 def inv_perda_operacao(stop_pontos: float, folga_pontos: float, quantidade: int, ponto_valor_brl: float,
                        perda_max_brl: float) -> bool:
     return (stop_pontos + folga_pontos) * quantidade * ponto_valor_brl <= perda_max_brl + 1e-9
+
+
+def inv_reducao_so_reduz(qs: Sequence[int]) -> bool:
+    """Quantidades sucessivas de uma posicao (episodio): nunca crescem e nunca ficam negativas."""
+    return all(q >= 0 for q in qs) and all(b <= a for a, b in zip(qs, qs[1:], strict=False))
+
+
+def inv_stop_monotono(lado: Lado, seq: Sequence[float | None]) -> bool:
+    """Sequencia de stops de uma posicao: cada novo stop so aperta (e nenhum e removido depois de existir)."""
+    return all(stop_so_aperta(lado, a, b) for a, b in zip(seq, seq[1:], strict=False))
+
+
+def inv_distancia_minima(lado: Lado, stop: float, preco_saida: float, dist: float) -> bool:
+    """Stop do lado certo e a pelo menos `dist` pontos do preco executavel de saida (bid na compra, ask na venda)."""
+    folga = preco_saida - stop if lado == Lado.COMPRA else stop - preco_saida
+    return folga >= dist - 1e-9
+
+
+def inv_tempo_no_teto(aberta_ns: int, prazo_ns: int, teto_s: int) -> bool:
+    """Prazo da posicao (instante, ns) nunca alem de `teto_s` segundos desde a abertura (ns)."""
+    return prazo_ns - aberta_ns <= teto_s * 1_000_000_000
