@@ -203,3 +203,61 @@ def test_ordem_incerta_via_canal_e_sem_reenvio(tmp_path):
     g.cli.enviar_sem_resposta({"tipo": "heartbeat"})
     passos(g, 6, 1.0)  # o guardiao reconcilia: encontra o deal EXPERT da ordem que "se perdeu"
     assert not g.gw.executor.bloqueada_incerta and g.d.posicao_liquida(SIMB) == 1.0
+
+
+# --- modificar_sltp (aperto de stop do espelho) ------------------------------------------------------------
+def sltp(g, ticket, sl=None, tp=None):
+    return g.cli.enviar({"tipo": "modificar_sltp", "ticket": ticket, "sl": sl, "tp": tp, "dono": "nucleo"},
+                        bombear=g.gw.passo)
+
+
+def test_modificar_sltp_aperto_chega_ao_duble_e_afrouxar_e_recusado_pelo_guardiao_e_pela_execucao(tmp_path):
+    g = montar_gw(tmp_path)
+    g.cli.enviar_sem_resposta({"tipo": "heartbeat"})
+    assert ordem(g, tp=100100.0)["estado"] == "EXECUTADA"  # compra com SL 99900
+    tk = int(g.d.positions_get()[0].ticket)
+    envios = len(g.d.envios)
+    r = sltp(g, tk, sl=99950.0)
+    assert r["tipo"] == "ack" and r["estado"] == "EXECUTADA" and r["ticket"] == tk
+    p = g.d.positions_get()[0]
+    assert p.sl == 99950.0 and p.tp == 100100.0 and g.d.envios[-1]["action"] == C.ACAO_SLTP  # TP mantido
+    assert len(g.d.envios) == envios + 1
+    # afrouxar: o guardiao recusa ANTES do executor (nada chega ao terminal)
+    r = sltp(g, tk, sl=99920.0)
+    assert r["ack"]["retcode"] == C.RET_LOCAL_RECUSADO and "guardiao" in r["ack"]["comentario"]
+    assert "afrouxaria" in r["ack"]["comentario"] and len(g.d.envios) == envios + 1
+    assert any(t == "sltp_recusado" for t, _ in g.gw.incidentes)
+    # e a execucao DEMO, sozinha, tambem recusa (defesa em profundidade)
+    assert "afrouxar" in g.gw.executor.modificar_sltp(tk, 99920.0, None).comentario
+    # remover o stop, ticket errado e alvo do lado errado: recusados
+    assert sltp(g, tk, sl=0.0)["ack"]["retcode"] == C.RET_LOCAL_RECUSADO
+    assert sltp(g, tk + 999, sl=99960.0)["ack"]["retcode"] == C.RET_LOCAL_RECUSADO
+    assert sltp(g, tk, tp=99990.0)["ack"]["retcode"] == C.RET_LOCAL_RECUSADO
+    assert g.d.positions_get()[0].sl == 99950.0 and len(g.d.envios) == envios + 1
+    # so o alvo (SL mantido)
+    assert sltp(g, tk, tp=100150.0)["estado"] == "EXECUTADA" and g.d.positions_get()[0].tp == 100150.0
+    assert g.d.positions_get()[0].sl == 99950.0
+
+
+def test_modificar_sltp_aperta_mesmo_travado_e_sem_heartbeat(tmp_path):
+    g = montar_gw(tmp_path)
+    g.cli.enviar_sem_resposta({"tipo": "heartbeat"})
+    assert ordem(g)["estado"] == "EXECUTADA"
+    tk = int(g.d.positions_get()[0].ticket)
+    g.rel.avancar(20_000_000_000)  # 20 s sem heartbeat: entradas bloqueadas, aperto nao
+    assert ordem(g, Lado.VENDA)["ack"]["retcode"] == C.RET_LOCAL_RECUSADO
+    assert sltp(g, tk, sl=99955.0)["estado"] == "EXECUTADA" and g.d.positions_get()[0].sl == 99955.0
+
+
+def test_modificar_sltp_sem_token_e_recusado(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROBOWIN_CMD_TOKEN", "segredo")
+    g = montar_gw(tmp_path)
+    g.cli.enviar_sem_resposta({"tipo": "heartbeat"})
+    assert ordem(g)["estado"] == "EXECUTADA"
+    tk = int(g.d.positions_get()[0].ticket)
+    monkeypatch.delenv("ROBOWIN_CMD_TOKEN")  # cliente SEM token
+    r = sltp(g, tk, sl=99950.0)
+    assert r["tipo"] == "erro" and "token" in r["erro"] and g.d.positions_get()[0].sl == 99900.0
+    assert any(t == "comando_sem_token" for t, _ in g.gw.incidentes)
+    monkeypatch.setenv("ROBOWIN_CMD_TOKEN", "segredo")
+    assert sltp(g, tk, sl=99950.0)["estado"] == "EXECUTADA" and g.d.positions_get()[0].sl == 99950.0
