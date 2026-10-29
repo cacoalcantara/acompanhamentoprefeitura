@@ -394,3 +394,54 @@ def test_hashes_do_planejador_no_manifesto():
     h2 = hashes_planejador(fab, {"planejador": {"ativo": True, "gatilhos": {"periodo_s": 120}}})
     assert h2["[planejador.gatilhos]"] != h["[planejador.gatilhos]"] and h2["esquema:planejador"] == h[
         "esquema:planejador"]
+
+
+# ====================================================================================== composicao padrao ===
+def _construir(tmp_path, nome: str, **kw: Any):
+    from perfis_teste import WIN
+
+    from robowin.core.relogio import RelogioSimulado
+    from robowin.decisao.simulacao import ParamsSimulacao, abrir_banco, construir_orquestrador
+    from robowin.modelos.microestrutura import ModeloMicroestrutura
+    p = ParamsSimulacao(saida=tmp_path / nome)
+    rel = RelogioSimulado(T0)
+    banco, registro, _, _ = abrir_banco(p.saida, rel, nome)
+    try:
+        return construir_orquestrador(p, rel=rel, registro=registro, ins=WIN.instrumento("WINZ26"),
+                                      modelo=ModeloMicroestrutura("logistica"), statarb=None, precos_aux=None,
+                                      sintetico=True, modo_tempo="simulado", sessao_id=nome, t_ref_ns=T0, **kw)
+    finally:
+        banco.fechar()
+
+
+def test_composicao_padrao_da_simulacao_inclui_as_variantes_do_planejador(tmp_path):
+    m = _construir(tmp_path, "comp")
+    ids = [b.id for b in m.bracos]
+    for bid in ("planejador", "planejador_revisor", "sombra_sem_gestao", "sombra_trailing_fixo",
+                "controle_aleatorio_plano"):
+        assert bid in ids
+    assert m.manifesto.modelos["planejador.proponente"] and m.manifesto.modelos["planejador_revisor.revisor"]
+    for k in ("esquema:planejador", "esquema:revisor_plano", "dsl_gestao:v1", "compilador:v1", "[planejador]",
+              "[planejador.gatilhos]", "prazos:planejador", "correcoes:v1.1", "prompt:planejador_v1.md", "prompt:revisor_plano_v1.md"):
+        assert k in m.manifesto.hashes, k
+    assert any(h.startswith("P1:") for h in m.manifesto.hipoteses)
+
+
+def test_composicao_filtrada_mantem_as_sombras_do_braco_pedido(tmp_path):
+    m = _construir(tmp_path, "filt", ids_bracos=("planejador",))
+    ids = {b.id for b in m.bracos}
+    assert {"planejador", "sombra_sem_gestao", "sombra_trailing_fixo", "controle_aleatorio_plano"} <= ids
+    assert "planejador_revisor" not in ids and "claude" not in ids
+
+
+@pytest.mark.parametrize("alvo", ["sombra_sem_gestao", "controle_aleatorio_plano"])
+def test_espelhar_sombra_ou_controle_e_recusado(tmp_path, alvo):
+    from robowin.core.config import ErroConfig
+    with pytest.raises(ErroConfig):
+        _construir(tmp_path, "esp", espelhar=alvo)
+
+
+def test_espelhar_o_planejador_liga_o_passo_espelhado(tmp_path):
+    m = _construir(tmp_path, "esp_p", espelhar="planejador")
+    (p,) = [b for b in m.bracos if b.id == "planejador"]
+    assert isinstance(p, BracoPlanejador) and p.espelhado and p.manifesto()["espelhado"]
