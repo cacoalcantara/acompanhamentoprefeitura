@@ -597,7 +597,8 @@ class Orquestrador:
             "duracao_s": max(0, (tr.t_saida_ns - tr.t_entrada_ns) // NS), "motivo_saida": motivo,
             "trade_id": f"{braco}:{conta.n_trades_memoria}"}
         conta.memoria.append(entrada_mem)
-        if (self.memoria_reflexiva is not None and conta.braco.ia
+        # a reflexao pos-trade faz parte das variantes B/C; o planejador foi pre-registrado SEM ela (docs/16 4.1)
+        if (self.memoria_reflexiva is not None and conta.braco.ia and not isinstance(conta.braco, BracoPlanejador)
                 and self._dono_memoria(conta) is conta):  # so a memoria que ALIMENTA algum dossie
             # PENDENTE: a reflexao so nasce depois do atraso de liquidacao
             self.memoria_reflexiva.registrar_trade(
@@ -1463,21 +1464,17 @@ class Orquestrador:
         """Precos absolutos dos ativos auxiliares do instante (nunca podem aparecer no dossie, C29)."""
         return tuple(float(v) for v in snap.precos_aux.values() if isinstance(v, int | float) and math.isfinite(v))
 
-    @staticmethod
-    def _posicao_basica(pos: Posicao) -> dict[str, Any] | None:
-        """Posicao do dossie v1 com stop e alvo ATUAIS do simulador (C4: um aperto aparece no dossie)."""
-        if pos.quantidade <= 0 or pos.lado is None:
-            return None
-        return {"lado": pos.lado.value, "quantidade": pos.quantidade, "preco_medio": pos.preco_medio,
-                "aberta_ns": pos.aberta_ns,
-                "stop_pontos": round(abs(pos.preco_medio - pos.stop), 10) if pos.stop is not None else None,
-                "alvo_pontos": round(abs(pos.alvo - pos.preco_medio), 10) if pos.alvo is not None else None}
-
     def _dossie(self, conta: ContaBraco, snap: Snapshot, t: int) -> dict[str, Any]:
-        if isinstance(conta.braco, BracoPlanejador):
-            return self._dossie_v2(conta, snap, t)
         braco = conta.braco.id
         pos = self.sim.posicao(braco)
+        posicao: dict[str, Any] | None = None
+        if pos.quantidade > 0 and pos.lado is not None:  # stop e alvo ATUAIS do simulador (C4, v1.1)
+            posicao = {"lado": pos.lado.value, "quantidade": pos.quantidade, "preco_medio": pos.preco_medio,
+                       "aberta_ns": pos.aberta_ns,
+                       "stop_pontos": round(abs(pos.preco_medio - pos.stop), 10) if pos.stop is not None else None,
+                       "alvo_pontos": round(abs(pos.alvo - pos.preco_medio), 10) if pos.alvo is not None else None}
+        if isinstance(conta.braco, BracoPlanejador):
+            return self._dossie_v2(conta, snap, t, posicao)
         est = conta.motor.contab.estado(braco, t)
         # v1.1: stop maximo EFETIVO para q=1 (mesma conta do veto, C2) em vez do teto bruto da politica
         limites = limites_legado(conta.motor.envelope(braco, t), est, self.cfg.risco)
@@ -1489,7 +1486,7 @@ class Orquestrador:
         return montar_dossie(
             t0_ns=t, ticks=list(self.hist), spread_pontos=max(snap.ask - snap.bid, 0.0), features=feats,
             features_permitidas=nomes_permitidos(), modelos=snap.modelos, statarb=snap.statarb,
-            noticias=snap.noticias, regime=self._regime(snap, conta, t), posicao=self._posicao_basica(pos),
+            noticias=snap.noticias, regime=self._regime(snap, conta, t), posicao=posicao,
             limites=limites, memoria=self._memoria_do_dossie(dono, t),
             minutos_desde_abertura=max(0, (seg - de) // 60),  # v1.1: abertura da janela de entradas (C18)
             minutos_para_zeragem=max(0, (zer - seg) // 60), tick_pontos=self.cfg.instrumento.tick_pontos,
@@ -1528,7 +1525,8 @@ class Orquestrador:
                 "gatilhos": [f"{c.tipo}({c.valor})" for c in p.plano.gatilhos],
                 "invalidacoes": [f"{c.tipo}({c.valor})" for c in p.plano.invalidacoes]}
 
-    def _dossie_v2(self, conta: ContaBraco, snap: Snapshot, t: int) -> dict[str, Any]:
+    def _dossie_v2(self, conta: ContaBraco, snap: Snapshot, t: int,
+                   posicao: dict[str, Any] | None) -> dict[str, Any]:
         """Dossie v2 do planejador: sem limites nem dinheiro de limite; envelope derivado, custos publicos, sessao,
         mercado, posicao com niveis ATUAIS, plano vigente, retorno (so codigos) e latencia do proprio papel."""
         braco = conta.braco.id
@@ -1558,7 +1556,7 @@ class Orquestrador:
         return montar_dossie(
             t0_ns=t, ticks=list(self.hist), spread_pontos=spread, features=feats,
             features_permitidas=nomes_permitidos(), modelos=snap.modelos, statarb=snap.statarb,
-            noticias=snap.noticias, regime=self._regime(snap, conta, t), posicao=self._posicao_basica(pos),
+            noticias=snap.noticias, regime=self._regime(snap, conta, t), posicao=posicao,
             memoria=self._memoria_do_dossie(self._dono_memoria(conta), t),
             minutos_desde_abertura=max(0, (seg - de) // 60), minutos_para_zeragem=max(0, (zer - seg) // 60),
             tick_pontos=self.cfg.instrumento.tick_pontos, niveis_extras_absolutos=self._niveis_aux(snap),
@@ -1606,8 +1604,11 @@ class Orquestrador:
 
     def _dono_memoria(self, conta: ContaBraco) -> ContaBraco:
         """Memoria de operacoes do DONO do servico de proposta (mantem o dossie de B e C identico: chamada
-        compartilhada). Bracos sem IA usam a propria."""
+        compartilhada). O planejador usa o dono do servico de planejamento (P e PC pareados). Bracos sem IA usam a
+        propria."""
         prop = getattr(conta.braco, "proponente", None)
+        if prop is None and isinstance(conta.braco, BracoPlanejador):
+            prop = conta.braco.servico
         if prop is not None:
             dono = prop.dono_de(conta.braco.modo)
             if dono in self.contas:

@@ -80,6 +80,9 @@ class ServicoFake:
     def registrar_braco(self, *_a: Any) -> None:
         return None
 
+    def dono_de(self, _modo: str) -> str:
+        return "planejador"
+
 
 class PlanejadorRoteirizado(BracoPlanejador):
     """BracoPlanejador com respostas roteirizadas (sem IA): exercita o orquestrador como o braco real."""

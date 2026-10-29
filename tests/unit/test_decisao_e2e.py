@@ -41,7 +41,10 @@ def _con(sessao):
 
 
 IDS_BRACOS = {"quant", "quant_cond", "claude", "claude_cond", "claude_gpt", "claude_gpt_cond", "nao_operar",
-              "controle_aleatorio", "controle_aleatorio_cond"}
+              "controle_aleatorio", "controle_aleatorio_cond",
+              # braco planejador ([planejador].ativo, docs/16): P, PC, sombras e controle do plano
+              "planejador", "planejador_revisor", "sombra_sem_gestao", "sombra_trailing_fixo",
+              "controle_aleatorio_plano"}
 
 
 def test_simular_imprime_resumo_rotulado_simulacao_sintetico(sessao):
@@ -71,7 +74,7 @@ def test_chamadas_llm_rotuladas_falso_com_tokens_custo_e_modelo_servido(sessao):
     assert rows and all(r["modelo_servido"] == "" or r["modelo_servido"].endswith("-FALSO") for r in rows)
     validas = [r for r in rows if r["valida"]]
     assert validas and all(r["custo_usd"] > 0 and r["hash_dossie"] and r["tokens_entrada"] > 0 for r in validas)
-    assert {r["papel"] for r in rows} <= {"proponente", "revisor"}
+    assert {r["papel"] for r in rows} <= {"proponente", "revisor", "planejador", "revisor_plano"}
     assert {"proponente", "revisor"} <= {r["papel"] for r in rows}
     # chamada compartilhada B/C: cada dossie tem UMA chamada de proponente para o par (nao uma por braco)
     por_dossie = c.execute("SELECT hash_dossie, COUNT(*) n FROM chamadas_llm WHERE papel='proponente' "
@@ -87,7 +90,8 @@ def test_decisoes_trazem_proposta_revisao_risco_e_resultado(sessao):
     assert d is not None and json.loads(d["revisao_json"])["veredito"] in ("APROVAR", "REJEITAR")
     assert d["hash_dossie"] and d["gatilho"] and json.loads(d["proposta_json"])
     resultados = {r[0] for r in c.execute("SELECT DISTINCT resultado FROM decisoes")}
-    assert resultados <= {"executada", "vetada", "bloqueada", "nao_operar", "plano_armado", "ignorada", "nao_enviada"}
+    assert resultados <= {"executada", "vetada", "bloqueada", "nao_operar", "plano_armado", "ignorada", "nao_enviada",
+                          "nao_aplicada", "manter_sem_ajuste"}
     exec_ = c.execute("SELECT * FROM decisoes WHERE resultado IN ('executada','vetada') AND risco_json IS NOT NULL"
                       ).fetchall()
     assert exec_ and "aprovada" in json.loads(exec_[0]["risco_json"])
@@ -136,7 +140,7 @@ def test_posicoes_zeradas_ao_fim_e_trades_consistentes(sessao):
         assert abs(t["liquido_brl"] - (t["bruto_brl"] - t["tarifas_brl"] - t["corretagem_brl"] - t["slippage_brl"])) < 1e-6
     # stop/alvo/tempo/zeragem: motivos deterministicos conhecidos
     motivos = {r[0] for r in c.execute("SELECT DISTINCT motivo_saida FROM trades")}
-    assert motivos <= {"stop", "alvo", "tempo", "encerrar", "zeragem", "kill", "saida"}
+    assert motivos <= {"stop", "alvo", "tempo", "encerrar", "zeragem", "kill", "saida", "gestao", "parcial"}
 
 
 def test_auditoria_com_cadeia_de_hash_integra_e_adulteracao_detectada(sessao):
