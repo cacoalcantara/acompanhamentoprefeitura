@@ -42,10 +42,10 @@ import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from urllib.parse import urlsplit
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
+from urllib.parse import urlsplit
 
 import numpy as np
 import pandas as pd

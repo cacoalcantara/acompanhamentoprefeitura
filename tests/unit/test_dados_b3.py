@@ -19,16 +19,16 @@ from robowin.dados.b3_negocios import (
     ErroFormatoB3,
     baixar_b3,
     baixar_pregao,
+    caminho_proveniencia,
     config_b3,
     importar_arquivo,
-    caminho_proveniencia,
     lado_regra_do_tick,
     ler_arquivo,
     origem_do_armazem,
     registrar_proveniencia,
     url_da_b3,
-    verificar_proveniencia,
     validar_zip,
+    verificar_proveniencia,
 )
 from robowin.dados.sintetico import ConfigSintetico, gerar
 from robowin.dados.ticks import ArmazenamentoTicks, MisturaDeDados
