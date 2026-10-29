@@ -77,7 +77,7 @@ from .bracos.base import BracoBase, ContextoDecisao, Geometria, ResultadoDecisao
 from .bracos.controles import BracoAleatorio, BracoAleatorioPlano
 from .bracos.planejador import BracoPlanejador
 from .bracos.sombra import BracoSombra
-from .dossie_conta import CustosPublicos, custos_publicos, limites_legado, secoes_planejador
+from .dossie_conta import CustosPublicos, codigo_retorno, custos_publicos, limites_legado, secoes_planejador
 from .dsl_plano import EstadoPlano
 from .espelho import validar_braco_espelhavel
 from .gatilhos import ConfigGatilhos, EstadoGatilho, GerenciadorGatilhos
@@ -231,6 +231,13 @@ def _chave_bloqueio(motivo: str) -> str:
     if motivo.startswith(MOTIVO_VETO):
         return MOTIVO_VETO
     return motivo.split(":", 1)[-1] if motivo.startswith("ia:") else motivo
+
+
+def _codigo_retorno(motivo: object) -> str | None:
+    """Codigo do motivo para a secao ``retorno`` do dossie, sem o detalhe livre apos ``: `` (que traz numeros do
+    envelope, ex. ``quantidade_fora_do_envelope: 3 (1..2)``, invisiveis com ``expor_envelope="nenhum"``)."""
+    m = str(motivo)
+    return codigo_retorno(MOTIVO_VETO if m.startswith(MOTIVO_VETO) else m)
 
 
 def _meio(tick: Tick) -> float:
@@ -974,7 +981,7 @@ class Orquestrador:
                 motivos = tuple(f"ancoragem:{m}" for m in viol)
                 conta.stats["bloqueadas"] += 1
                 conta.stats["bloq:ancoragem"] += 1
-                conta.retorno = {"ultima_entrada": "bloqueada", "motivos": list(viol)}
+                conta.retorno = {"ultima_entrada": "bloqueada", "motivos": [c for c in map(_codigo_retorno, viol) if c]}
                 self.registro.evento_risco(t_ns=t, braco=conta.braco.id, tipo="entrada_bloqueada",
                                            detalhe=";".join(motivos)[:300])
                 r0 = ResultadoDecisao(braco=conta.braco.id, modo="condicional", t0_ns=t, ciclo_id=it.id, acao=it.acao,
@@ -1163,7 +1170,8 @@ class Orquestrador:
             self.registro.evento_risco(t_ns=res.t0_ns, braco=res.braco, tipo="entrada_bloqueada",
                                        detalhe=";".join(res.motivos)[:300])
             if isinstance(braco, BracoPlanejador):
-                conta.retorno = {"ultima_decisao": "bloqueada", "motivos": [_chave_bloqueio(m) for m in res.motivos]}
+                codigos = [c for c in map(_codigo_retorno, res.motivos) if c]
+                conta.retorno = {"ultima_decisao": "bloqueada", "motivos": codigos}
             return
         if res.rotulos:
             conta.rotulos.update(res.rotulos)

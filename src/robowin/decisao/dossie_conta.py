@@ -71,14 +71,29 @@ def _filtrar(m: Mapping[str, Any] | None, chaves: Sequence[str]) -> dict[str, An
 
 
 def _so_codigos(m: Mapping[str, Any] | None) -> dict[str, Any]:
-    """``retorno``: so codigos (texto, booleanos e listas de texto), nunca numeros."""
+    """``retorno``: so codigos (texto, booleanos e listas de texto), nunca numeros.
+
+    Texto com detalhe livre vira so o seu rotulo (antes de ``:``, sem ``ia:``) e o que ainda tiver digito e
+    descartado: o detalhe de uma recusa (``stop_acima_do_envelope: 60 > 42.5``) revelaria limites derivados do envelope."""
     out: dict[str, Any] = {}
     for k, v in (m or {}).items():
-        if isinstance(v, bool | str):
+        if isinstance(v, bool):
             out[k] = v
+        elif isinstance(v, str):
+            c = codigo_retorno(v)
+            if c is not None:
+                out[k] = c
         elif isinstance(v, list | tuple) and all(isinstance(x, str) for x in v):
-            out[k] = list(v)
+            out[k] = [c for c in (codigo_retorno(x) for x in v) if c is not None]
     return out
+
+
+def codigo_retorno(texto: str) -> str | None:
+    """Codigo puro (``veto:stop_colado_no_preco`` fica); texto livre ou com numeros fica so com o rotulo."""
+    t = (texto[3:] if texto.startswith("ia:") else texto).strip()
+    if any(ch.isdigit() or ch.isspace() or ch in ",()<>=." for ch in t):
+        t = t.split(":", 1)[0].strip()
+    return None if not t or any(not (ch.isalpha() or ch in "_:-") for ch in t) else t
 
 
 def _latencia(m: Mapping[str, Any] | None) -> dict[str, Any]:

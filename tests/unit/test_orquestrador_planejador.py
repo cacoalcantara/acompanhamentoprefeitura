@@ -495,3 +495,11 @@ def test_e2e_falso_planejador_episodios_gestao_e_invariantes(sessao_falso):
                "AND braco LIKE 'planejador%'"):
         it = json.loads(d["intencao_json"]) if d.get("intencao_json") else {}
         assert it.get("posicao_ticket") is not None
+
+
+def test_retorno_da_decisao_bloqueada_leva_so_o_codigo():
+    """Caminho ``bloqueada``: o texto do validador (com limites do envelope) e cortado no codigo."""
+    from robowin.decisao.orquestrador import _codigo_retorno
+    assert _codigo_retorno("ia:quantidade_fora_do_envelope: 3 (1..2)") == "quantidade_fora_do_envelope"
+    assert _codigo_retorno("ia:entrada_impossivel: perda_diaria_atingida") == "entrada_impossivel"
+    assert _codigo_retorno("veto_por_odds: p=0.1") == "veto_por_odds"

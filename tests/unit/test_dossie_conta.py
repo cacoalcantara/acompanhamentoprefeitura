@@ -144,3 +144,17 @@ def test_limites_legado_usa_stop_efetivo_q1():
     assert d == {"perda_restante_dia_brl": cfg.perda_max_dia_brl - 50.0,
                  "operacoes_restantes": float(cfg.operacoes_dia_max - 3),
                  "contratos_max": float(cfg.contratos_max), "stop_max_pontos": 40 * TICK}
+
+
+def test_retorno_nao_vaza_numeros_do_envelope_nos_motivos():
+    """Com expor_envelope="nenhum", o detalhe das recusas do validador (com limites do envelope) nao chega a IA."""
+    motivos = ["quantidade_fora_do_envelope: 3 (1..2)", "ia:stop_acima_do_envelope: 60 > 42.5 - faixa_favor 0",
+               "tempo_fora_do_envelope: 900 fora de [30, 300]", "entrada_impossivel: perda_diaria_atingida,semana",
+               "veto:stop_colado_no_preco", "x9"]
+    sec = _secoes(expor="nenhum", retorno={"ultima_decisao": "bloqueada", "motivos": motivos, "d": "a: 42"})
+    assert sec["retorno"] == {"ultima_decisao": "bloqueada", "d": "a",
+                              "motivos": ["quantidade_fora_do_envelope", "stop_acima_do_envelope",
+                                          "tempo_fora_do_envelope", "entrada_impossivel",
+                                          "veto:stop_colado_no_preco"]}
+    txt = json.dumps(sec["retorno"])
+    assert not any(ch.isdigit() for ch in txt) and "perda_diaria_atingida" not in txt
