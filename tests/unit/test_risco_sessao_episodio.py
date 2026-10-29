@@ -76,3 +76,25 @@ def test_martingale_usa_q_maximo_do_episodio():
 
     assert "martingale_proibido" not in entrada(2).motivos
     assert "martingale_proibido" in entrada(3).motivos
+
+
+def test_parcial_tira_a_fatia_realizada_do_pnl_aberto_sem_contar_duas_vezes():
+    """marcar(-400) com 2 unidades e parcial de 1 realizando -200: o dia vale -400, nao -600 (kill falso)."""
+    c = ContabilidadeSessao()
+    c.marcar_a_mercado("b", -400.0, T(10, 0))
+    e = c.registrar_parcial("b", -200.0, 1, T(10, 0, 1), restante=1)
+    assert e.pnl_aberto == -200.0 and e.pnl_dia_total == -400.0 and e.drawdown == 400.0
+    cfg = ConfigRisco()
+    m = MotorRiscoPadrao(cfg, INS)
+    perda = cfg.perda_max_dia_brl
+    m.marcar_a_mercado("b", -0.8 * perda, T(10, 0))
+    m.registrar_parcial("b", -0.4 * perda, 1, T(10, 0, 1), restante=1)
+    assert not m.kill.ativo  # a perda real (0.8 do limite) nao passou do limite
+
+
+def test_parcial_com_lucro_nao_cria_drawdown_fantasma():
+    c = ContabilidadeSessao()
+    c.marcar_a_mercado("b", 400.0, T(10, 0))
+    c.registrar_parcial("b", 200.0, 1, T(10, 0, 1), restante=1)
+    e = c.marcar_a_mercado("b", 200.0, T(10, 0, 2))  # o preco nao andou: a unidade restante segue em +200
+    assert e.pico == 400.0 and e.drawdown == 0.0

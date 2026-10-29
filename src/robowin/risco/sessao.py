@@ -73,10 +73,18 @@ class ContabilidadeSessao:
         e.pnl_semana += liquido_brl
         e.equity_realizado += liquido_brl
 
-    def registrar_parcial(self, braco: str, liquido_brl: float, quantidade: int, t_ns: int) -> EstadoBraco:
+    def registrar_parcial(self, braco: str, liquido_brl: float, quantidade: int, t_ns: int, *,
+                          restante: int | None = None) -> EstadoBraco:
         """Parcial de uma posicao que continua aberta: soma o P&L realizado do dia/semana (limites e drawdown), sem
-        mexer em perdas seguidas, pausa nem tamanho (o episodio so fecha em `registrar_trade`)."""
+        mexer em perdas seguidas, pausa nem tamanho (o episodio so fecha em `registrar_trade`).
+
+        ``restante`` (unidades que continuam abertas): a fatia realizada SAI de ``pnl_aberto`` (a ultima marcacao
+        ainda inclui as ``quantidade`` unidades fechadas), senao o mesmo P&L conta duas vezes no dia e no pico ate a
+        proxima marcacao a mercado. Sem ``restante`` (chamador antigo), ``pnl_aberto`` fica como esta."""
         e = self.estado(braco, t_ns)
+        if restante is not None:
+            q_antes = max(int(restante), 0) + max(int(quantidade), 0)
+            e.pnl_aberto = e.pnl_aberto * max(int(restante), 0) / q_antes if q_antes > 0 else 0.0
         self._realizar(e, liquido_brl)
         e.pico = max(e.pico, e.equity)
         e.liquido_episodio += liquido_brl

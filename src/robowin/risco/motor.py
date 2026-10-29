@@ -179,10 +179,12 @@ class MotorRiscoPadrao:
         self.verificar_automatico(braco, t_ns)
         return e
 
-    def registrar_parcial(self, braco: str, liquido_brl: float, quantidade: int, t_ns: int) -> EstadoBraco:
+    def registrar_parcial(self, braco: str, liquido_brl: float, quantidade: int, t_ns: int, *,
+                          restante: int | None = None) -> EstadoBraco:
         """Parcial de posicao que continua aberta: so P&L (dia/semana/drawdown); o episodio fecha em
-        `registrar_trade` (perdas seguidas, pausa e martingale contam o episodio, nao cada pedaco)."""
-        e = self.contab.registrar_parcial(braco, liquido_brl, quantidade, t_ns)
+        `registrar_trade` (perdas seguidas, pausa e martingale contam o episodio, nao cada pedaco). ``restante``:
+        unidades que continuam abertas (a fatia realizada sai do P&L aberto, sem contar duas vezes)."""
+        e = self.contab.registrar_parcial(braco, liquido_brl, quantidade, t_ns, restante=restante)
         self.verificar_automatico(braco, t_ns)
         return e
 

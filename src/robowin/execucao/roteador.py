@@ -214,7 +214,7 @@ class Roteador:
                 # parcial (restante > 0) so soma P&L; o trade que fecha o episodio conta perdas/martingale
                 parcial = getattr(self.motor, "registrar_parcial", None) if e.restante > 0 else None
                 if parcial is not None:
-                    parcial(e.braco, e.trade.liquido_brl, e.quantidade or 1, e.trade.t_saida_ns)
+                    parcial(e.braco, e.trade.liquido_brl, e.quantidade or 1, e.trade.t_saida_ns, restante=e.restante)
                 else:
                     self.motor.registrar_trade(e.braco, e.trade.liquido_brl, e.quantidade or 1, e.trade.t_saida_ns)
 

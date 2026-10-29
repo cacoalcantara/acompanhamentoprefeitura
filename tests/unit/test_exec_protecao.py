@@ -190,10 +190,11 @@ class Aprova:
 class MotorEspiao(MotorRiscoPadrao):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
-        self.parciais, self.fechados = [], []
+        self.parciais, self.fechados, self.restantes = [], [], []
 
-    def registrar_parcial(self, braco, liquido_brl, quantidade, t_ns):
+    def registrar_parcial(self, braco, liquido_brl, quantidade, t_ns, *, restante=None):
         self.parciais.append((braco, quantidade))
+        self.restantes.append(restante)
 
     def registrar_trade(self, braco, liquido_brl, quantidade, t_ns):
         self.fechados.append((braco, quantidade))
@@ -278,6 +279,7 @@ def test_reducao_vira_saida_parcial_e_registra_parcial_no_risco():
     rot.processar_eventos(s.on_tick(tick(20, 130000.0, 130010.0)), T0 + 20 * MS)
     assert s.posicao("b1").quantidade == 2 and [o.restante for o in alvos(s)] == [2]
     assert motor.parciais == [("b1", 1)] and motor.fechados == []
+    assert motor.restantes == [2]  # a fatia realizada sai do P&L aberto (sem contar duas vezes)
     rel.avancar_para(T0 + 25 * MS)
     fim = Intencao(id="enc", braco="b1", acao=Acao.ENCERRAR, validade_ns=T0 + int(60e9), posicao_ticket=pos.ticket)
     rot.executar_intencao(fim, s.posicao("b1"), T0 + 25 * MS)
