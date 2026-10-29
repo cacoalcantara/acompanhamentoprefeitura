@@ -18,7 +18,21 @@ inteligência; servem só para provar o encanamento). Tempo: 584 s; memória: 2,
 Leitura honesta: **nenhum braço mostrou vantagem**. O quant foi o menos ruim e é o único cujo IC inclui zero,
 mas 29 operações em 7 pregões é amostra insuficiente (selo `nao_validado`; o pré-registro exige centenas de
 operações). O risco funcionou: bloqueios por perdas seguidas, limite diário, rolagem e pausa após perda aparecem
-nos motivos. A geometria padrão do perfil (stop 250 / alvo 30 pontos) exige acerto de 92–94% só para empatar; ela é
-hipótese a revisar no manifesto, não recomendação. Os braços com IA só têm significado com chaves reais
+nos motivos.
+
+**Correção (docs/16, C1).** A versão anterior deste texto dizia que "a geometria padrão do perfil (stop 250 / alvo
+30 pontos) exige acerto de 92–94%". Essa combinação junta o **teto** de stop do risco (250) com o alvo padrão (30)
+e **nenhum braço a usou**. As geometrias realizadas foram:
+
+- quant e controles: stop 30 / alvo 30 pontos / 60 s;
+- braços com IA FALSA: stop 30 / alvo 40 pontos / 300 s.
+
+Com os custos do perfil (`avaliacao.relatorio.custos_do_perfil`: R$ 1,50 no cenário-base e R$ 2,72 no de
+estresse, por contrato e ida e volta), o acerto de equilíbrio (`estatistica.acerto_equilibrio`) é de ≈62–73% para
+30/30 e de ≈54–62% para 30/40. O rascunho da especificação citava ≈59% e ≈52%, calculados com custos menores; os
+valores acima são os do código. O relatório passou a mostrar o aviso **por braço**, com as medianas de stop e alvo
+das entradas executadas; sem geometria, o texto diz "teto, nao geometria usada".
+
+Os braços com IA só têm significado com chaves reais
 (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` como *secrets* do repositório ou no seu Windows). O relatório completo
 (por dia, qualidade dos dados, latências) está no artefato `historico-b3` da execução.
