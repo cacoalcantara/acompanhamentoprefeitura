@@ -83,12 +83,13 @@ class ExecucaoBacktest:
         return any(not o.eh_entrada for o in self.oms.abertas(braco))
 
     def pnl_aberto_brl(self, braco: str) -> float:
-        """Marcacao a mercado pelo lado de saida (bid para comprado, ask para vendido)."""
+        """Marcacao a mercado pelo lado de saida (bid para comprado, ask para vendido), na MOEDA DA CONTA (o mesmo
+        fator de conversao dos trades do simulador; os limites do motor sao nessa moeda)."""
         p = self.sim.carteira(braco).pos
         if p.qtd <= 0 or p.lado is None or self.ultimo_tick is None:
             return 0.0
         bid, ask = cotacao_valida(self.ultimo_tick)
-        pv = self.ins.ponto_valor_brl
+        pv = self.ins.ponto_valor_brl * self.sim.fator_conta(self.ultimo_tick.t_utc_ns)
         return ((bid - p.preco_medio) if p.lado == Lado.COMPRA else (p.preco_medio - ask)) * p.qtd * pv
 
     def marcar(self, braco: str, t_ns: int) -> None:

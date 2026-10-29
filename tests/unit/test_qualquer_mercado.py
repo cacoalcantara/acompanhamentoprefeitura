@@ -524,3 +524,21 @@ def test_aceitacao_eurusd_confirmado_no_duble_sem_reprovacoes(tmp_path, monkeypa
     assert "volume=0.01 (esperado 0.01)=True" in est["A5.2"]["detalhe"]
     if moeda_conta == "BRL":
         assert "USDBRL" in est["A2.4"]["detalhe"]
+
+
+def test_backtest_pnl_aberto_na_moeda_da_conta():
+    """``ExecucaoBacktest.pnl_aberto_brl`` (o que o motor confere contra os limites) usa o fator dos trades."""
+    from robowin.backtest.executor import ExecucaoBacktest
+    p = P("EURUSD")
+    t0 = ny(2026, 11, 10, 10, 0)
+    rel = RelogioSimulado(t0)
+    ins = p.instrumento("EURUSD", moeda_conta="BRL")
+    s = SimuladorExecucao(ins, rel, custos=Custos.do_perfil(p, corretagem_ida_volta_brl=0.0), conversor=lambda _t: 5.4)
+    s.registrar_braco("b1", 7)
+    s.on_tick(_tick(t0 - MS, 1.10000, 1.10010))
+    s.enviar(_cmd())
+    s.on_tick(_tick(t0 + MS, 1.10000, 1.10010))
+    ex = object.__new__(ExecucaoBacktest)
+    ex.sim, ex.ins = s, ins
+    ex.ultimo_tick = _tick(t0 + 2 * MS, 1.10110, 1.10120)
+    assert ex.pnl_aberto_brl("b1") == pytest.approx((1.10110 - 1.10010) * ins.ponto_valor_brl * 5.4)

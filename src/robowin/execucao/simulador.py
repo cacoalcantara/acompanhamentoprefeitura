@@ -205,6 +205,14 @@ class SimuladorExecucao:
             return f
         return None
 
+    def fator_conta(self, t_ns: int) -> float:
+        """Fator para a MOEDA DA CONTA na marcacao a mercado (mesma conversao dos trades): o do instante, senao o
+        ultimo observado, senao 1.0. Sem aviso (roda a cada tick); a saida, que realiza, avisa em ``_fator_saida``."""
+        f = self.fator(t_ns)
+        if f is not None:
+            return f
+        return self._ultimo_fator if self._ultimo_fator is not None else 1.0
+
     def _fator_saida(self, t_ns: int) -> float:
         """Saidas nunca sao bloqueadas: sem cotacao no instante, usa a ULTIMA cotacao observada (registrado)."""
         f = self.fator(t_ns)

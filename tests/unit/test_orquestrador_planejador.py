@@ -192,7 +192,7 @@ async def test_regra_sem_progresso_encerra_pelo_gestor_de_saidas():
     assert len(ep) == 1 and ep[0]["motivo_final"] == "gestao:sem_progresso"
 
 
-def _orq_forex(bracos: list[Any]) -> tuple[Any, Any, int, Any]:
+def _orq_forex(bracos: list[Any], moeda_conta: str = "USD", conversor: Any = None) -> tuple[Any, Any, int, Any]:
     """Orquestrador num perfil FOREX (EURUSD, conta em USD, `volume_max_lotes=0.05` => 5 unidades de 0.01 lote)."""
     import datetime as dt
     from zoneinfo import ZoneInfo
@@ -203,14 +203,14 @@ def _orq_forex(bracos: list[Any]) -> tuple[Any, Any, int, Any]:
     from robowin.decisao.gatilhos import ConfigGatilhos
     from robowin.decisao.orquestrador import ConfigOrquestrador, Orquestrador
     from robowin.decisao.registro import Registro
-    ins = carregar_perfil("EURUSD", permitir_a_confirmar=True).instrumento("EURUSD", moeda_conta="USD")
+    ins = carregar_perfil("EURUSD", permitir_a_confirmar=True).instrumento("EURUSD", moeda_conta=moeda_conta)
     t0 = int(dt.datetime(2026, 11, 10, 10, 0, tzinfo=ZoneInfo("America/New_York")).timestamp() * 1e9)
     risco = ConfigRisco(volume_max_lotes=0.05, stop_max_pontos=0.0050, slippage_folga_pontos=0.0002,
                         perda_max_operacao_brl=60.0, entradas_de="09:15", entradas_ate="11:30", zeragem="12:00")
     banco = BancoSQLite(":memory:")
     cfg = ConfigOrquestrador(
         instrumento=ins, risco=risco, sessao_id="fx", passo_s=1.0, checagem_s=1.0, exigir_aquecimento=False,
-        latencia_exec_ns=0, gatilhos=ConfigGatilhos(periodo_s=1.0, intervalo_min_s=1.0, e_brl_min=1e18,
+        latencia_exec_ns=0, conversor=conversor, gatilhos=ConfigGatilhos(periodo_s=1.0, intervalo_min_s=1.0, e_brl_min=1e18,
                                                     z_statarb_min=1e18, evento_posicao=False, max_chamadas_dia=None))
     orq = Orquestrador(cfg, relogio=RelogioSimulado(t0), registro=Registro(banco, None, "fx"), bracos=bracos)
     return orq, banco, t0, ins
@@ -537,3 +537,26 @@ async def test_saida_total_com_parcial_em_voo_nao_queima_o_id_e_sai_depois():
     assert orq.sim.posicao("a").quantidade == 0
     assert conta.saida_adiada is None
     assert len(_db(banco, "SELECT * FROM trades WHERE braco='a'")) == 2
+
+
+async def test_marcacao_a_mercado_converte_para_a_moeda_da_conta():
+    """Conta em BRL num par cotado em USD: o P&L aberto que o motor confere contra os limites (na moeda da conta)
+    leva o MESMO fator de conversao dos trades (antes ia na moeda de lucro, somado ao realizado em BRL)."""
+    from robowin.core.tipos import Tick
+    tp = 0.00001
+    fator = 5.0
+    b = BracoRoteirizado("a", [lambda s, c: _entrada(c, s, stop=300 * tp, alvo=3000 * tp, q=1, tempo=300), _nada])
+    orq, _banco, t0, ins = _orq_forex([b], moeda_conta="BRL", conversor=lambda _t: fator)
+
+    def f(i: int, bid: float) -> Tick:
+        t = t0 + i * NS
+        return Tick(t_servidor_ms=t // 1_000_000, t_utc_ns=t, t_recebido_ns=t, bid=bid, ask=bid + 2 * tp, last=0.0,
+                    volume=0.0, flags=6)
+
+    await alimentar(orq, [f(i, 1.08) for i in range(3)])
+    pos = orq.sim.posicao("a")
+    assert pos.quantidade == 1
+    await alimentar(orq, [f(3, 1.08 - 50 * tp)])
+    e = orq.contas["a"].motor.contab.estado("a", orq.t_ultimo_ns)
+    esperado = (1.08 - 50 * tp - pos.preco_medio) * pos.quantidade * ins.ponto_valor_brl * fator
+    assert e.pnl_aberto == pytest.approx(esperado)

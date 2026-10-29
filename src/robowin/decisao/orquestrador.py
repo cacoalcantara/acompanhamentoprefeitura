@@ -679,12 +679,13 @@ class Orquestrador:
             pos = self.sim.posicao(conta.braco.id)
             if pos.quantidade <= 0 or pos.lado is None:
                 continue
+            f = self.sim.fator_conta(t)  # na MOEDA DA CONTA, como os trades e os limites do motor
             if pos.lado == Lado.COMPRA:
                 mk = tick.bid or tick.last
-                pnl = (mk - pos.preco_medio) * pos.quantidade * ins.ponto_valor_brl
+                pnl = (mk - pos.preco_medio) * pos.quantidade * ins.ponto_valor_brl * f
             else:
                 mk = tick.ask or tick.last
-                pnl = (pos.preco_medio - mk) * pos.quantidade * ins.ponto_valor_brl
+                pnl = (pos.preco_medio - mk) * pos.quantidade * ins.ponto_valor_brl * f
             conta.motor.marcar_a_mercado(conta.braco.id, pnl, t)
             est = conta.meta.estado if conta.meta is not None else None
             if est is not None:  # MFE/MAE pela mesma referencia de disparo do stop no simulador
