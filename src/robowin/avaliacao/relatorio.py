@@ -237,15 +237,24 @@ def eh_motivo_injetado(motivo: str) -> bool:
     return any(p.strip() in MOTIVOS_INJETADOS for p in str(motivo).split(":"))
 
 
+def bracos_falsos(bracos: Iterable[str], modelos_servidos: Mapping[str, Iterable[str]] | None = None, *,
+                  provedor_falso: bool = False) -> set[str]:
+    """Bracos servidos pelo provedor FALSO: algum modelo servido termina em ``-FALSO``; com ``provedor_falso``, todo
+    braco que chamou IA (ou todos, sem ``modelos_servidos``). Braco sem IA (quant, controles) nao e FALSO."""
+    servidos = {b: [str(m) for m in ms] for b, ms in (modelos_servidos or {}).items()}
+    out = {b for b, ms in servidos.items() if any(m.endswith(SUFIXO_FALSO) for m in ms)}
+    if provedor_falso:
+        out |= set(servidos) if modelos_servidos is not None else set(bracos)
+    return out
+
+
 def secao_injetados(motivos_por_braco: Mapping[str, Mapping[str, int]],
                     modelos_servidos: Mapping[str, Iterable[str]] | None = None, *,
                     provedor_falso: bool = False) -> dict[str, Any]:
     """Secao "injetado (FALSO)": contagens de ``resposta_tardia``, ``erro_http`` e ``divergencia_revisor`` dos bracos
     servidos pelo FALSO (modelo servido terminando em ``-FALSO``, ou toda a execucao com ``provedor_falso``). Sao
     falhas INJETADAS por seed: ficam so aqui, nunca entram em comparacao entre bracos."""
-    falsos = {b for b, ms in (modelos_servidos or {}).items() if any(str(m).endswith(SUFIXO_FALSO) for m in ms)}
-    if provedor_falso:
-        falsos |= set(motivos_por_braco) | set(modelos_servidos or {})
+    falsos = bracos_falsos(motivos_por_braco, modelos_servidos, provedor_falso=provedor_falso)
     bracos: dict[str, dict[str, int]] = {}
     for b in sorted(falsos):
         sel = {m: int(n) for m, n in sorted((motivos_por_braco.get(b) or {}).items()) if eh_motivo_injetado(m)}
@@ -351,15 +360,18 @@ def gerar_relatorio(trades_por_braco: Mapping[str, Sequence[Trade]], *, tentativ
     if dir_preregistro is not None:  # tentativas do DSR = variantes registradas na cadeia (nunca menos)
         _, n_cadeia = motivos_preregistro(None, dir_preregistro=dir_preregistro)
         tentativas = max(tentativas, n_cadeia or 0)
-    selo_kw: dict[str, Any] = {}
-    if preregistro is not None or dir_preregistro is not None or provedor_falso:
-        selo_kw = {"preregistro": preregistro, "dir_preregistro": dir_preregistro, "provedor_falso": provedor_falso,
-                   "hashes_variantes": hashes_variantes,
-                   "datas_pregoes": tuple(datas_pregoes) if datas_pregoes is not None else tuple(dias)}
+    falsos = bracos_falsos(trades_por_braco, modelos_servidos, provedor_falso=provedor_falso)
+
+    def selo_kw(nome: str) -> dict[str, Any]:
+        if preregistro is None and dir_preregistro is None and nome not in falsos:
+            return {}
+        return {"preregistro": preregistro, "dir_preregistro": dir_preregistro, "provedor_falso": nome in falsos,
+                "hashes_variantes": hashes_variantes,
+                "datas_pregoes": tuple(datas_pregoes) if datas_pregoes is not None else tuple(dias)}
     bracos = {nome: _relatorio_braco(nome, ts, n_alvo=n_alvo, tentativas=tentativas, sintetico=sintetico,
                                      contaminado=contaminado, cfg_ir=cfg_impostos, n_boot=n_boot, seed=seed,
                                      var_sr_tentativas=var_sr_tentativas, calcula_tributo=calcula_tributo,
-                                     selo_kw=selo_kw)
+                                     selo_kw=selo_kw(nome))
               for nome, ts in trades_por_braco.items()}
     comparacoes: dict[str, Any] = {}
     if controle and controle in trades_por_braco:

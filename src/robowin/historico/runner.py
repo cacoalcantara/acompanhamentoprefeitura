@@ -28,6 +28,7 @@ from robowin.core.config import ErroConfig
 from robowin.core.instrumentos import PerfilInstrumento, perfil_da_config
 from robowin.core.relogio import RelogioSimulado
 from robowin.core.tipos import Tick, Trade
+from robowin.dados import decisao_ia
 from robowin.dados.b3_negocios import ORIGEM as ORIGEM_B3
 from robowin.dados.b3_negocios import ROTULO_REAL_B3
 from robowin.dados.ticks import ArmazenamentoTicks
@@ -79,6 +80,12 @@ class ParamsHistorico:
     catalogo: Path = field(default_factory=lambda: RAIZ_CONFIG / "modelos.toml")
     risco: Path = field(default_factory=lambda: RAIZ_CONFIG / "risco.toml")
     aprovacao: Path = field(default_factory=lambda: RAIZ_CONFIG / "aprovacoes" / "risco-v1.toml")
+    # limites por USUARIO + CONTA (risco.usuarios.risco_para); ambos None => modo arquivo unico (risco/aprovacao)
+    usuario: str | None = None
+    conta_negociacao: str | None = None
+    dir_usuarios: Path | None = None
+    # gancho opcional: contrafactuais do planejador (avaliacao.contrafactual; so diagnostico, nunca limites)
+    contrafactuais: bool = False
 
 
 def params_de_config(cfg: Mapping[str, Any] | None, **kw: Any) -> ParamsHistorico:
@@ -197,6 +204,15 @@ class ResultadoDia:
     tempos_s: dict[str, float]
     banco: str
     latencias_brutas: dict[str, list[float]] = field(default_factory=dict, repr=False)  # para o consolidado
+    # docs/16 (WP8): geometria realizada, tentativas x episodios, gestao por posicao, previsoes e contrafactuais
+    geometrias: dict[str, list[tuple[float, float]]] = field(default_factory=dict, repr=False)
+    tentativas_entrada: dict[str, int] = field(default_factory=dict)
+    modelos_servidos: dict[str, list[str]] = field(default_factory=dict)
+    episodios: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    eventos_gestao: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    posicoes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    previsoes_ia: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    contrafactuais: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def como_dict(self) -> dict[str, Any]:
         return {"data": self.data.isoformat(), "simbolo": self.simbolo, "contaminacao": self.contaminacao,
@@ -204,7 +220,9 @@ class ResultadoDia:
                 "trades": {b: [_trade_dict(t) for t in ts] for b, ts in self.trades.items()},
                 "bloqueios": self.bloqueios, "eventos_risco": self.eventos_risco, "latencias": self.latencias,
                 "treino": self.treino, "maquina_do_tempo": self.maquina_do_tempo, "dados": self.dados,
-                "tempos_s": self.tempos_s, "banco": self.banco}
+                "tempos_s": self.tempos_s, "banco": self.banco, "posicoes": self.posicoes,
+                "tentativas_entrada": self.tentativas_entrada, "n_previsoes_ia": len(self.previsoes_ia),
+                "n_contrafactuais": len(self.contrafactuais)}
 
 
 def _trade_dict(t: Trade) -> dict[str, Any]:
@@ -240,7 +258,8 @@ def simular_dia(p: ParamsHistorico, dados: DadosDia, *, perfil: PerfilInstrument
         seed=p.seed, saida=saida_dia, provedor=provedor, config=p.config, catalogo=p.catalogo, risco=p.risco,
         aprovacao=p.aprovacao, com_condicional=p.com_condicional, p_timeout=p.p_timeout, p_http=p.p_http,
         periodo_ia_s=p.periodo_ia_s, idade_max_dado_s=p.idade_max_dado_s, ativo=perfil.simbolo_base,
-        tipo_modelo=p.tipo_modelo)
+        tipo_modelo=p.tipo_modelo, usuario=p.usuario, conta_negociacao=p.conta_negociacao,
+        dir_usuarios=p.dir_usuarios)
     rel = RelogioSimulado(dados.ticks[0].t_utc_ns)
     sessao_id = f"historico-{d.isoformat()}-{p.seed}"
     banco, registro, caminho, _ = abrir_banco(saida_dia, rel, sessao_id)
@@ -270,6 +289,24 @@ def simular_dia(p: ParamsHistorico, dados: DadosDia, *, perfil: PerfilInstrument
         trades = {b: list(orq.sim.carteira(b).trades) for b in orq.contas}
         decisoes = banco.consultar("SELECT t_ns, braco, acao, resultado, motivos, hash_dossie FROM decisoes "
                                    "ORDER BY t_ns, id")
+        geometrias, tentativas = _geometrias_e_tentativas(banco)
+        servidos: dict[str, list[str]] = {}
+        for r in banco.consultar("SELECT DISTINCT braco, modelo_servido FROM chamadas_llm ORDER BY braco"):
+            if r["modelo_servido"]:
+                servidos.setdefault(str(r["braco"]), []).append(str(r["modelo_servido"]))
+        contrafs: list[dict[str, Any]] = []
+        if p.contrafactuais:
+            try:  # so diagnostico: um erro aqui nunca derruba o pregao
+                from robowin.avaliacao.contrafactual import contrafactuais_da_sessao
+                contrafs = contrafactuais_da_sessao(banco, dados.ticks, perfil=perfil)
+            except Exception as exc:  # noqa: BLE001
+                registro.incidente(t_ns=rel.agora_ns(), origem="historico.contrafactual", severidade="aviso",
+                                   detalhe=f"{type(exc).__name__}: {exc}"[:300])
+        episodios = _ler_tabela(banco, decisao_ia.EPISODIOS)
+        eventos_gestao = _ler_tabela(banco, decisao_ia.GESTAO)
+        previsoes = _ler_tabela(banco, decisao_ia.PREVISOES)
+        if p.contrafactuais and not contrafs:
+            contrafs = _ler_tabela(banco, decisao_ia.CONTRAFACTUAIS)
         bloqueios: dict[str, Counter[str]] = {}
         for r in decisoes:
             if r["resultado"] in ("vetada", "bloqueada"):
@@ -298,7 +335,63 @@ def simular_dia(p: ParamsHistorico, dados: DadosDia, *, perfil: PerfilInstrument
                "compactar_ms": dados.compactacao.janela_ms, "fator_compactacao": round(dados.compactacao.fator, 3),
                "qualidade": dados.qualidade},
         tempos_s={"carga": round(dados.segundos_carga, 2), "replay": round(time.perf_counter() - t_ini, 2)},
-        banco=str(caminho), latencias_brutas=lats)
+        banco=str(caminho), latencias_brutas=lats, geometrias=geometrias, tentativas_entrada=tentativas,
+        modelos_servidos=servidos, episodios=episodios, eventos_gestao=eventos_gestao,
+        posicoes=resumo_posicoes(episodios, eventos_gestao), previsoes_ia=previsoes, contrafactuais=contrafs)
+
+
+ENTRADAS = ("COMPRAR", "VENDER")
+
+
+def _ler_tabela(banco: Any, tabela: str) -> list[dict[str, Any]]:
+    """Linhas de uma tabela de ``dados/decisao_ia`` (vazio se o banco nao tem a tabela: sessao sem planejador)."""
+    try:
+        return list(banco.consultar(f"SELECT * FROM {tabela} ORDER BY id"))
+    except Exception:  # noqa: BLE001 - tabela ausente (banco antigo/sem migracao) => vazio
+        return []
+
+
+def _geometrias_e_tentativas(banco: Any) -> tuple[dict[str, list[tuple[float, float]]], dict[str, int]]:
+    """(stop, alvo) das entradas EXECUTADAS por braco (base do aviso de acerto por braco, C1) e tentativas de entrada
+    (toda decisao COMPRAR/VENDER registrada, inclusive vetada/bloqueada; C19)."""
+    geo: dict[str, list[tuple[float, float]]] = {}
+    tent: Counter[str] = Counter()
+    for r in banco.consultar("SELECT braco, acao, resultado, intencao_json FROM decisoes ORDER BY t_ns, id"):
+        if r["acao"] not in ENTRADAS:
+            continue
+        b = str(r["braco"])
+        tent[b] += 1
+        if r["resultado"] != "executada" or not r["intencao_json"]:
+            continue
+        try:
+            it = json.loads(r["intencao_json"])
+        except (TypeError, ValueError):
+            continue
+        s, a = it.get("stop_pontos"), it.get("alvo_pontos")
+        if isinstance(s, (int, float)) and isinstance(a, (int, float)) and s > 0 and a > 0:
+            geo.setdefault(b, []).append((float(s), float(a)))
+    return geo, dict(tent)
+
+
+def resumo_posicoes(episodios: list[dict[str, Any]], eventos: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Resumo POR POSICAO (episodio) do pregao, por braco: episodios, parciais, ajustes da IA e automaticos,
+    eventos de gestao nao aplicados, liquido somado e motivos de saida."""
+    out: dict[str, dict[str, Any]] = {}
+    for e in episodios:
+        b = str(e.get("braco"))
+        x = out.setdefault(b, {"episodios": 0, "parciais": 0, "ajustes_ia": 0, "ajustes_auto": 0,
+                               "liquido_total": 0.0, "motivos_final": {}, "gestao_nao_aplicada": 0})
+        x["episodios"] += 1
+        x["parciais"] += int(e.get("n_parciais") or 0)
+        x["ajustes_ia"] += int(e.get("n_ajustes_ia") or 0)
+        x["ajustes_auto"] += int(e.get("n_ajustes_auto") or 0)
+        x["liquido_total"] += float(e.get("liquido_total") or 0.0)
+        m = str(e.get("motivo_final") or "aberta")
+        x["motivos_final"][m] = x["motivos_final"].get(m, 0) + 1
+    for ev in eventos:
+        if not int(ev.get("aplicado") or 0) and str(ev.get("braco")) in out:
+            out[str(ev.get("braco"))]["gestao_nao_aplicada"] += 1
+    return out
 
 
 # ================================================================================================ todos os pregoes

@@ -34,7 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from robowin.core import calendario_b3
+from robowin.core.config import ErroConfig
 from robowin.core.ids import hash_json
 from robowin.core.instrumentos import ativo_de, perfil_de_instrumento
 from robowin.core.protocolos import Banco, Braco
@@ -47,6 +47,7 @@ from robowin.core.tipos import (
     Lado,
     Trade,
 )
+from robowin.decisao.dossie_conta import limites_legado
 from robowin.execucao.custos import Custos
 from robowin.execucao.oms import OrdemOMS
 from robowin.execucao.preenchimento import ParamsSlippage, cotacao_valida
@@ -57,7 +58,7 @@ from robowin.ia.dossie import ErroDossie, hash_dossie, montar_dossie
 from robowin.ia.reflexao import MemoriaReflexiva, liquidar_pendentes
 from robowin.risco.kill_switch import EventoKill
 from robowin.risco.motor import EstadoMercado, EventoAgenda
-from robowin.risco.tempo import dia_sp, hhmm_para_s, segundos_do_dia
+from robowin.risco.tempo import dia_sp, segundos_do_dia
 
 from .anonimizacao import anonimizacao_rapida
 from .executor import ExecucaoBacktest
@@ -268,6 +269,15 @@ class _Gravador:
 
 
 # ============================================================================================ motor
+FAMILIAS_SO_ORQUESTRADOR = ("planejador",)  # docs/16: plano + gestao por tick + episodios so no Orquestrador
+
+
+def braco_so_ao_vivo(braco: Any) -> bool:
+    """Braco da familia ``planejador`` (pela ``familia`` ou pelo ``tipo``): o backtest nao compila o plano, nao executa
+    a gestao automatica nem grava episodios, entao recusa em vez de rodar algo diferente do ao vivo."""
+    return any(str(getattr(braco, attr, "") or "") in FAMILIAS_SO_ORQUESTRADOR for attr in ("familia", "tipo"))
+
+
 class MotorBacktest:
     """Executa UM cenario sobre uma fonte de eventos com N bracos. Uso unico (`executar()` so uma vez)."""
 
@@ -280,6 +290,11 @@ class MotorBacktest:
         ids = [b.id for b in bracos]
         if len(set(ids)) != len(ids):
             raise ValueError("ids de bracos duplicados")
+        recusados = [b.id for b in bracos if braco_so_ao_vivo(b)]
+        if recusados:
+            raise ErroConfig(f"braco planejador nao roda no backtest ({', '.join(recusados)}): use o Orquestrador/"
+                             "historico (`robowin simular` ou `robowin historico`), que compila o plano, executa a "
+                             "gestao e grava os episodios")
         self.fonte, self.bracos, self.cfg, self.banco = fonte, list(bracos), cfg, banco
         self.servico_reflexao = servico_reflexao  # ServicoLLM (papel reflexao) ou duble com ``chamar``
         self.memoria_reflexiva: MemoriaReflexiva | None = None
@@ -590,9 +605,10 @@ class MotorBacktest:
     def _dossie(self, braco: str, t: int, vetor: dict[str, float], bid: float, ask: float) -> dict[str, Any]:
         cfg, ins = self.cfg, self.cfg.instrumento
         pos = self.exec.posicao(braco)
-        est = self.exec.motor.contab.estado(braco, t)
-        d = dia_sp(t)
-        g = calendario_b3.sessao_em(d, perfil_de_instrumento(ins))
+        motor = self.exec.motor
+        est = motor.contab.estado(braco, t)
+        # mesma janela do ao vivo (C18 [v1.1]): o `de` efetivo (config x grade), nao a abertura fixa da grade
+        de, _, zer = motor.limites_janela_s(dia_sp(t))
         s = segundos_do_dia(t)
         posicao = None
         if pos.quantidade > 0 and pos.lado is not None:
@@ -605,11 +621,11 @@ class MotorBacktest:
             return montar_dossie(
                 t0_ns=t, ticks=list(self._ring), spread_pontos=ask - bid, features=vetor,
                 features_permitidas=nomes_permitidos(), posicao=posicao,
-                limites={"perda_restante_dia_brl": cfg.cfg_risco.perda_max_dia_brl + est.pnl_dia_total,
-                         "operacoes_restantes": float(cfg.cfg_risco.operacoes_dia_max - est.operacoes_dia),
-                         "perdas_seguidas": float(est.perdas_seguidas), "drawdown_brl": est.drawdown},
-                memoria=self._memoria_do_dossie(braco, t), minutos_desde_abertura=int((s - hhmm_para_s(g.abertura)) // 60),
-                minutos_para_zeragem=int((hhmm_para_s(g.zeragem) - s) // 60), tick_pontos=ins.tick_pontos,
+                # paridade com o ao vivo [v1.1]: limites do dossie v1 pela MESMA dossie_conta.limites_legado (stop
+                # maximo EFETIVO para q=1 do envelope do motor; C2)
+                limites=limites_legado(motor.envelope(braco, t), est, cfg.cfg_risco),
+                memoria=self._memoria_do_dossie(braco, t), minutos_desde_abertura=max(0, (s - de) // 60),
+                minutos_para_zeragem=max(0, (zer - s) // 60), tick_pontos=ins.tick_pontos,
                 regime="normal" if self._feed_ok else "feed_instavel", **extras)
 
     def _memoria_do_dossie(self, braco: str, t: int) -> list[dict[str, Any]]:
