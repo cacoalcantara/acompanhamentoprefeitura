@@ -3,6 +3,12 @@
 Este modulo NAO importa MetaTrader5 e NAO chama `order_send`: no modo `gateway_demo` apenas entrega o
 `ComandoOrdem` ao gateway por callback (o gateway, unico dono de `order_send`, valida conta DEMO etc.).
 O modo `real` nao existe nesta versao: construir o roteador nele levanta `ExecucaoRealNaoAutorizada`.
+
+`MANTER` com `Intencao.ajuste` (braco planejador): os niveis vem em PONTOS DE RESULTADO desde o preco medio da
+posicao, viram precos absolutos arredondados em direcao ao preco e sao aplicados por
+`SimuladorExecucao.modificar_protecao`; a recusa aparece em `ResultadoExecucao.motivo`
+(`protecao_nao_aplicada:<motivo>`), nunca como "executada". `reduzir_quantidade` vira uma SAIDA parcial (saidas
+nunca esperam aprovacao por hash).
 """
 from __future__ import annotations
 
@@ -33,6 +39,7 @@ class ResultadoExecucao:
     cmd: ComandoOrdem | None = None
     envio: ResultadoEnvio | None = None
     motivo: str = ""
+    niveis_aplicados: tuple[float | None, float | None] | None = None  # (sl, tp) vigentes apos ajuste aplicado
 
 
 class Roteador:
@@ -44,7 +51,7 @@ class Roteador:
         emissor_gateway: Callable[[ComandoOrdem], AckOrdem | None] | None = None,
         politica: PoliticaExecucao | None = None, antimanipulacao: MonitorAntimanipulacao | None = None,
         bloqueio_externo: Callable[[], str] | None = None,
-        posicao_fn: Callable[[str], Posicao] | None = None, exigir_aprovacao: bool = False,
+        posicao_fn: Callable[[str], Posicao] | None = None, exigir_aprovacao: bool = True,
     ) -> None:
         if modo == "real":
             raise ExecucaoRealNaoAutorizada("ordens reais nao implementadas na v1")
@@ -95,12 +102,59 @@ class Roteador:
                             tipo="limitada" if tipo == "limitada" else "mercado", quantidade=it.quantidade,
                             preco=preco, sl=sl, tp=tp)
 
-    def _montar_saida(self, intencao_id: str, braco: str, pos: Posicao) -> ComandoOrdem | None:
+    def _montar_saida(self, intencao_id: str, braco: str, pos: Posicao, quantidade: int | None = None,
+                      ticket: int | None = None) -> ComandoOrdem | None:
+        """Saida (total ou parcial com ``quantidade``); ``ticket`` (o visto em t0) prevalece sobre o da posicao."""
         if pos.quantidade <= 0 or pos.lado is None:
             return None
         lado = Lado.VENDA if pos.lado == Lado.COMPRA else Lado.COMPRA
+        q = pos.quantidade if quantidade is None else min(quantidade, pos.quantidade)
         return ComandoOrdem(intencao_id=intencao_id, magic=self.oms.magic(braco), lado=lado, tipo="saida",
-                            quantidade=pos.quantidade, position_ticket=pos.ticket)
+                            quantidade=q, position_ticket=ticket if ticket is not None else pos.ticket)
+
+    def _niveis_ajuste(self, it: Intencao, pos: Posicao) -> tuple[float | None, float | None]:
+        """(sl, tp) absolutos do ``ajuste``: preco medio +/- pontos de resultado, arredondados em direcao ao preco."""
+        aj = it.ajuste
+        if aj is None or pos.lado is None:
+            return None, None
+        compra = pos.lado == Lado.COMPRA
+        sinal = 1.0 if compra else -1.0
+        sl = tp = None
+        if aj.stop_resultado_pontos is not None:  # compra: stop abaixo do preco => arredonda para cima
+            sl = self._arred(pos.preco_medio + sinal * aj.stop_resultado_pontos, compra)
+        if aj.alvo_resultado_pontos is not None:  # compra: alvo acima do preco => arredonda para baixo
+            tp = self._arred(pos.preco_medio + sinal * aj.alvo_resultado_pontos, not compra)
+        return sl, tp
+
+    def _aplicar_protecao(self, it: Intencao, pos: Posicao, sl: float | None,
+                          tp: float | None) -> tuple[str, tuple[float | None, float | None] | None]:
+        """Aplica SL/TP no simulador; devolve (motivo da recusa ou "", niveis vigentes apos aplicar)."""
+        if self.sim is None:
+            return "protecao_nao_aplicada:sem_simulador", None
+        m = self.sim.modificar_protecao(it.braco, it.posicao_ticket, sl, tp)
+        if m is not None:
+            return f"protecao_nao_aplicada:{m}", None
+        p = self.sim.posicao(it.braco)
+        return "", (p.stop, p.alvo)
+
+    def _executar_ajuste(self, it: Intencao, posicao: Posicao, dec: DecisaoRisco) -> ResultadoExecucao:
+        """MANTER com ``ajuste``: protecao (sl/tp) e, independentemente dela, a reducao (saida parcial)."""
+        aj = it.ajuste
+        assert aj is not None
+        motivo, niveis = "", None
+        sl, tp = self._niveis_ajuste(it, posicao)
+        if sl is not None or tp is not None:
+            motivo, niveis = self._aplicar_protecao(it, posicao, sl, tp)
+        r = aj.reduzir_quantidade
+        if r is None:
+            return ResultadoExecucao(dec, motivo=motivo or "nada_a_enviar", niveis_aplicados=niveis)
+        if not 1 <= r < posicao.quantidade:  # o motor ja veta; defesa em profundidade (nunca zera nem aumenta)
+            return ResultadoExecucao(dec, motivo=motivo or "reducao_invalida", niveis_aplicados=niveis)
+        cmd = self._montar_saida(it.id, it.braco, posicao, quantidade=r, ticket=it.posicao_ticket)
+        if cmd is None:
+            return ResultadoExecucao(dec, motivo=motivo or "nada_a_enviar", niveis_aplicados=niveis)
+        env = self.oms.enviar(cmd, self)
+        return ResultadoExecucao(dec, cmd, env, motivo or env.motivo, niveis_aplicados=niveis)
 
     def executar_intencao(self, it: Intencao, posicao: Posicao, t_ns: int,
                           estado: dict[str, float] | None = None) -> ResultadoExecucao:
@@ -123,10 +177,13 @@ class Roteador:
                                              motivo=mot)
             cmd = self._montar_entrada(it, estado or {})
         elif it.acao == Acao.ENCERRAR:
-            cmd = self._montar_saida(it.id, it.braco, posicao)
+            cmd = self._montar_saida(it.id, it.braco, posicao, ticket=it.posicao_ticket)
+        elif it.acao == Acao.MANTER and it.ajuste is not None and posicao.lado:
+            return self._executar_ajuste(it, posicao, dec)
         elif it.acao == Acao.MANTER and it.stop_pontos is not None and self.sim is not None and posicao.lado:
             novo = it.preco_referencia - it.stop_pontos if posicao.lado == Lado.COMPRA else it.preco_referencia + it.stop_pontos
-            self.sim.modificar_stop(it.braco, self._arred(novo, posicao.lado == Lado.COMPRA))
+            m, niveis = self._aplicar_protecao(it, posicao, self._arred(novo, posicao.lado == Lado.COMPRA), None)
+            return ResultadoExecucao(dec, motivo=m or "nada_a_enviar", niveis_aplicados=niveis)
         if cmd is None:
             return ResultadoExecucao(dec, motivo="nada_a_enviar")
         if entrada:
@@ -154,7 +211,12 @@ class Roteador:
             elif e.tipo == "rejeitada":
                 self.oms.ao_rejeitada(e.ticket, e.motivo)
             elif e.tipo == "trade" and e.trade is not None and isinstance(self.motor, MotorRiscoPadrao):
-                self.motor.registrar_trade(e.braco, e.trade.liquido_brl, e.quantidade or 1, e.trade.t_saida_ns)
+                # parcial (restante > 0) so soma P&L; o trade que fecha o episodio conta perdas/martingale
+                parcial = getattr(self.motor, "registrar_parcial", None) if e.restante > 0 else None
+                if parcial is not None:
+                    parcial(e.braco, e.trade.liquido_brl, e.quantidade or 1, e.trade.t_saida_ns)
+                else:
+                    self.motor.registrar_trade(e.braco, e.trade.liquido_brl, e.quantidade or 1, e.trade.t_saida_ns)
 
     def cancelar(self, ordem_id: str, t_ns: int, forcar: bool = False) -> bool:
         """Cancela ordem; respeita tempo minimo no livro, exceto cancelamento forcado (kill/seguranca)."""

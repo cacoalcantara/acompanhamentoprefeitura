@@ -7,7 +7,9 @@ Regras (pessimistas por construcao, ver plano 5.6):
 * stop: dispara pelo ULTIMO NEGOCIO e executa no PROXIMO preco (primeiro tick posterior, apos a latencia)
   no pior entre o nivel do stop e a cotacao, mais slippage estocastico de cauda pesada com seed;
 * lacunas (feed parado/backfill): o stop e aplicado ao pior preco da lacuna;
-* saidas nunca invertem a posicao (clamp ao tamanho da posicao; sem posicao => retcode 10036).
+* saidas nunca invertem a posicao (clamp ao tamanho da posicao; sem posicao => retcode 10036);
+* SL/TP do lado errado da cotacao (ou do preco limite) sao recusados na entrada (``RET_INVALID_STOPS``) e na
+  modificacao (``modificar_protecao``); a ordem de alvo acompanha a quantidade da posicao (parciais inclusive).
 """
 from __future__ import annotations
 
@@ -97,6 +99,7 @@ class PosicaoSim:
     tarifa_unit: float = 0.0
     corretagem_unit: float = 0.0
     stop_pendente: bool = False
+    intencao_id: str = ""  # intencao da ordem que abriu a posicao (episodio)
 
 
 @dataclass
@@ -123,6 +126,11 @@ class EventoSim:
     trade: Trade | None = None
     motivo: str = ""
     quantidade: int = 0
+    restante: int = 0  # trade: quantidade que continua aberta depois dele (>0 => parcial; 0 => episodio fechado)
+
+
+MotivoProtecao = Literal["sem_posicao", "ticket_divergente", "stop_pendente", "stop_afrouxaria",
+                         "stop_lado_errado", "alvo_lado_errado", "fora_da_grade"]
 
 
 class SimuladorExecucao:
@@ -236,6 +244,8 @@ class SimuladorExecucao:
         for nivel in (cmd.sl, cmd.tp):
             if nivel is not None and (nivel <= 0 or not self._no_grid(nivel)):
                 return AckOrdem(retcode=RET_INVALID_STOPS)
+        if cmd.tipo != "saida" and (m := self._lado_errado_entrada(cmd)):
+            return AckOrdem(retcode=RET_INVALID_STOPS, comentario=m)
         qtd = cmd.quantidade
         if cmd.tipo == "saida":
             qtd = min(qtd, c.pos.qtd)
@@ -248,6 +258,36 @@ class SimuladorExecucao:
             kind="saida" if cmd.tipo == "saida" else cmd.tipo, lado=lado, preco=cmd.preco, motivo="saida" if cmd.tipo == "saida" else "")
         self._ordens[tk] = o
         return AckOrdem(retcode=RET_PLACED, order=tk, t_setup_msc=t // 1_000_000)
+
+    def _referencias_saida(self, lado: Lado, preco: float | None = None) -> tuple[float, float] | None:
+        """(referencia do SL, referencia do TP) de uma posicao ``lado``: a cotacao de saida (bid na compra, ask na
+        venda) ou, para limitada ainda nao executada, o proprio preco limite. Sem cotacao conhecida: ``None``."""
+        if preco is not None:
+            return preco, preco
+        if self._ult is None:
+            return None
+        bid, ask = cotacao_valida(self._ult)
+        ref = bid if lado == Lado.COMPRA else ask
+        return ref, ref
+
+    @staticmethod
+    def _sl_ok(lado: Lado, sl: float, ref: float) -> bool:
+        return sl < ref if lado == Lado.COMPRA else sl > ref
+
+    @staticmethod
+    def _tp_ok(lado: Lado, tp: float, ref: float) -> bool:
+        return tp > ref if lado == Lado.COMPRA else tp < ref
+
+    def _lado_errado_entrada(self, cmd: ComandoOrdem) -> str:
+        """Entrada com SL/TP do lado errado (compra: SL < bid < TP; venda: TP < ask < SL), como a corretora."""
+        refs = self._referencias_saida(cmd.lado, cmd.preco if cmd.tipo == "limitada" else None)
+        if refs is None:
+            return ""
+        if cmd.sl is not None and not self._sl_ok(cmd.lado, cmd.sl, refs[0]):
+            return "stop_lado_errado"
+        if cmd.tp is not None and not self._tp_ok(cmd.lado, cmd.tp, refs[1]):
+            return "alvo_lado_errado"
+        return ""
 
     def _no_grid(self, preco: float) -> bool:
         r = preco / self.ins.tick_pontos
@@ -263,15 +303,44 @@ class SimuladorExecucao:
         self._ordens.pop(o.ticket, None)
         return AckOrdem(retcode=RET_DONE, order=o.ticket)
 
+    def modificar_protecao(self, braco: str, ticket: int | None, sl: float | None,
+                           tp: float | None) -> MotivoProtecao | None:
+        """Modifica SL/TP da posicao do braco (``None`` = nivel inalterado; nunca remove protecao).
+
+        Devolve ``None`` quando aplicado; senao o motivo da recusa (nada e alterado: tudo ou nada). O stop so aperta
+        e fica do lado certo da cotacao de saida; o alvo fica do lado do lucro. Um TP novo cancela e recria a ordem
+        de alvo (a fila recomeca do fim)."""
+        c = self.carteira(braco)
+        p = c.pos
+        if p.qtd <= 0 or p.lado is None:
+            return "sem_posicao"
+        if ticket is not None and ticket != p.ticket:
+            return "ticket_divergente"
+        if p.stop_pendente:
+            return "stop_pendente"
+        for nivel in (sl, tp):
+            if nivel is not None and (nivel <= 0 or not self._no_grid(nivel)):
+                return "fora_da_grade"
+        refs = self._referencias_saida(p.lado)
+        if sl is not None:
+            if not stop_so_aperta(p.lado, p.sl, sl):
+                return "stop_afrouxaria"
+            if refs is not None and not self._sl_ok(p.lado, sl, refs[0]):
+                return "stop_lado_errado"
+        if tp is not None and refs is not None and not self._tp_ok(p.lado, tp, refs[1]):
+            return "alvo_lado_errado"
+        if sl is not None:
+            p.sl = sl
+        if tp is not None and tp != p.tp:
+            for tk in [k for k, o in self._ordens.items() if o.magic == c.magic and o.kind == "alvo"]:
+                self._ordens.pop(tk, None)
+            p.tp = tp
+            self._criar_alvo(c, p)
+        return None
+
     def modificar_stop(self, braco: str, novo_sl: float) -> bool:
-        """Stop so aperta; qualquer afrouxamento e recusado."""
-        p = self.carteira(braco).pos
-        if p.qtd <= 0 or p.lado is None or p.stop_pendente:
-            return False
-        if not stop_so_aperta(p.lado, p.sl, novo_sl):
-            return False
-        p.sl = novo_sl
-        return True
+        """Stop so aperta; qualquer afrouxamento (ou stop do lado errado) e recusado."""
+        return self.modificar_protecao(braco, None, novo_sl, None) is None
 
     # ------------------------------------------------------------------ mercado ----------------------
     def on_livro(self, livro: LivroSnapshot) -> None:
@@ -408,11 +477,14 @@ class SimuladorExecucao:
                 p.lado, p.aberta_ns, p.ticket = lado, t_ns, self._novo_ticket()
                 p.sl, p.tp, p.stop_pendente = o.cmd.sl, o.cmd.tp, False
                 p.tarifa_unit, p.corretagem_unit = tarifa / qtd, corr / qtd
+                p.intencao_id = o.cmd.intencao_id
+                p.qtd = novo  # antes do alvo: a ordem de alvo nasce com a quantidade inteira (q>1)
                 self._criar_alvo(c, p)
             else:
                 p.tarifa_unit = (p.tarifa_unit * p.qtd + tarifa) / novo
                 p.corretagem_unit = (p.corretagem_unit * p.qtd + corr) / novo
-            p.qtd = novo
+                p.qtd = novo
+                self._redimensionar_saidas(c, crescer=qtd)  # entrada limitada preenchida em partes
             return ev
         # reduz (e possivelmente inverte, apenas via ordem de entrada oposta: netting)
         fecha = min(qtd, p.qtd)
@@ -429,15 +501,19 @@ class SimuladorExecucao:
             motivo_saida=o.motivo or "saida", swap_brl=swap)
         c.trades.append(tr)
         c.saldo_brl += tr.liquido_brl
-        ev.append(EventoSim("trade", c.braco, o.ticket, trade=tr, quantidade=fecha))
         p.qtd -= fecha
+        ev.append(EventoSim("trade", c.braco, o.ticket, trade=tr, quantidade=fecha, restante=p.qtd))
         resto = qtd - fecha
+        if p.qtd > 0:  # parcial: alvo/stop pendentes agem so sobre o restante
+            self._redimensionar_saidas(c, outra=o.ticket)
         if p.qtd == 0:
             ev += self._limpar_protecao(c)
             p.lado, p.preco_medio, p.ticket, p.sl, p.tp, p.stop_pendente = None, 0.0, None, None, None, False
+            p.intencao_id = ""
             if resto > 0:  # inversao por ordem de ENTRADA oposta (nunca por saida)
                 p.lado, p.qtd, p.preco_medio, p.aberta_ns, p.ticket = lado, resto, preco, t_ns, self._novo_ticket()
                 p.sl, p.tp = o.cmd.sl, o.cmd.tp
+                p.intencao_id = o.cmd.intencao_id
                 p.tarifa_unit, p.corretagem_unit = tarifa * (resto / qtd) / resto, corr * (resto / qtd) / resto
                 self._criar_alvo(c, p)
         return ev
@@ -465,6 +541,19 @@ class SimuladorExecucao:
             ticket=tk, magic=c.magic, cmd=ComandoOrdem(intencao_id="alvo", magic=c.magic, lado=lado, tipo="saida",
                                                        quantidade=p.qtd or 1, preco=p.tp),
             t_envio_ns=t, ativa_ns=t, restante=p.qtd or 1, kind="alvo", lado=lado, preco=p.tp, motivo="alvo")
+
+    def _redimensionar_saidas(self, c: Carteira, crescer: int = 0, outra: int | None = None) -> None:
+        """Mantem alvo/stop pendentes do braco do tamanho da posicao: ``crescer`` soma unidades (entrada preenchida em
+        partes); sem ``crescer``, ``restante = min(restante, qtd)`` (parcial). ``outra``: ordem em preenchimento,
+        que ja desconta o proprio restante em ``_preencher``."""
+        p = c.pos
+        for o in self._ordens.values():
+            if o.magic != c.magic or o.kind not in ("alvo", "stop") or o.ticket == outra:
+                continue
+            novo = o.restante + crescer if crescer else min(o.restante, p.qtd)
+            if o.fila is not None:
+                o.fila.restante = max(0, o.fila.restante + (novo - o.restante))
+            o.restante = novo
 
     def _limpar_protecao(self, c: Carteira) -> list[EventoSim]:
         """Posicao zerada: cancela alvo/stop/saidas pendentes do braco (OCO); saida nunca vira inversao."""
