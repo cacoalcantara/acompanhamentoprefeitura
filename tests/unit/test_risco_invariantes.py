@@ -7,13 +7,17 @@ from perfis_teste import WIN
 
 from robowin.core.calendario_b3 import dt_utc_ns
 from robowin.core.ids import novo_id
-from robowin.core.tipos import Acao, ConfigRisco, Intencao, Lado, Posicao
+from robowin.core.tipos import Acao, AjustePosicao, ConfigRisco, Intencao, Lado, Posicao
 from robowin.risco.invariantes import (
+    inv_distancia_minima,
     inv_entrada_permitida,
     inv_exposicao,
     inv_posicao_assinada,
+    inv_reducao_so_reduz,
     inv_sem_aumento,
     inv_sem_martingale,
+    inv_stop_monotono,
+    inv_tempo_no_teto,
     stop_so_aperta,
 )
 from robowin.risco.kill_switch import KillSwitch
@@ -134,3 +138,47 @@ def test_funcoes_puras(a, b):
     assert inv_sem_aumento(a, a) and (a == 0 or not inv_sem_aumento(a, a + 1))
     assert inv_posicao_assinada(0, [1]) and not inv_posicao_assinada(1, [1])
     assert inv_posicao_assinada(1, [-1])  # pendente que reduz nao conta
+
+
+def test_invariantes_do_planejador_puras():
+    assert inv_reducao_so_reduz([3, 2, 2, 1, 0]) and not inv_reducao_so_reduz([1, 2]) and not inv_reducao_so_reduz([-1])
+    assert inv_stop_monotono(Lado.COMPRA, [None, 10.0, 12.0]) and not inv_stop_monotono(Lado.COMPRA, [12.0, 10.0])
+    assert inv_stop_monotono(Lado.VENDA, [20.0, 15.0]) and not inv_stop_monotono(Lado.VENDA, [15.0, None])
+    assert inv_distancia_minima(Lado.COMPRA, 95.0, 100.0, 5.0) and not inv_distancia_minima(Lado.COMPRA, 96.0, 100.0, 5.0)
+    assert inv_distancia_minima(Lado.VENDA, 105.0, 100.0, 5.0) and not inv_distancia_minima(Lado.VENDA, 99.0, 100.0, 1.0)
+    assert inv_tempo_no_teto(0, 300 * 10**9, 300) and not inv_tempo_no_teto(0, 300 * 10**9 + 1, 300)
+
+
+@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(st.sampled_from(list(Lado)), st.lists(st.tuples(st.integers(-40, 40), st.integers(-30, 30),
+                                                       st.integers(0, 3), st.booleans()), max_size=25))
+def test_ajustes_aprovados_respeitam_invariantes(lado, passos):
+    """Qualquer sequencia de ajustes aprovados: stop so aperta, fica a distancia minima do preco de saida, a
+    quantidade so reduz e o tempo total nunca passa do teto (kill ligado/desligado no meio)."""
+    ks = KillSwitch()
+    m = MotorRiscoPadrao(CFG, WIN.instrumento("WINZ26"), kill_switch=ks)
+    tick = m.instrumento.tick_pontos
+    pm = 2000 * tick
+    sinal = 1 if lado == Lado.COMPRA else -1
+    aberta = BASE + int(3 * 3600e9)
+    pos = Posicao(simbolo="WINZ26", lado=lado, quantidade=3, preco_medio=pm, stop=pm - sinal * 30 * tick,
+                  ticket=1, aberta_ns=aberta)
+    stops, qs, t = [pos.stop], [pos.quantidade], aberta
+    dist = m.dist_min_ajuste_pontos()
+    for d_stop, d_preco, red, kill in passos:
+        if kill and not ks.ativo:
+            ks.acionar("x", "manual_cli", t)
+        t += int(5e9)
+        ref = pm + sinal * d_preco * tick
+        aj = AjustePosicao(stop_resultado_pontos=d_stop * tick, reduzir_quantidade=red or None,
+                           tempo_max_total_s=int(m.cfg.tempo_max_posicao_s) if not kill else None)
+        it = Intencao(id=novo_id("i"), braco="b", acao=Acao.MANTER, validade_ns=t + 1, preco_referencia=ref,
+                      ajuste=aj)
+        if m.avaliar(it, pos, t).aprovada:
+            novo = pm + sinal * d_stop * tick
+            assert inv_distancia_minima(lado, novo, ref, dist)
+            assert inv_tempo_no_teto(aberta, aberta + int(m.cfg.tempo_max_posicao_s * 1e9), m.cfg.tempo_max_posicao_s)
+            pos = pos.model_copy(update={"stop": novo, "quantidade": pos.quantidade - (red or 0)})
+            stops.append(novo)
+            qs.append(pos.quantidade)
+    assert inv_stop_monotono(lado, stops) and inv_reducao_so_reduz(qs) and qs[-1] >= 1
