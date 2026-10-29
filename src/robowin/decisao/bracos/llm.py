@@ -8,22 +8,26 @@
 * ``BracoLLM``: fluxo comum. ENCERRAR, MANTER e NAO_OPERAR NUNCA esperam revisao. Qualquer falha de IA
   (atraso, erro HTTP/429, recusa, JSON invalido, modelo servido fora da lista, orcamento esgotado, evidencia
   inexistente, divergencia) resulta em ``bloqueada``: nenhuma entrada; saidas e protecao seguem.
+* ``sanitizar_textos`` [v1.1] (docs/16 C16): texto livre de um papel e DADO, nunca instrucao. Antes de seguir para
+  outro papel (proponente -> revisor; etapas do debate), todo texto que falhe em ``ia.validadores.texto_seguro``
+  (marcacao, termo de instrucao, nivel absoluto, periodo/ativo, indicador tradicional) e trocado por um marcador.
 """
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from robowin.core.tipos import Acao, CarimboLatencia, ChamadaLLM, Lado, PropostaIA, RevisaoIA
+from robowin.core.tipos import Acao, CarimboLatencia, ChamadaLLM, Lado, PlanoTradeIA, PropostaIA, RevisaoIA
 from robowin.ia.catalogo import dividir_modelo
 from robowin.ia.dossie import hash_dossie, verificar_anonimizacao
 from robowin.ia.prompts import Prompt, carregar_prompt, mensagem_proponente, mensagem_revisor
 from robowin.ia.provedores.base import modelo_servido_aceito
-from robowin.ia.validadores import revisao_aprova, validar_proposta
+from robowin.ia.validadores import revisao_aprova, texto_seguro, validar_proposta
 
 from ..plano_condicional import converter_plano
 from ..validade import (
@@ -40,6 +44,38 @@ from .base import NS, BracoBase, ContextoDecisao, Geometria, Modo, RegistroChama
 
 CAMPO_PROBABILIDADES = "probabilidades_do_plano"
 LADO_DA_ACAO = {Acao.COMPRAR: Lado.COMPRA, Acao.VENDER: Lado.VENDA}
+TEXTO_OMITIDO = "texto_omitido_inseguro"  # marcador que substitui texto livre inseguro antes de outro papel
+CAMPOS_TEXTO_PROPOSTA = ("hipoteses", "evidencias_a_favor", "evidencias_contra", "riscos", "invalidacoes",
+                         "justificativa_curta")
+
+
+def sanitizar_textos(obj: Any, niveis_absolutos: Iterable[float] = ()) -> tuple[Any, int]:
+    """Copia de ``obj`` (dict/list/tuple/str aninhados, como um ``model_dump``) com cada texto inseguro trocado por
+    ``TEXTO_OMITIDO``. Devolve (copia, quantos textos foram omitidos). Numeros, booleanos e None passam intactos."""
+    niveis = tuple(niveis_absolutos)
+    n = 0
+
+    def rec(x: Any) -> Any:
+        nonlocal n
+        if isinstance(x, str):
+            if texto_seguro(x, niveis):
+                n += 1
+                return TEXTO_OMITIDO
+            return x
+        if isinstance(x, dict):
+            return {k: rec(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [rec(v) for v in x]
+        return x
+
+    return rec(obj), n
+
+
+def proposta_para_revisor(p: PropostaIA, niveis_absolutos: Iterable[float] = ()) -> tuple[dict[str, Any], int]:
+    """JSON da proposta que vai ao revisor: os campos de texto livre passam por ``texto_seguro`` (C16, v1.1)."""
+    d = p.model_dump(mode="json")
+    textos, n = sanitizar_textos({k: d[k] for k in CAMPOS_TEXTO_PROPOSTA}, niveis_absolutos)
+    return {**d, **textos}, n
 
 
 # --------------------------------------------------------------------------------------------------
@@ -102,6 +138,8 @@ class PropostaObtida:
     chamadas_extras: tuple[ChamadaLLM, ...] = ()
     latencia_ms: float | None = None  # None => a latencia da propria chamada
     extras_proposta: dict[str, Any] | None = None
+    # braco planejador: a resposta validada do papel ``planejador`` (``proposta`` fica None)
+    plano_trade: PlanoTradeIA | None = None
 
 
 @dataclass
@@ -182,7 +220,8 @@ class ServicoRevisao(ServicoLLM):
                 extra = {CAMPO_PROBABILIDADES: {"status": "indisponivel", "motivo": "anonimizacao_falhou"}}
             dossie = {**ctx.dossie, **extra}
             h = hash_dossie(dossie)
-        obj, ch, motivo = await self.chamar(mensagem_revisor(dossie, proposta.model_dump(mode="json")), prazo_s, h)
+        texto, _ = proposta_para_revisor(proposta, (ctx.preco_ref, ctx.bid, ctx.ask))
+        obj, ch, motivo = await self.chamar(mensagem_revisor(dossie, texto), prazo_s, h)
         if motivo or not isinstance(obj, RevisaoIA):
             return RevisaoObtida(None, ch, motivo or RESPOSTA_INVALIDA)
         return RevisaoObtida(obj, ch, None)
@@ -274,6 +313,9 @@ class BracoLLM(BracoBase):
             if av is not None and av.veto:  # [decisao].veto_por_odds = true (desligado por padrao)
                 return self._bloqueada(ctx, (av.motivo_bloqueio,), acao=p.acao, **kw)
         if self.revisor is not None:  # braco C: revisao SO de entradas, antes de armar/executar
+            _, omitidos = proposta_para_revisor(p, (ctx.preco_ref, ctx.bid, ctx.ask))
+            if omitidos:  # o revisor recebe o marcador no lugar do texto inseguro (C16, v1.1)
+                proposta_json["textos_omitidos_ao_revisor"] = omitidos
             prazo = pz.prazo_revisor(lat_s)
             if prazo <= 0:
                 return self._bloqueada(ctx, (f"ia:{SEM_TEMPO_REVISAO}",), acao=p.acao, **kw)

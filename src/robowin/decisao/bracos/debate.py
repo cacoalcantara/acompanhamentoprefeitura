@@ -8,6 +8,8 @@ sintetizador decide. Adaptado as regras do robowin:
   indicador tecnico, nenhum acesso a internet (``EnvelopeAgente`` declara e ``verificar_envelope`` confere);
 * toda saida e estruturada (Pydantic) e passa por validacao deterministica: lado/perfil coerentes, evidencias
   que citam campos EXISTENTES do dossie, texto sem indicador tecnico e com tamanho limitado;
+* [v1.1] (docs/16 C16) a saida de uma etapa so segue para a etapa seguinte depois de ``sanitizar_textos``: texto que
+  falhe em ``ia.validadores.texto_seguro`` (marcacao, termo de instrucao, nivel absoluto) vira um marcador;
 * cada etapa tem prazo (``asyncio.wait_for`` + prazo do provedor) tirado do orcamento do modo condicional;
   qualquer falha de etapa BLOQUEIA a entrada (falha segura: nunca cai em texto livre);
 * o sintetizador cumpre o papel ``proponente``: a saida e uma ``PropostaIA`` comum, que passa pelos MESMOS
@@ -38,7 +40,7 @@ from robowin.ia.validadores import validar_evidencias, validar_textos_livres
 
 from ..validade import RESPOSTA_INVALIDA, RESPOSTA_TARDIA, Prazos
 from .base import ContextoDecisao, Geometria, Modo
-from .llm import BracoLLM, PropostaObtida, ServicoLLM, ServicoProposta, ServicoRevisao
+from .llm import BracoLLM, PropostaObtida, ServicoLLM, ServicoProposta, ServicoRevisao, sanitizar_textos
 
 MARGEM_ESPERA_S = 1.0  # folga do wait_for externo sobre o prazo que o provedor ja respeita
 FRACAO_RESERVA_SINTESE = 0.4  # parte do orcamento do modo reservada ao sintetizador
@@ -253,6 +255,16 @@ class ServicoPropostaDebate(ServicoProposta):
                                                               "etapas": list(resumos)}})
 
         # --- fase 1: pesquisadores (em paralelo; N rodadas) --------------------------------------------------------
+        niveis = (ctx.preco_ref, ctx.bid, ctx.ask)
+        omitidos = 0
+
+        def seguro(obj: BaseModel) -> dict[str, Any]:
+            """Saida da etapa como DADO para a etapa seguinte (texto inseguro vira marcador)."""
+            nonlocal omitidos
+            d, n = sanitizar_textos(obj.model_dump(mode="json"), niveis)
+            omitidos += n
+            return dict(d)
+
         argumentos: dict[str, dict[str, Any] | None] = {"altista": None, "baixista": None}
         for rodada in range(1, self.config.rodadas + 1):
             prazo = self._prazo_fase(total_s, gasto_s, FRACAO_FASE_PESQUISA / self.config.rodadas)
@@ -275,7 +287,7 @@ class ServicoPropostaDebate(ServicoProposta):
                 return falha(ruim)
             for r in res:
                 assert isinstance(r.saida, ArgumentoDebate)
-                argumentos[r.saida.lado] = r.saida.model_dump(mode="json")
+                argumentos[r.saida.lado] = seguro(r.saida)
 
         # --- fase 2: debate de risco (3 perfis em paralelo) ---------------------------------------------------------
         prazo = self._prazo_fase(total_s, gasto_s, FRACAO_FASE_RISCO)
@@ -292,10 +304,12 @@ class ServicoPropostaDebate(ServicoProposta):
         ruim = next((r for r in res if r.motivo), None)
         if ruim is not None:
             return falha(ruim)
-        pareceres = {PERFIL_DA_ETAPA[r.etapa]: r.saida.model_dump(mode="json")
+        pareceres = {PERFIL_DA_ETAPA[r.etapa]: seguro(r.saida)
                      for r in res if isinstance(r.saida, ParecerRisco)}
         debate = {"altista": argumentos["altista"], "baixista": argumentos["baixista"], "risco": pareceres}
-        resumo_final = {"executado": True, "rodadas": self.config.rodadas, "etapas": list(resumos)}
+        resumo_final: dict[str, Any] = {"executado": True, "rodadas": self.config.rodadas, "etapas": list(resumos)}
+        if omitidos:
+            resumo_final["textos_omitidos"] = omitidos
 
         # --- veto unanime do debate de risco: NAO_OPERAR sem custo de sintese ----------------------------------------
         if self.config.veto_unanime_risco and all(p["recomendacao"] == "nao_operar" for p in pareceres.values()):

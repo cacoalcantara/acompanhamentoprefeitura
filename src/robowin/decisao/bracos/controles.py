@@ -5,18 +5,27 @@
   referencia. A frequencia pode ser fixa (``frequencia_por_hora``) ou seguir uma funcao
   (``frequencia_fn(t_ns)``, que o orquestrador liga a taxa observada nos bracos de referencia); as
   geometrias sao sorteadas das ja observadas (``observar``) ou do padrao. ``seed`` torna tudo reprodutivel.
+* ``BracoAleatorioPlano`` (docs/16 WP6, H2): copia o plano COMPILADO inteiro de uma entrada do planejador
+  (gatilhos, faixa, gestao, tempo e quantidade) e sorteia o lado com a seed. Com o lado trocado, os valores de preco
+  sao invertidos (``preco_rompe_acima`` <-> ``preco_rompe_abaixo``, ``preco_toca`` com o sinal trocado). A frequencia
+  e a do braco de referencia: sem ``frequencia_fn``, UMA entrada sorteada por plano observado (fila, no proximo ciclo
+  sem posicao); com ``frequencia_fn``, a taxa dela, sorteando entre os planos observados. Nunca copia ajustes da IA.
 """
 from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from robowin.core.tipos import Acao, Condicao, Intencao, PlanoCondicional
 
 from ..plano_condicional import converter_plano
 from .base import DESVIO_MAX_TICKS, NS, BracoBase, ContextoDecisao, Geometria, Modo, ResultadoDecisao
+
+if TYPE_CHECKING:
+    from ..compilador_plano import PlanoCompilado
 
 
 class BracoNaoOperar(BracoBase):
@@ -105,3 +114,93 @@ class BracoAleatorio(BracoBase):
                             validade_ns=validade_ns, plano=plano)
         return self._resultado(ctx, acao, "plano" if plano is not None else "entrada", intencao=it,
                                proposta=base, **kw)
+
+
+# --------------------------------------------------------------------------------------------------
+# controle do plano (braco planejador)
+# --------------------------------------------------------------------------------------------------
+MAX_PLANOS_OBSERVADOS = 64
+
+
+def espelhar_condicao(c: Condicao) -> Condicao:
+    """Condicao para o lado OPOSTO: rompe_acima(+v) <-> rompe_abaixo(-v); toca(v) -> toca(-v); spread e janela
+    de tempo nao dependem do lado."""
+    valor = None if c.valor is None else -c.valor
+    if c.tipo == "preco_rompe_acima":
+        return Condicao(tipo="preco_rompe_abaixo", valor=valor, ate_ns=c.ate_ns)
+    if c.tipo == "preco_rompe_abaixo":
+        return Condicao(tipo="preco_rompe_acima", valor=valor, ate_ns=c.ate_ns)
+    if c.tipo == "preco_toca":
+        return Condicao(tipo="preco_toca", valor=valor, ate_ns=c.ate_ns)
+    return c
+
+
+def _identidade(c: Condicao) -> Condicao:
+    return c
+
+
+class BracoAleatorioPlano(BracoAleatorio):
+    """Controle do planejador: o plano compilado de P com o lado sorteado (mede direcao e momento, H2)."""
+
+    def __init__(self, id: str = "controle_aleatorio_plano", *, referencia: str = "planejador", seed: int = 0,
+                 frequencia_fn: Callable[[int], float] | None = None) -> None:
+        super().__init__(id, "condicional", seed=seed, geometrias=(Geometria(0.0, 0.0, 0),),
+                         frequencia_por_hora=0.0, frequencia_fn=frequencia_fn, desvio_max_ticks=math.inf)
+        self.referencia = referencia
+        self._planos: deque[PlanoCompilado] = deque(maxlen=MAX_PLANOS_OBSERVADOS)
+        self._pendentes: deque[PlanoCompilado] = deque(maxlen=MAX_PLANOS_OBSERVADOS)
+
+    def manifesto(self) -> dict[str, Any]:
+        m = super().manifesto()
+        m.update(referencia=self.referencia, sem_geometria_fixa=True,
+                 frequencia="taxa" if self.frequencia_fn is not None else "um_por_plano_observado")
+        return m
+
+    def observar(self, intencao: Intencao) -> None:
+        """A geometria nao se aplica: o controle copia planos inteiros (``observar_plano``)."""
+
+    def observar_plano(self, c: PlanoCompilado) -> None:
+        """Registra o plano compilado de uma entrada ENVIADA do braco de referencia."""
+        self._planos.append(c)
+        self._pendentes.append(c)
+
+    def _escolher(self, u_ent: float, u_plano: float, dt_h: float, t_ns: int) -> PlanoCompilado | None:
+        if self.frequencia_fn is None:
+            return self._pendentes.popleft() if self._pendentes else None
+        if not self._planos:
+            return None
+        p = 1.0 - math.exp(-self._taxa_por_hora(t_ns) * dt_h)
+        if u_ent >= p:
+            return None
+        return self._planos[min(int(u_plano * len(self._planos)), len(self._planos) - 1)]
+
+    async def adecidir(self, ctx: ContextoDecisao) -> ResultadoDecisao:
+        # sorteios SEMPRE consumidos (o fluxo aleatorio so depende da seed e do numero de ciclos)
+        u_ent, u_lado, u_plano = self._rng.random(), self._rng.random(), self._rng.random()
+        dt_h = 0.0 if self._ultimo_t is None else max(0, ctx.t0_ns - self._ultimo_t) / NS / 3600.0
+        self._ultimo_t = ctx.t0_ns
+        base: dict[str, Any] = {"origem": "controle_aleatorio_plano", "seed": self.seed, "referencia": self.referencia}
+        kw: dict[str, Any] = {"desvio_max_pts": math.inf}
+        if (ctx.posicao.quantidade or 0) > 0:
+            return self._resultado(ctx, Acao.NAO_OPERAR, "nao_operar", motivos=("posicao_aberta",), proposta=base, **kw)
+        c = self._escolher(u_ent, u_plano, dt_h, ctx.t0_ns)
+        if c is None:
+            return self._resultado(ctx, Acao.NAO_OPERAR, "nao_operar", motivos=("sorteio_sem_entrada",),
+                                   proposta=base, **kw)
+        ref = c.intencao_base
+        compra = u_lado < 0.5
+        acao = Acao.COMPRAR if compra else Acao.VENDER
+        trocou = acao != ref.acao
+        conv = espelhar_condicao if trocou else _identidade
+        duracao_ns = max(c.plano_abs.expira_ns - ref.t0_ns, NS)
+        plano = PlanoCondicional(gatilhos=tuple(conv(g) for g in c.plano_abs.gatilhos),
+                                 invalidacoes=tuple(conv(i) for i in c.plano_abs.invalidacoes),
+                                 expira_ns=ctx.t0_ns + duracao_ns)
+        base.update(lado="compra" if compra else "venda", lado_trocado=trocou, plano_de=ref.id,
+                    stop_pontos=ref.stop_pontos, alvo_pontos=ref.alvo_pontos, quantidade=ref.quantidade)
+        it = self._intencao(ctx, acao, stop=ref.stop_pontos, alvo=ref.alvo_pontos, tempo_max_s=ref.tempo_max_s,
+                            validade_ns=plano.expira_ns, plano=plano, quantidade=ref.quantidade,
+                            gestao=c.gestao.model_copy(update={"reavaliar_em_s": None, "reavaliar_se": ()}),
+                            ancora_t0=ctx.preco_ref)
+        return self._resultado(ctx, acao, "plano", intencao=it, proposta=base, plano=plano,
+                               validade_s=duracao_ns / NS, **kw)
