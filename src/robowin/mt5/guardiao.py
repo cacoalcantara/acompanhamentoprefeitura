@@ -224,6 +224,42 @@ class Guardiao:
             return False, f"distancia do stop {abs(ref - cmd.sl):g} acima do maximo {teto:g}"
         return True, ""
 
+    def avaliar_sltp(self, ticket: int, sl: float | None, tp: float | None) -> tuple[bool, str]:
+        """Veto rigido para MODIFICAR SL/TP de uma posicao aberta (aperto de stop / alvo do nucleo).
+
+        Nunca remove o SL, nunca afrouxa (compra: so sobe; venda: so desce), confere o ticket e o lado do preco.
+        ``sl``/``tp`` ``None`` = manter o nivel atual. NAO consulta os bloqueios de entrada: apertar o stop e
+        permitido mesmo em emergencia (so reduz o risco)."""
+        ps = self.t.positions_get(symbol=self.ex._sym)
+        if ps is None:
+            return False, "positions_get sem resposta"
+        p = next((x for x in ps if int(x.ticket) == int(ticket)), None)
+        if p is None:
+            return False, f"ticket {ticket} inexistente (posicao ja encerrada?)"
+        compra = int(p.type) == C.POS_COMPRA
+        sl_atual = float(p.sl or 0.0)
+        if sl is not None and not sl > 0:  # 0/negativo/NaN = remover o stop
+            return False, "remover o stop (sl <= 0) nunca e permitido"
+        if tp is not None and not tp >= 0:
+            return False, f"tp {tp} invalido"
+        novo_sl = sl_atual if sl is None else float(sl)
+        if self.cfg.exigir_sl and novo_sl <= 0:
+            return False, "posicao ficaria sem stop (sl obrigatorio)"
+        if sl is not None and sl_atual > 0 and ((compra and novo_sl < sl_atual - 1e-9)
+                                                 or (not compra and novo_sl > sl_atual + 1e-9)):
+            return False, f"stop {novo_sl:g} afrouxaria o atual {sl_atual:g} (stop so aperta)"
+        if sl is None and not tp:
+            return True, ""
+        tk = self.t.symbol_info_tick(self.ex._sym)
+        if tk is None:
+            return False, "sem cotacao para validar SL/TP"
+        saida = float(tk.bid if compra else tk.ask)  # preco executavel de SAIDA
+        if sl is not None and ((compra and novo_sl >= saida) or (not compra and novo_sl <= saida)):
+            return False, f"sl {novo_sl:g} do lado errado do preco {saida:g}"
+        if tp and ((compra and tp <= saida) or (not compra and tp >= saida)):
+            return False, f"tp {tp:g} do lado errado do preco {saida:g}"
+        return True, ""
+
     def rearmar(self, motivo: str) -> None:
         """Rearme MANUAL (com motivo na auditoria). Recusado enquanto o arquivo EMERGENCIA existir."""
         if not motivo.strip():
