@@ -95,16 +95,23 @@ def test_risco_nao_aprovado_ao_vivo_propaga_erro(tmp_path):
 
 # --- 11: n_alvo derivado do MDE -----------------------------------------------------------------------------
 def test_n_alvo_do_manifesto_vem_de_n_expectativa(tmp_path):
+    """Sem o planejador, n por operacao = n_expectativa(sigma, MDE). Com a familia planejador (docs/16 4.2) a
+    unidade e o PREGAO e o n e o pre-registrado (padrao N_PREGOES_PADRAO), nunca o n por operacao."""
+    from robowin.decisao.simulacao import METRICA_POR_OPERACAO, N_PREGOES_PADRAO
+
+    def esperado(m, sigma, mde):
+        return n_expectativa(sigma, mde) if m.metrica_primaria == METRICA_POR_OPERACAO else N_PREGOES_PADRAO
     p = ParamsSimulacao(n_ticks=1500, saida=tmp_path / "s")
     s = montar_sessao(p)
     try:
-        assert s.manifesto.n_alvo == n_expectativa(35.0, 5.0) == 385 and s.manifesto.mde_brl == 5.0
+        assert n_expectativa(35.0, 5.0) == 385
+        assert s.manifesto.n_alvo == esperado(s.manifesto, 35.0, 5.0) and s.manifesto.mde_brl == 5.0
     finally:
         s.banco.fechar()
     p2 = ParamsSimulacao(n_ticks=1500, saida=tmp_path / "s2", sigma_brl=20.0, mde_brl=10.0)
     s2 = montar_sessao(p2)
     try:
-        assert s2.manifesto.n_alvo == n_expectativa(20.0, 10.0)
+        assert s2.manifesto.n_alvo == esperado(s2.manifesto, 20.0, 10.0)
         assert s2.manifesto.origem_dados == "sinteticos"
     finally:
         s2.banco.fechar()
