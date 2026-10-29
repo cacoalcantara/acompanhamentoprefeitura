@@ -516,9 +516,14 @@ def hashes_planejador(fab: FabricaBracos, cfg: Mapping[str, Any]) -> dict[str, s
     }
 
 
+METRICA_POR_OPERACAO = "expectativa_liquida_por_operacao_brl"
+METRICA_POR_PREGAO = "liquido_por_pregao_menos_custo_api"  # docs/16 4.2 (familia planejador)
+N_PREGOES_PADRAO = 60  # mesmo padrao de ``robowin experimento registrar`` (substituir pelo n do piloto)
+
+
 def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo, hashes: dict[str, str],
                      origem_dados: str = "sinteticos", sigma_brl: float = 35.0, mde_brl: float = 5.0,
-                     ativo: str = "") -> ManifestoExperimento:
+                     ativo: str = "", n_pregoes_alvo: int | None = None) -> ManifestoExperimento:
     modelos: dict[str, str] = {}
     fixavel: dict[str, bool] = {}
     for b in bracos:
@@ -545,15 +550,21 @@ def montar_manifesto(sessao_id: str, bracos: list[BracoBase], catalogo: Catalogo
     if any(b.familia == "debate" for b in bracos):
         hipoteses += ("H4 (experimental): o debate (pesquisadores + risco + sintese) difere do proponente unico "
                       "no modo condicional, com Holm e custo/latencia",)
+    metrica, n_alvo = METRICA_POR_OPERACAO, n_expectativa(sigma_brl, mde_brl, alfa=0.05)
     if any(b.familia == "planejador" for b in bracos):  # docs/16 4.2 (Holm m=3, unilaterais, por pregao)
         hipoteses += ("P1: planejador - C condicional > 0 (liquido por pregao descontado o custo de API)",
                       "P2: planejador - controle_aleatorio_plano > 0 (direcao e momento alem do plano)",
-                      "P3: planejador - sombra_sem_gestao > 0 (a gestao agrega valor)")
+                      "P3: planejador - sombra_sem_gestao > 0 (a gestao agrega valor)",
+                      f"secundaria: {METRICA_POR_OPERACAO} (engana quando a IA escolhe frequencia e quantidade)")
+        # a unidade passa a ser o PREGAO: n = pregoes (n_expectativa sobre 1,5 x sd das diferencas diarias do
+        # piloto; sem piloto, o padrao do registro), nunca o n por operacao
+        metrica = METRICA_POR_PREGAO
+        n_alvo = int(n_pregoes_alvo) if n_pregoes_alvo is not None else N_PREGOES_PADRAO
     return ManifestoExperimento(
         id=sessao_id,
         hipoteses=hipoteses,
-        metrica_primaria="expectativa_liquida_por_operacao_brl", mde_brl=mde_brl,
-        n_alvo=n_expectativa(sigma_brl, mde_brl, alfa=0.05),
+        metrica_primaria=metrica, mde_brl=mde_brl,
+        n_alvo=n_alvo,
         regras_parada=("kill switch", "perda diaria", "orcamento de IA esgotado"),
         modelos=modelos, fixavel=fixavel, hashes=hashes, origem_dados=origem_dados, ativo=ativo)
 

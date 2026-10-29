@@ -449,3 +449,20 @@ def test_espelhar_o_planejador_liga_o_passo_espelhado(tmp_path):
     m = _construir(tmp_path, "esp_p", espelhar="planejador")
     (p,) = [b for b in m.bracos if b.id == "planejador"]
     assert isinstance(p, BracoPlanejador) and p.espelhado and p.manifesto()["espelhado"]
+
+
+def test_manifesto_com_planejador_tem_metrica_por_pregao_e_n_em_pregoes():
+    """docs/16 4.2: com a familia planejador, a metrica primaria e o liquido por pregao menos o custo de API e o n
+    e em PREGOES; a expectativa por operacao fica como secundaria (antes: primaria, com n por operacao)."""
+    from types import SimpleNamespace
+
+    from robowin.decisao.simulacao import METRICA_POR_OPERACAO, N_PREGOES_PADRAO, montar_manifesto
+    from robowin.ia.catalogo import Catalogo
+    cat = Catalogo.carregar("config/modelos.toml")
+    p = SimpleNamespace(id="planejador", familia="planejador", manifesto=lambda: {})
+    m = montar_manifesto("s", [p], cat, {})
+    assert m.metrica_primaria == "liquido_por_pregao_menos_custo_api" and m.n_alvo == N_PREGOES_PADRAO
+    assert any(METRICA_POR_OPERACAO in h and h.startswith("secundaria") for h in m.hipoteses)
+    assert montar_manifesto("s", [p], cat, {}, n_pregoes_alvo=42).n_alvo == 42
+    sem = montar_manifesto("s", [], cat, {})
+    assert sem.metrica_primaria == METRICA_POR_OPERACAO  # sem planejador, o experimento antigo segue igual
