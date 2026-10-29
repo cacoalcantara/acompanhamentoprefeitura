@@ -82,6 +82,20 @@ def test_novo_usuario_ve_modelo_conservador_e_estado_sem_limites(amb):
     assert "BLOQUEADA" in r.text and "NÃO (bloqueado)" in r.text
 
 
+def test_formulario_tem_o_tempo_maximo_da_posicao_e_grava(amb):
+    """Campo novo do ConfigRisco (docs/16): aparece no formulario com rotulo pt-BR e e gravado como os demais."""
+    c, arm, toks, _ = amb
+    _entrar(c, "ana", toks["ana"])
+    r = c.get("/risco")
+    assert 'name="tempo_max_posicao_s"' in r.text and "Tempo máximo de uma posição" in r.text
+    assert 'value="300"' in r.text.split('name="tempo_max_posicao_s"')[1].split(">")[0]
+    r = c.post("/risco/limites", data={**_form(tempo_max_posicao_s="240"), "token": TOKEN_ACOES},
+               follow_redirects=False)
+    assert r.status_code == 303 and arm.limites("ana", ChaveConta.de_texto(CONTA)).tempo_max_posicao_s == 240
+    sem = {k: v for k, v in _form().items() if k != "tempo_max_posicao_s"}  # nada e imposto por padrao
+    assert c.post("/risco/limites", data={**sem, "token": TOKEN_ACOES}).status_code == 400
+
+
 def test_isolamento_cada_usuario_so_ve_as_proprias_contas(amb):
     c, arm, toks, _ = amb
     _entrar(c, "bia", toks["bia"])

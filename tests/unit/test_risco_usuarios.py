@@ -289,12 +289,31 @@ def test_limites_do_usuario_bloqueiam_ao_serem_atingidos(arm):
     assert not d.aprovada
 
 
+def test_arquivo_aprovado_sem_tempo_max_posicao_continua_aprovado_com_o_mesmo_hash(arm):
+    """Campo novo do ConfigRisco (docs/16): arquivo gravado/aprovado ANTES dele continua aprovado, com o mesmo hash,
+    e vale o padrao (300 s). Regravar os mesmos valores nao muda o arquivo nem invalida a aprovacao."""
+    _usuario_com_conta(arm, "ana", CONTA_A)
+    risco = arm.conta("ana", CONTA_A).risco
+    texto = "".join(ln + "\n" for ln in texto_risco(_limites()).splitlines() if not ln.startswith("tempo_max_posicao_s"))
+    assert "tempo_max_posicao_s" not in texto
+    risco.write_text(texto, encoding="utf-8", newline="\n")
+    sha = sha256_arquivo(risco)
+    arm.aprovar("ana", CONTA_A, "Ana", "antes do campo novo", confirmar=APROVO)
+    assert arm.estado("ana", CONTA_A).estado == APROVADO
+    assert arm.limites("ana", CONTA_A).tempo_max_posicao_s == 300
+    assert arm.exigir_operacao("ana", CONTA_A, WIN).tempo_max_posicao_s == 300
+    assert arm.gravar_limites("ana", CONTA_A, _limites(), autor="ana", origem="t") == sha
+    assert sha256_arquivo(risco) == sha and arm.estado("ana", CONTA_A).estado == APROVADO
+    assert modelo_inicial(WIN).tempo_max_posicao_s == 300
+
+
 # ======================================================================================= IA sem limites ==
 def test_config_de_ia_nao_pode_definir_limites(tmp_path):
     validar_ia_sem_limites(carregar_toml(RAIZ / "config/robowin.toml"))  # config do repositorio: ok
     for ruim in ({"ia": {"perda_max_dia_brl": 1000}}, {"ia": {"papeis": {"x": {"modelo": "a:b", "contratos_max": 5}}}},
                  {"bracos": [{"id": "D", "risco": {"dd_max_brl": 1}}]}, {"reflexao": {"limites": {}}},
-                 {"decisao": {"stop_max_pontos": 900}}):
+                 {"decisao": {"stop_max_pontos": 900}}, {"planejador": {"tempo_max_posicao_s": 900}},
+                 {"planejador": {"gatilhos": {"perda_max_dia_brl": 1}}}):
         with pytest.raises(ErroConfig, match="IA nao pode"):
             validar_ia_sem_limites(ruim)
     from robowin.decisao.simulacao import ParamsSimulacao, carregar_ambiente
