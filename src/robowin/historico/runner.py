@@ -89,6 +89,9 @@ class ParamsHistorico:
     # cotacao registrada USD -> moeda da conta para descontar o custo de API do pregao (metrica primaria, docs/16
     # secao 4.2). None com conta fora de USD e custo > 0: o relatorio avisa que o custo NAO foi descontado
     cotacao_usd_conta: float | None = None
+    # pregoes ja simulados e ACUMULADOS (historico/acumulado.py): ficam no treino walk-forward e na Maquina do
+    # Tempo dos seguintes, mas nao sao simulados de novo
+    pular_datas: frozenset[dt.date] = frozenset()
 
 
 def params_de_config(cfg: Mapping[str, Any] | None, **kw: Any) -> ParamsHistorico:
@@ -436,7 +439,9 @@ def executar_historico(p: ParamsHistorico, *, ao_progresso: Callable[[str], None
     previos = [x for x in todas if x < alvo[0]][-janela_previa:]
     for d in previos + alvo:
         dados = carregar_dia(arm, datas[d], d, p.compactar_ms)
-        if d in alvo:
+        if d in alvo and d in p.pular_datas:
+            log(f"  {d}: ja acumulado com a mesma assinatura (nao simulado de novo)")
+        elif d in alvo:
             if not dados.ticks:
                 pulados[d.isoformat()] = "sem ticks"
             else:
@@ -470,6 +475,12 @@ def executar_historico(p: ParamsHistorico, *, ao_progresso: Callable[[str], None
     if pico is not None:
         tempos["memoria_pico_mb"] = pico
     return ResultadoHistorico(p, perfil.simbolo_base, provedor, motivo, corte, dias, pulados, tempos)
+
+
+def provedor_decidido(p: ParamsHistorico) -> str:
+    """O provedor que ``executar_historico`` vai usar (``falso``/``real``), sem simular nada."""
+    cfg, _ = carregar_ambiente(ParamsSimulacao(config=p.config, catalogo=p.catalogo))
+    return decidir_provedor(p.provedor, refs_ia(dict(cfg)))[0]
 
 
 def memoria_pico_mb() -> float | None:

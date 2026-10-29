@@ -322,3 +322,49 @@ def test_tentativas_do_braco_condicional_contam_uma_vez_por_intencao():
     geo, tent = _geometrias_e_tentativas(_BancoFalso(linhas))
     assert tent == {"planejador": 5, "claude": 5}
     assert len(geo["planejador"]) == 2 and len(geo["claude"]) == 5
+
+
+def test_amostra_acumulada_entre_execucoes_cresce_alem_da_janela(tmp_path, arm_mod, capsys):
+    """docs/16 4.3 item 7: com --acumulado, cada execucao so simula os pregoes novos e o consolidado cobre a UNIAO
+    (antes: cada execucao do CI ressimulava a janela dos ultimos DIAS e o n nunca passava dela)."""
+    acum = tmp_path / "acum"
+    base = ["historico", "--ativo", "WIN", "--armazem", str(arm_mod.raiz), "--provedor", "falso", "--n-boot", "20",
+            "--bracos", "quant", "--acumulado", str(acum)]
+    assert main([*base, "--dias", "1", "--saida", str(tmp_path / "s1")]) == 0  # so o ultimo pregao
+    assert main([*base, "--dias", "2", "--saida", str(tmp_path / "s2")]) == 0  # janela de 2: 1 novo
+    out = capsys.readouterr().out
+    assert "ja acumulado com a mesma assinatura" in out and "1 pregao(oes) novo(s), 2 no total" in out
+    c = json.loads((tmp_path / "s2" / "consolidado.json").read_text(encoding="utf-8"))
+    assert [p["data"] for p in c["pregoes"]] == [d.isoformat() for d in DIAS[1:]]
+    # janela de 1 de novo: nada novo, mas o consolidado continua com os 2 acumulados
+    assert main([*base, "--dias", "1", "--saida", str(tmp_path / "s3")]) == 0
+    c3 = json.loads((tmp_path / "s3" / "consolidado.json").read_text(encoding="utf-8"))
+    assert len(c3["pregoes"]) == 2
+    assert c3["relatorio"]["bracos"]["quant"]["metricas"] == c["relatorio"]["bracos"]["quant"]["metricas"]
+
+
+def test_acumulado_roundtrip_e_assinatura(tmp_path):
+    from robowin.core.tipos import Lado, Trade
+    from robowin.historico import acumulado as ac
+    from robowin.historico.runner import ResultadoDia, ResultadoHistorico
+    tr = Trade(id="t", braco="quant", lado=Lado.COMPRA, entrada=1.0, saida=2.0, t_entrada_ns=1, t_saida_ns=2,
+               bruto_brl=10.0, tarifas_brl=1.0, corretagem_brl=0.0, slippage_brl=0.5, motivo_saida="alvo")
+    r = ResultadoDia(data=DIAS[0], simbolo="WINZ26", contaminacao="limpo", provedor="falso", resumo={},
+                     trades={"quant": [tr]}, decisoes=[], bloqueios={}, eventos_risco={}, latencias={}, treino={},
+                     maquina_do_tempo={}, dados={}, tempos_s={}, banco="x", geometrias={"quant": [(10.0, 20.0)]})
+    p = ParamsHistorico(armazem=tmp_path, saida=tmp_path / "s")
+    assin = ac.assinatura(p, "WIN", "falso", {"planejador": "h"})
+    assert assin != ac.assinatura(p, "WIN", "falso", {"planejador": "outro"})  # codigo mudou: amostra nova
+    assert assin != ac.assinatura(p, "WIN", "real", {"planejador": "h"})
+    ac.salvar(tmp_path / "a", assin, [r])
+    (volta,) = ac.carregar(tmp_path / "a", assin)
+    assert volta.trades["quant"][0] == tr and volta.geometrias == r.geometrias and volta.data == r.data
+    res = ResultadoHistorico(p, "WIN", "falso", "m", "c", [], {}, {})
+    assert [d.data for d in ac.mesclar(res, [volta]).dias] == [DIAS[0]]
+
+
+def test_workflow_do_ci_acumula_a_amostra():
+    wf = (Path(__file__).resolve().parents[2] / ".github/workflows/historico-b3.yml").read_text(encoding="utf-8")
+    assert "path: acumulado" in wf and "restore-keys: historico-acumulado-" in wf  # cache proprio da amostra
+    sim = wf.split("name: simulacao historica walk-forward causal", 1)[1].split("- name:", 1)[0]
+    assert "--acumulado acumulado" in sim and "--preregistro config/experimentos" in sim

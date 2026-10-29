@@ -12,6 +12,7 @@ recente). Nunca ``risco_do_ativo`` direto nem um registro fixo (C25).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import time
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,21 @@ def _preregistro(a: argparse.Namespace) -> tuple[Any, Path | None, dict[str, str
     return escolhido[-1], pasta, hashes
 
 
+def _acumulado(a: argparse.Namespace, p: Any, ativo: str,
+               hashes: dict[str, str] | None) -> tuple[Path, str, set[Any]] | None:
+    """(pasta, assinatura, pregoes ja acumulados) com ``--acumulado``; None sem ele (docs/16 4.3, item 7)."""
+    if not getattr(a, "acumulado", None):
+        return None
+    from robowin.avaliacao import preregistro as pre
+
+    from . import acumulado as ac
+    from .runner import provedor_decidido
+    variantes = hashes or pre.variantes_padrao(pre.hashes_componentes(Path(a.config).parent, seed=a.seed))
+    assin = ac.assinatura(p, ativo, provedor_decidido(p), variantes)
+    raiz = Path(a.acumulado)
+    return raiz, assin, ac.datas_acumuladas(raiz, assin)
+
+
 def _cmd(a: argparse.Namespace) -> int:
     from robowin.core.instrumentos import perfil_da_config
     from robowin.risco.usuarios import ErroUsuario, risco_para, selecao_de
@@ -66,8 +82,17 @@ def _cmd(a: argparse.Namespace) -> int:
             cotacao_usd_conta=a.cotacao_usd_conta)
         print(f"*** {SELO} ***")
         print(f"Limites de risco: {sel.descricao()}.")
-        res = executar_historico(p, ao_progresso=print)
         perfil = perfil_da_config(cfg, a.ativo, permitir_a_confirmar=True)
+        acum = _acumulado(a, p, perfil.simbolo_base, hashes)
+        if acum is not None:
+            p = dataclasses.replace(p, pular_datas=frozenset(acum[2]))
+        res = executar_historico(p, ao_progresso=print)
+        if acum is not None:
+            from . import acumulado as ac
+            raiz, assin, _ = acum
+            novos = ac.salvar(raiz, assin, res.dias)
+            res = ac.mesclar(res, ac.carregar(raiz, assin))
+            print(f"amostra acumulada em {raiz / assin}: {len(novos)} pregao(oes) novo(s), {len(res.dias)} no total")
         risco, _, _ = risco_para(sel, perfil, p.risco, p.aprovacao, ao_vivo=False)
         caminhos = escrever(res, perfil, risco, preregistro=pr, dir_preregistro=dir_pr, hashes_variantes=hashes)
     except (ErroHistorico, ErroConfig, ErroUsuario) as e:
@@ -105,6 +130,9 @@ def registrar(sub: Any) -> None:
                    help="cadeia de pre-registro (ex.: config/experimentos): o selo recusa pregao <= registro, hash "
                         "divergente e FALSO")
     p.add_argument("--experimento", default=None, help="id do experimento na cadeia (padrao: o ultimo registrado)")
+    p.add_argument("--acumulado", default=None, metavar="PASTA",
+                   help="acumula os pregoes simulados entre execucoes (mesma assinatura: codigo, config, seed) e "
+                        "consolida a uniao; pregoes ja acumulados nao sao simulados de novo")
     p.add_argument("--config", default="config/robowin.toml")
     p.add_argument("--catalogo", default="config/modelos.toml")
     p.add_argument("--risco", default="config/risco.toml")

@@ -2,7 +2,10 @@
 # SOMENTE SIMULACAO: nenhuma ordem e enviada a lugar nenhum. O lado agressor e INFERIDO (regra do tick) e nao ha
 # livro de ofertas. Sem ANTHROPIC_API_KEY/OPENAI_API_KEY nos secrets, a IA roda com o provedor FALSO (rotulado).
 # Com as duas chaves, `--provedor auto` usa as APIs reais (custo real, limitado por [ia].orcamento_mensal_usd).
-# A B3 so guarda ~20-30 pregoes online: o agendamento diario + o cache (60 pregoes) acumulam a amostra (docs/16 4.3).
+# A B3 so guarda ~20-30 pregoes online: o agendamento diario + o cache (60 ZIPs para treino e Maquina do Tempo) + a
+# AMOSTRA ACUMULADA (`--acumulado`, um JSON por pregao simulado, cache proprio sem limite de janela) fazem o n crescer
+# a cada execucao (docs/16 4.3, item 7): pregoes ja acumulados com a mesma assinatura (codigo, config, seed) nao sao
+# simulados de novo e o consolidado cobre a uniao. Com config/experimentos/registro.jsonl, passa --preregistro.
 name: historico-b3
 on:
   schedule:
@@ -42,6 +45,12 @@ jobs:
           path: dados_b3
           key: b3-negocios-${{ github.run_id }}
           restore-keys: b3-negocios-
+      - name: cache da amostra acumulada (um JSON por pregao simulado; cresce a cada execucao)
+        uses: actions/cache@v4
+        with:
+          path: acumulado
+          key: historico-acumulado-${{ github.run_id }}
+          restore-keys: historico-acumulado-
       - name: chaves de IA (so presenca, nunca o valor)
         shell: bash
         run: |
@@ -71,8 +80,13 @@ jobs:
         run: |
           set -o pipefail
           # --contrafactuais: grava dias/<pregao>/contrafactuais.json e resolve previsoes_ia (so diagnostico)
+          # --acumulado: a amostra nao fica presa aos ultimos DIAS pregoes; consolida todos os ja simulados
+          PRE=()
+          if [ -f config/experimentos/registro.jsonl ]; then PRE=(--preregistro config/experimentos); fi
           uv run robowin historico --ativo WIN --armazem dados_hist/ticks --dias "$DIAS" \
-            --provedor "$PROVEDOR" --contrafactuais --saida relatorios/historico 2>&1 | tee relatorios/historico.log
+            --provedor "$PROVEDOR" --contrafactuais --acumulado acumulado "${PRE[@]}" \
+            --saida relatorios/historico 2>&1 | tee relatorios/historico.log
+          echo "pregoes acumulados: $(find acumulado -name '*.json' | wc -l)"
           echo "tempo do passo: ${SECONDS}s"
       - name: previsoes da IA e contrafactuais (artefatos por pregao)
         if: always()
