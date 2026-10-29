@@ -220,7 +220,7 @@ def unidade_feature(nome: str) -> str:
 
 
 def _limpar(x: Any) -> Any:
-    """Copia JSON das secoes extras: float nao finito vira ``None`` (dado indisponivel), floats arredondados."""
+    """Copia JSON das secoes extras: float nao finito vira ``None`` (dado indisponivel); floats com 6 casas."""
     if isinstance(x, dict):
         return {str(k): _limpar(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)):
@@ -228,7 +228,7 @@ def _limpar(x: Any) -> Any:
     if isinstance(x, bool) or x is None or isinstance(x, (int, str)):
         return x
     if isinstance(x, float):
-        return _r(x, 4)
+        return _r(x, 6)
     raise ErroDossie(f"valor nao serializavel no dossie: {type(x).__name__}")
 
 

@@ -14,10 +14,10 @@ NOMES = {"proponente": "proponente_v1", "revisor": "revisor_v1", "classificador_
          "debate_altista": "debate_altista_v1", "debate_baixista": "debate_baixista_v1",
          "risco_agressivo": "risco_agressivo_v1", "risco_neutro": "risco_neutro_v1",
          "risco_conservador": "risco_conservador_v1", "sintetizador": "sintetizador_v1",
-         "reflexao": "reflexao_v1"}
+         "reflexao": "reflexao_v1", "planejador": "planejador_v1", "revisor_plano": "revisor_plano_v1"}
 
 __all__ = ["DIR_PROMPTS_PADRAO", "NOMES", "Prompt", "carregar_prompt", "hash_texto", "hashes_prompts",
-           "mensagem_nlp", "mensagem_proponente", "mensagem_revisor"]
+           "mensagem_nlp", "mensagem_planejador", "mensagem_proponente", "mensagem_revisor", "mensagem_revisor_plano"]
 
 
 @dataclass(frozen=True)
@@ -63,3 +63,18 @@ def mensagem_revisor(dossie: dict[str, Any], proposta: dict[str, Any]) -> str:
 
 def mensagem_nlp(titulo: str, corpo: str = "") -> str:
     return f"TITULO: {titulo}\n" + (f"TEXTO: {corpo}\n" if corpo else "")
+
+
+def mensagem_planejador(dossie: dict[str, Any]) -> str:
+    """Mensagem do papel ``planejador`` (dossie v2). Diz a verdade sobre as unidades: precos e distancias sao
+    pontos relativos; os demais campos trazem a unidade no nome (``_s``, ``_min``, ``_ticks``, ``_conta``...)."""
+    return ("DOSSIE (JSON anonimizado; precos e distancias em pontos relativos; demais campos com a unidade no "
+            "nome):\n" + canonico(dossie))
+
+
+def mensagem_revisor_plano(dossie: dict[str, Any], compilado: dict[str, Any]) -> str:
+    """Mensagem do papel ``revisor_plano``: o dossie e o plano JA COMPILADO (niveis em pontos na grade do tick,
+    gestao compilada, equilibrio e custo), nunca a resposta bruta do planejador."""
+    return ("DOSSIE (JSON anonimizado; precos e distancias em pontos relativos; demais campos com a unidade no "
+            "nome):\n" + canonico(dossie) + "\n\nPLANO COMPILADO A REVISAR (JSON; niveis em pontos, equilibrio e "
+            "custo ja calculados pelo sistema):\n" + canonico(compilado))
